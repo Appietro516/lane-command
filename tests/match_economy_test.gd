@@ -213,7 +213,7 @@ func _test_match_controls() -> void:
 		"The CPU places both barracks and a Farm autonomously.")
 	match_scene._process(13.0)
 	await _choose_barracks(build)
-	var second_position := Vector3(-12.73, 0.0, 0.41)
+	var second_position := Vector3(-12.73, 0.0, 5.0)
 	await _click_world(second_position)
 	_check_state(match_scene.economy, PLAYER, [0.0, 2, 2.5], "Second placed barracks")
 	_check(_building_at(player_buildings, second_position)
@@ -230,7 +230,7 @@ func _test_match_controls() -> void:
 	await _click_world(Vector3(10.0, 0.0, -1.25))
 	_check(_stockpiles(match_scene.economy, PLAYER) == stock and placement_panel.visible,
 		"An invalid third placement preserves all resources and keeps placement active.")
-	await _click_world(Vector3(-12.0, 0.0, -3.0))
+	await _click_world(Vector3(-12.0, 0.0, -3.65))
 	_check(barracks_label.text == "Barracks 3" and player_buildings.get_child_count() == 3
 		and energy_label.text == "Energy 2" and not placement_panel.visible,
 		"The Build menu places the third barracks and charges the normal price.")
@@ -266,10 +266,10 @@ func _test_claimed_placement() -> void:
 		"Claimed territory accepts building placement at the clicked point.")
 	await _choose_barracks(build)
 	await _click_world(claimed_position)
-	_check_state(scene.economy, PLAYER, [1.0, 2, 3.5], "Overlapping placement")
-	_check(player_buildings.get_child_count() == 2
-		and (player_buildings.get_child(1) as Node3D).position.distance_to(claimed_position) < 0.001,
-		"An existing building at the point does not block placement.")
+	_check_state(scene.economy, PLAYER, [41.0, 1, 3.5], "Rejected overlapping placement")
+	_check(player_buildings.get_child_count() == 1 and scene._placement_id == &"barracks",
+		"An existing building reserves its footprint and exits without consuming the attempted purchase.")
+	scene._cancel_placement()
 	scene.restart_match()
 	scene.set_process(false)
 	await _choose_barracks(build)
@@ -418,7 +418,8 @@ func _choose_barracks(build: Button) -> void:
 	await process_frame
 	await process_frame
 	_check(list.is_visible_in_tree() and list.get_child_count() == scene.BUILDINGS.size()
-		and option.text == "Barracks · 40 Energy + 20 Materials\nAuto-spawn Infantry · 4 Food per unit",
+		and option.text.begins_with("Barracks · 40 Energy + 20 Materials\nInfantry every ")
+		and option.text.ends_with("s · 4 Food per unit"),
 		"Build opens the catalog menu with the configured price.")
 	_click(option)
 	await process_frame
@@ -538,8 +539,8 @@ func _test_expanded_production() -> void:
 	economy.advance(120.0)
 	var claimed := &"region_1"
 	_check(scene.try_claim(PLAYER, claimed), "Claim a second region for barracks production.")
-	for point in [Vector3(-10.2, 0, -1.2), Vector3(-12.73, 0, 0.41),
-			Vector3(-12.0, 0, -3.0), _clear_producer_point(scene, claimed, &"barracks")]:
+	for point in [Vector3(-10.2, 0, -1.2), Vector3(-12.73, 0, 5.0),
+			Vector3(-12.0, 0, -3.65), _clear_producer_point(scene, claimed, &"barracks")]:
 		var before := _stockpiles(economy, PLAYER)
 		_check(scene.try_place_building(PLAYER, &"barracks", point)
 			and economy.stockpile(PLAYER, ENERGY) == before[ENERGY] - 40.0
@@ -549,8 +550,8 @@ func _test_expanded_production() -> void:
 	_check(battle.active_barracks_count(PLAYER) == 4, "All four player barracks are operational.")
 
 	economy.set_income_source(CPU, FOOD, &"test_supply", "Test supply", 10.0)
-	for point in [Vector3(10.2, 0, -1.2), Vector3(12.73, 0, 0.41),
-			Vector3(12.0, 0, -3.0), Vector3(12.8, 0, 3.3)]:
+	for point in [Vector3(10.2, 0, -1.2), Vector3(12.73, 0, 5.0),
+			Vector3(12.0, 0, -3.65), Vector3(9.2, 0, 5.0)]:
 		var before := _stockpiles(economy, CPU)
 		_check(scene.try_place_building(CPU, &"barracks", point)
 			and economy.stockpile(CPU, ENERGY) == before[ENERGY] - 40.0

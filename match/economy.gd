@@ -189,6 +189,10 @@ func try_build(side: MatchRegion.Owner, cost: Dictionary) -> bool:
 	return true
 
 
+func remove_barracks(side: MatchRegion.Owner) -> void:
+	_sides[side].barracks_count -= 1
+
+
 func try_upgrade(side: MatchRegion.Owner) -> bool:
 	if not _sides.has(side) or has_upgrade(side) or not try_spend(side, UPGRADE_COST):
 		return false

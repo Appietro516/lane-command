@@ -48,11 +48,13 @@ func _economy_match(scene: Node) -> Array:
 	scene.set_process(false)
 	var deployments: Array[int] = []
 	var garrison: Array[MatchBattle.Unit] = []
+	var deployed_types := {}
 	# Hold the match open and cap the test garrison while counting every deployment.
 	var battle: MatchBattle = scene._battle
 	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
 		if unit.side == CPU:
 			deployments.append(unit.id)
+			deployed_types[unit.type_id] = true
 			unit.order = MatchBattle.Order.HOLD
 			unit.ordered_destination = unit.position
 			garrison.append(unit)
@@ -80,6 +82,10 @@ func _economy_match(scene: Node) -> Array:
 	_check(_structures(scene, Rules.NEST).is_empty() and _structures(scene, Rules.MORTAR).is_empty()
 		and _structures(scene, Rules.WALL).is_empty(), "The CPU saves combat spending in an uncontested match.")
 	_check(scene._outposts_by_region.size() <= scene.cpu_expansion_limit, "The expansion limit bounds claims.")
+	# Larger producers need the next round of economic investment and a clear site.
+	scene._process(40.0)
+	_check(deployed_types.size() == MatchBattle.UnitCatalog.DEFINITIONS.size(),
+		"The seeded CPU deploys every roster type through construction. Deployed %s." % [deployed_types.keys()])
 	_check_ownership(scene)
 	return _snapshot(scene)
 
@@ -180,17 +186,10 @@ func _check_ownership(scene: Node) -> void:
 		if placed.defense.side == CPU:
 			for region_id in placed.regions:
 				_check(scene.owns_region(CPU, region_id), "The CPU builds structures in owned regions only.")
-	for timer in scene._battle._timers:
-		if timer.side == CPU and timer.active:
-			_check(scene.owns_region(CPU, scene._layout.region_at(timer.position)),
-				"The CPU builds barracks inside owned regions.")
 
 
 func _snapshot(scene: Node) -> Array:
 	var buildings := []
-	for timer in scene._battle._timers:
-		if timer.side == CPU:
-			buildings.append([&"barracks", timer.position, timer.active])
 	for placed in scene._fortifications.values():
 		var fort: MatchBattle.Fortification = placed.defense
 		if fort.side == CPU:

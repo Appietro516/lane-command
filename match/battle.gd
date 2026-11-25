@@ -30,7 +30,12 @@ const DEFAULT_AGGRO_RADIUS := 4.0
 const COMBAT_CELL_SIZE := 4.0
 const BASE_FOOTPRINT := Vector2(1.5, 1.5)
 const BARRACKS_FOOTPRINT := Vector2(1.41, 0.91)
-const BARRACKS_SPAWN_CLEARANCE := BARRACKS_FOOTPRINT + Vector2.ONE * 0.24
+const SPAWN_EXIT_OFFSET := 0.08
+const BARRACKS_HP := 32
+const BARRACKS_PROFILE := {
+	"label": "Barracks", "hp": BARRACKS_HP, "size": BARRACKS_FOOTPRINT * 2.0,
+	"unit_type": UnitCatalog.INFANTRY, "interval": MatchEconomy.PRODUCTION_INTERVAL,
+}
 const OUTPOST_FOOTPRINT := Vector2(0.52, 0.52)
 const OUTPOST_CLEARANCE := OUTPOST_FOOTPRINT + Vector2(0.08, 0.08)
 const OUTPOST_ATTACK_RANGE := 1.25
@@ -78,19 +83,6 @@ class Unit:
 		position = spawn_position
 
 
-class ProductionTimer:
-	var source_id: StringName
-	var side: MatchRegion.Owner
-	var position: Vector2
-	var elapsed := 0.0
-	var active := true
-	var obstacle: int
-
-	func _init(owner: MatchRegion.Owner, building_position: Vector2) -> void:
-		side = owner
-		position = building_position
-
-
 class BuildingHealth:
 	var side: MatchRegion.Owner
 	var source_id: StringName
@@ -132,6 +124,17 @@ class Fortification extends BuildingHealth:
 		return profile.size.length() * 0.5 + weapon_range * 0.65
 
 
+class ProductionTimer extends Fortification:
+	var elapsed := 0.0
+	var unit_type: StringName
+
+	func interval(economy: MatchEconomy) -> float:
+		return economy.production_interval(side) if kind == &"barracks" else profile.interval
+
+	func spawn_extent() -> Vector2:
+		return MatchBattle.producer_spawn_extent(profile.size, unit_type)
+
+
 var stats: FactionStats
 var aggro_radius: float
 var target_priority := TargetPriority.NEAREST
@@ -166,9 +169,14 @@ func _init(player_base: Vector2, cpu_base: Vector2, detection_radius := DEFAULT_
 
 
 func add_barracks(side: MatchRegion.Owner, position: Vector2) -> ProductionTimer:
-	var timer := ProductionTimer.new(side, position)
-	timer.source_id = StringName("barracks/%d" % _timers.size())
-	timer.obstacle = _add_footprint(position, BARRACKS_FOOTPRINT)
+	return add_producer(&"barracks", BARRACKS_PROFILE, side, position)
+
+
+func add_producer(kind: StringName, profile: Dictionary, side: MatchRegion.Owner,
+		position: Vector2) -> ProductionTimer:
+	var timer := ProductionTimer.new(stats, side, profile.hp)
+	timer.unit_type = profile.unit_type
+	_register_structure(timer, kind, profile, position, 0.0)
 	_timers.append(timer)
 	return timer
 
@@ -176,20 +184,20 @@ func add_barracks(side: MatchRegion.Owner, position: Vector2) -> ProductionTimer
 func active_barracks_count(side: MatchRegion.Owner) -> int:
 	var count := 0
 	for timer in _timers:
-		if timer.side == side and timer.active:
+		if timer.side == side and timer.active and timer.kind == &"barracks":
 			count += 1
 	return count
 
 
 func set_barracks_active(timer: ProductionTimer, active: bool) -> void:
-	if timer.active == active:
-		return
-	timer.active = active
-	if active:
-		timer.obstacle = _add_footprint(timer.position, BARRACKS_FOOTPRINT)
-	else:
-		navigation.remove_obstacle(timer.obstacle)
-	stats.set_source_active(timer.source_id, active)
+	set_fortification_active(timer, active)
+
+
+static func producer_spawn_extent(size: Vector2, unit_type: StringName) -> Vector2:
+	var clearance: float = UnitCatalog.DEFINITIONS[unit_type].clearance
+	# Leave room both for the spawn offset from this producer and for nearby obstacle clearance.
+	return size * 0.5 + Vector2.ONE * maxf(0.24, SPAWN_EXIT_OFFSET * 2.0 + clearance) \
+		+ Vector2.ONE * clearance
 
 
 func add_outpost(region_id: StringName, side: MatchRegion.Owner, position: Vector2,
@@ -217,6 +225,12 @@ func add_fortification(kind: StringName, side: MatchRegion.Owner, position: Vect
 func add_structure(kind: StringName, profile: Dictionary, side: MatchRegion.Owner,
 		position: Vector2, angle := 0.0) -> Fortification:
 	var fort := Fortification.new(stats, side, profile.hp)
+	_register_structure(fort, kind, profile, position, angle)
+	return fort
+
+
+func _register_structure(fort: Fortification, kind: StringName, profile: Dictionary,
+		position: Vector2, angle: float) -> void:
 	fort.id = _next_structure_id
 	_next_structure_id -= 1
 	fort.kind = kind
@@ -226,7 +240,6 @@ func add_structure(kind: StringName, profile: Dictionary, side: MatchRegion.Owne
 	fort.source_id = StringName("fortification/%d" % fort.id)
 	_fortifications[fort.id] = fort
 	set_fortification_active(fort, true)
-	return fort
 
 
 func get_fortification(id: int) -> Fortification:
@@ -234,7 +247,7 @@ func get_fortification(id: int) -> Fortification:
 
 
 func set_fortification_active(fort: Fortification, active: bool) -> void:
-	if fort.active == active:
+	if fort.active == active or not _fortifications.has(fort.id):
 		return
 	fort.active = active
 	if active:
@@ -250,22 +263,47 @@ func add_landmark_footprint(footprint: Rect2) -> void:
 	navigation.add_obstacle(footprint)
 
 
-func fortification_site_clear(polygon: PackedVector2Array, fortifications_only := false) -> bool:
+func fortification_site_clear(polygon: PackedVector2Array, include_hubs := true) -> bool:
 	for footprint in _landmark_footprints:
 		if not Geometry2D.intersect_polygons(polygon, BattleNavigation.corners_of(footprint)).is_empty():
 			return false
-	if not fortifications_only:
+	if include_hubs:
 		for center in _bases.values():
 			if _footprints_overlap(polygon, center, BASE_FOOTPRINT * 2.0):
-				return false
-		for timer in _timers:
-			if _footprints_overlap(polygon, timer.position, BARRACKS_SPAWN_CLEARANCE * 2.0):
 				return false
 		for outpost in _outposts.values():
 			if _footprints_overlap(polygon, outpost.position, OUTPOST_CLEARANCE * 2.0):
 				return false
 	for fort: Fortification in _fortifications.values():
-		if _footprints_overlap(polygon, fort.position, fort.profile.size, fort.angle):
+		var size: Vector2 = fort.profile.size
+		if fort is ProductionTimer:
+			size = fort.spawn_extent() * 2.0
+		if _footprints_overlap(polygon, fort.position, size, fort.angle):
+			return false
+	return true
+
+
+func producer_site_clear(position: Vector2, profile: Dictionary) -> bool:
+	var extent := producer_spawn_extent(profile.size, profile.unit_type)
+	# Reserve enough room for a unit to leave on every side, including near the map edge.
+	var exit_area := _footprint(position, extent)
+	if not navigation._bounds.encloses(exit_area):
+		return false
+	var footprint := Fortifications.footprint(position, profile.size)
+	if not fortification_site_clear(footprint):
+		return false
+	var exits := BattleNavigation.corners_of(exit_area)
+	for rect in _landmark_footprints:
+		if rect.intersects(exit_area):
+			return false
+	for center in _bases.values():
+		if _footprint(center, BASE_FOOTPRINT).intersects(exit_area):
+			return false
+	for outpost in _outposts.values():
+		if _footprint(outpost.position, OUTPOST_CLEARANCE).intersects(exit_area):
+			return false
+	for fort: Fortification in _fortifications.values():
+		if _footprints_overlap(exits, fort.position, fort.profile.size, fort.angle):
 			return false
 	return true
 
@@ -281,13 +319,10 @@ func outpost_site_clear(position: Vector2) -> bool:
 	for center in _bases.values():
 		if footprint.intersects(_footprint(center, BASE_FOOTPRINT)):
 			return false
-	for timer in _timers:
-		if footprint.intersects(_footprint(timer.position, BARRACKS_FOOTPRINT)):
-			return false
 	for outpost in _outposts.values():
 		if footprint.intersects(_footprint(outpost.position, OUTPOST_FOOTPRINT)):
 			return false
-	return fortification_site_clear(BattleNavigation.corners_of(footprint), true)
+	return fortification_site_clear(BattleNavigation.corners_of(footprint), false)
 
 
 ## Deploy a catalog unit for either faction. Pass an economy for paid production.
@@ -423,33 +458,33 @@ func advance(delta: float, economy: MatchEconomy, accrue_income := false) -> voi
 
 
 func _advance_production(delta: float, economy: MatchEconomy) -> void:
-	for timer in _timers:
-		if not timer.active:
+	for timer: ProductionTimer in _timers.duplicate():
+		if not timer.active or timer.hp <= 0.0:
 			continue
 		# Upgrades shorten the current cycle while keeping elapsed production time.
-		var interval := economy.production_interval(timer.side)
+		var interval := timer.interval(economy)
 		timer.elapsed += delta
-		while timer.elapsed + TIME_EPSILON >= interval:
+		while timer.active and timer.hp > 0.0 and timer.elapsed + TIME_EPSILON >= interval:
 			timer.elapsed = maxf(0.0, timer.elapsed - interval)
 			var direction := timer.position.direction_to(_bases[_opponent(timer.side)])
-			var position := _spawn_position(timer.position, direction)
-			if spawn_unit(timer.side, position, UnitCatalog.BARRACKS_TYPE, economy) == null:
+			var position := _spawn_position(timer, direction)
+			if spawn_unit(timer.side, position, timer.unit_type, economy) == null:
 				timer.elapsed = interval
 				break
 
 
-func _spawn_position(building: Vector2, direction: Vector2) -> Vector2:
+func _spawn_position(timer: ProductionTimer, direction: Vector2) -> Vector2:
 	var exits := [direction, Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]
-	var clearance: float = UnitCatalog.DEFINITIONS[UnitCatalog.BARRACKS_TYPE].clearance
+	var clearance: float = UnitCatalog.DEFINITIONS[timer.unit_type].clearance
 	var routes := navigation.with_clearance(clearance)
-	var extent := BARRACKS_FOOTPRINT + Vector2.ONE * (0.08 + clearance)
+	var extent: Vector2 = timer.profile.size * 0.5 + Vector2.ONE * (SPAWN_EXIT_OFFSET + clearance)
 	var closest := Vector2.INF
 	var best_alignment := -INF
 	for exit: Vector2 in exits:
 		if exit.is_zero_approx():
 			continue
 		var distance := 1.0 / maxf(absf(exit.x) / extent.x, absf(exit.y) / extent.y)
-		var candidate := building + exit * distance
+		var candidate := timer.position + exit * distance
 		if routes.is_passable(candidate) and exit.dot(direction) > best_alignment:
 			closest = candidate
 			best_alignment = exit.dot(direction)
@@ -508,9 +543,11 @@ func _step_combat() -> void:
 			destroyed_outposts.append(outpost)
 
 	for fort: Fortification in _fortifications.values():
-		if fort.hp == 0:
+		if fort.hp <= 0.0:
+			set_fortification_active(fort, false)
 			_fortifications.erase(fort.id)
-			navigation.remove_obstacle(fort.obstacle)
+			if fort is ProductionTimer:
+				_timers.erase(fort)
 			stats.remove_source(fort.source_id)
 			fortification_destroyed.emit(fort)
 

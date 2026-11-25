@@ -55,7 +55,6 @@ func decide(scene: Node3D) -> void:
 			if neighbor.region_owner == NEUTRAL:
 				frontiers[id] = neighbor
 
-	var active := battle.active_barracks_count(CPU)
 	var units := battle.active_units()
 	var threats := _threats(scene, owned, units)
 	var sites := owned.duplicate()
@@ -67,20 +66,45 @@ func decide(scene: Node3D) -> void:
 	var interval := economy.production_interval(CPU)
 	var food_rate := economy.income_rate(CPU, FOOD)
 	var food_stock := economy.stockpile(CPU, FOOD)
-	var unit_buffer := unit_food * active
-	var demand := unit_buffer / interval
 	var upgrade := not economy.has_upgrade(CPU)
 	var upgrade_interval := interval + MatchEconomy.UPGRADED_PRODUCTION_INTERVAL \
 		- MatchEconomy.PRODUCTION_INTERVAL if upgrade else interval
 	upgrade_interval = maxf(upgrade_interval, FactionStats.STAT_DEFINITIONS[FactionStats.BARRACKS_INTERVAL].minimum)
-	var next_demand := unit_food * (active + 1) / upgrade_interval
+	var active := 0
+	var barracks := 0
+	var unit_buffer := 0
+	var demand := 0.0
+	var production_demand := 0.0
+	var composition := {}
+	for timer in battle._timers:
+		if timer.side != CPU or not timer.active:
+			continue
+		active += 1
+		if timer.kind == BARRACKS:
+			barracks += 1
+		composition[timer.kind] = true
+		var food: int = MatchBattle.UnitCatalog.DEFINITIONS[timer.unit_type].food
+		unit_buffer += food
+		var cycle := timer.interval(economy)
+		demand += food / cycle
+		production_demand += food / (upgrade_interval if timer.kind == BARRACKS else cycle)
+	var next_kind := BARRACKS
+	if barracks >= 2:
+		for kind: StringName in catalog:
+			if catalog[kind].has("unit_type") and not composition.has(kind):
+				next_kind = kind
+				break
+	var next_profile: Dictionary = catalog[next_kind]
+	var next_food: int = MatchBattle.UnitCatalog.DEFINITIONS[next_profile.unit_type].food
+	var next_interval: float = upgrade_interval if next_kind == BARRACKS else next_profile.interval
+	var next_demand := production_demand + next_food / next_interval
 	var army := 0
 	for unit in units:
 		if unit.side == CPU:
 			army += 1
-	var barracks_goal := maxi(4, owned.size() + 1)
+	var production_goal := maxi(4, owned.size() + 1)
 	if not threats.is_empty() and threats[0].enemies.size() > army:
-		barracks_goal = barracks_goal + 1
+		production_goal = production_goal + 1
 
 	# With no production, save for the first barracks before discretionary purchases.
 	if active == 0 and _want_build(scene, BARRACKS, sites, now):
@@ -109,14 +133,13 @@ func decide(scene: Node3D) -> void:
 
 	# Use opening reserves for a second barracks when there is time to add recurring income.
 	var early_buffer := maxf(0.0, unit_food * 2 - food_rate * interval) * FOOD_BUFFER_CYCLES
-	if active == 1 and (food_rate >= next_demand or food_stock >= early_buffer) \
+	if active == 1 and barracks == 1 and (food_rate >= next_demand or food_stock >= early_buffer) \
 			and _want_build(scene, BARRACKS, sites, now):
 		return
 
-	var production_demand := unit_buffer / upgrade_interval
 	if food_rate < production_demand and _want_build(scene, producer, sites, now):
 		return
-	if upgrade and active > 0 and food_rate >= production_demand \
+	if upgrade and barracks > 0 and food_rate >= production_demand \
 			and food_stock >= MatchEconomy.UPGRADE_COST[FOOD] + unit_buffer:
 		if scene.try_upgrade(CPU):
 			return
@@ -125,7 +148,7 @@ func decide(scene: Node3D) -> void:
 			return
 
 	var allow_claim: bool = claims < scene.cpu_expansion_limit and (army > 0 or active == 0)
-	var projected := MatchEconomy.BARRACKS_COST.duplicate()
+	var projected: Dictionary = next_profile.cost.duplicate()
 	for resource: StringName in [ENERGY, MATERIALS]:
 		var defenses: int = Rules.PROFILES[Rules.NEST].cost[resource] + Rules.PROFILES[Rules.MORTAR].cost[resource]
 		var expansion: int = MatchEconomy.CLAIM_COST.get(resource, 0) if allow_claim else 0
@@ -147,11 +170,11 @@ func decide(scene: Node3D) -> void:
 			if _want_claim(scene, region.region_id, now):
 				return
 
-	if active < barracks_goal:
+	if active < production_goal:
 		if food_rate >= next_demand:
-			_want_build(scene, BARRACKS, sites, now)
-		elif food_stock < unit_food * (active + 1) * FOOD_BUFFER_CYCLES \
-				or scene._purchase_block_reason(CPU, BARRACKS).is_empty():
+			_want_build(scene, next_kind, sites, now)
+		elif food_stock < (unit_buffer + next_food) * FOOD_BUFFER_CYCLES \
+				or scene._purchase_block_reason(CPU, next_kind).is_empty():
 			_want_build(scene, producer, sites, now)
 
 
@@ -171,7 +194,7 @@ func _want_build(scene: Node3D, kind: StringName, regions: Array[MatchRegion], n
 	if not scene._purchase_block_reason(CPU, kind).is_empty():
 		return true
 	var definition: Dictionary = scene.BUILDINGS[kind]
-	var size: Vector2 = definition.get("size", MatchBattle.BARRACKS_SPAWN_CLEARANCE * 2.0)
+	var size: Vector2 = Rules.PROFILES.get(kind, definition).size
 	var start := 0 if regions.size() <= REGION_SITE_BUDGET else _rng.randi_range(0, regions.size() - 1)
 	for i in range(mini(regions.size(), REGION_SITE_BUDGET)):
 		var region := regions[(start + i) % regions.size()]
@@ -343,11 +366,6 @@ func _claim_targets(scene: Node3D, frontiers: Dictionary[StringName, MatchRegion
 
 func _dormant_buildings(scene: Node3D, frontiers: Dictionary[StringName, MatchRegion]) -> Dictionary:
 	var dormant := {}
-	for region_id in frontiers:
-		for placed in scene._barracks_by_region.get(region_id, []):
-			if placed.production.side == CPU:
-				dormant[region_id] = true
-				break
 	for placed in scene._fortifications.values():
 		if placed.defense.side != CPU or placed.defense.active:
 			continue

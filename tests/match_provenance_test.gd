@@ -36,10 +36,15 @@ func _run() -> void:
 	var income_text := scene.get_node("%IncomeSourceText") as Label
 	var sources := scene.get_node("%StatSources") as Button
 	var stat_text := scene.get_node("%StatSourceText") as Label
-	var barracks: Node3D = scene._barracks_by_view.keys()[0]
+	var barracks: Node3D
+	var timer: MatchBattle.ProductionTimer
+	for placed in scene._fortifications.values():
+		if placed.defense.kind == &"barracks":
+			barracks = placed.view
+			timer = placed.defense
 	var producer: MatchBattle.Fortification
 	for placed in scene._fortifications.values():
-		if region_id in placed.regions:
+		if placed.defense.kind == &"generator" and region_id in placed.regions:
 			producer = placed.defense
 	if producer == null:
 		_check(false, "The frontier contains an inspectable producer.")
@@ -128,7 +133,6 @@ func _run() -> void:
 		and stat_text.text.contains("Total  0.4 units/s")
 		and economy.income_stat(PLAYER, ENERGY) == income,
 		"The purchased upgrade explains the new production rate without altering income.")
-	var timer: MatchBattle.ProductionTimer = scene._selected_barracks.production if scene._selected_barracks != null else null
 	if timer != null:
 		battle.set_barracks_active(timer, false)
 		scene._refresh_hud()

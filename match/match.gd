@@ -3,11 +3,24 @@ extends Node3D
 const Fortifications := preload("res://match/fortification_rules.gd")
 const BUILDINGS := {
 	&"barracks": {
-		"label": "Barracks",
 		"cost": MatchEconomy.BARRACKS_COST,
 		"scene": preload("res://match/barracks.tscn"),
-		"rules": preload("res://match/barracks_rules.gd"),
 		"accent_node": ^"RoofMarking",
+		"label": "Barracks", "hp": MatchBattle.BARRACKS_HP,
+		"size": MatchBattle.BARRACKS_FOOTPRINT * 2.0,
+		"unit_type": UnitCatalog.INFANTRY, "interval": MatchEconomy.PRODUCTION_INTERVAL,
+	},
+	&"training_range": {
+		"label": "Training Range", "cost": {MatchEconomy.ENERGY: 45, MatchEconomy.MATERIALS: 25},
+		"scene": preload("res://match/training_range.tscn"),
+		"hp": 28, "size": Vector2(2.6, 1.8),
+		"unit_type": UnitCatalog.RANGED, "interval": 4.5,
+	},
+	&"heavy_factory": {
+		"label": "Heavy Factory", "cost": {MatchEconomy.ENERGY: 55, MatchEconomy.MATERIALS: 35},
+		"scene": preload("res://match/heavy_factory.tscn"),
+		"hp": 40, "size": Vector2(2.9, 2.1),
+		"unit_type": UnitCatalog.HEAVY, "interval": 6.0,
 	},
 	&"generator": {
 		"label": "Generator", "cost": {MatchEconomy.MATERIALS: 26},
@@ -66,11 +79,6 @@ const OUTCOME_LABELS := {
 	MatchBattle.Outcome.VICTORY: "Victory",
 	MatchBattle.Outcome.DEFEAT: "Defeat",
 }
-
-class PlacedBarracks:
-	var production: MatchBattle.ProductionTimer
-	var accent: MeshInstance3D
-
 
 class PlacedFortification:
 	var defense: MatchBattle.Fortification
@@ -131,9 +139,6 @@ var _splash_ring: MeshInstance3D
 var _tracer_material := StandardMaterial3D.new()
 var _wall_start := Vector2.INF
 var _wall_release_pending := false
-var _barracks_by_region: Dictionary[StringName, Array] = {}
-var _barracks_by_view: Dictionary[Node3D, PlacedBarracks] = {}
-var _selected_barracks: PlacedBarracks
 var _selected_resource: StringName
 var _income_details: Dictionary[StringName, String] = {}
 var _selected_region_id: StringName = &""
@@ -215,18 +220,12 @@ func _ready() -> void:
 		var effect: String = profile.get("description", "")
 		if definition.has("income"):
 			effect = _income_text(definition.income)
-		elif definition.has("rules"):
-			effect = "Auto-spawn %s · %s per unit" % [
-				UnitCatalog.DEFINITIONS[UnitCatalog.BARRACKS_TYPE].label,
-				MatchEconomy.cost_text(MatchEconomy.UNIT_COST),
-			]
 		if not effect.is_empty():
 			option.text += "\n" + effect
 		option.pressed.connect(_begin_placement.bind(building_id))
 		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_build_list.add_child(option)
 		_build_options[building_id] = option
-	%BuildScroll.custom_minimum_size.y = minf(_build_list.get_combined_minimum_size().y, 360.0)
 	_build_button.pressed.connect(_toggle_build_menu)
 	%CancelPlacement.pressed.connect(_cancel_placement)
 	_preview_material = StandardMaterial3D.new()
@@ -375,9 +374,6 @@ func restart_match() -> void:
 		view.queue_free()
 	_outpost_views.clear()
 	_outposts_by_region.clear()
-	_barracks_by_region.clear()
-	_barracks_by_view.clear()
-	_selected_barracks = null
 	_show_income_sources(&"")
 	_fortifications.clear()
 	_fortification_ids.clear()
@@ -420,6 +416,7 @@ func restart_match() -> void:
 	_battle.fortification_fired.connect(_show_fortification_shot)
 	_refresh_legendary_summary()
 	_refresh_hud()
+	%BuildScroll.custom_minimum_size.y = minf(_build_list.get_combined_minimum_size().y, 550.0)
 	set_process(true)
 
 
@@ -470,34 +467,21 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 		return false
 	var definition: Dictionary = BUILDINGS[building_id]
 	var region_id := region_at_world_position(ground)
-	if definition.has("income"):
-		if not economy.try_spend(side, definition.cost):
-			return false
-		var structure := _battle.add_structure(building_id, definition, side, position)
-		_add_structure_view(structure, [region_id])
-		for resource_id in definition.income:
-			faction_stats.set_modifier(structure.source_id, side, resource_id,
-				definition.income[resource_id], &"building",
-				"%s #%d" % [definition.label, absi(structure.id)], "", true, structure.id, region_id)
-		_refresh_hud()
-		return true
-
-	var production: MatchBattle.ProductionTimer = definition.rules.purchase(
-		economy, _battle, side, position, definition.cost)
-	if production == null:
+	var structure: MatchBattle.Fortification
+	var purchased := economy.try_build(side, definition.cost) if building_id == &"barracks" \
+		else economy.try_spend(side, definition.cost)
+	if not purchased:
 		return false
-
-	var building := definition.scene.instantiate() as Node3D
-	var barracks := PlacedBarracks.new()
-	barracks.production = production
-	barracks.accent = building.get_node(definition.accent_node)
-	barracks.accent.material_override = FACTION_ACCENTS[side]
-	building.position = _buildings[side].to_local(ground)
-	_buildings[side].add_child(building)
-	if not _barracks_by_region.has(region_id):
-		_barracks_by_region[region_id] = []
-	_barracks_by_region[region_id].append(barracks)
-	_barracks_by_view[building] = barracks
+	if definition.has("unit_type"):
+		structure = _battle.add_producer(building_id, definition, side, position)
+	else:
+		structure = _battle.add_structure(building_id, definition, side, position)
+	_add_structure_view(structure, [region_id])
+	var income: Dictionary = definition.get("income", {})
+	for resource_id in income:
+		faction_stats.set_modifier(structure.source_id, side, resource_id,
+			income[resource_id], &"building",
+			"%s #%d" % [definition.label, absi(structure.id)], "", true, structure.id, region_id)
 	_refresh_hud()
 	return true
 
@@ -515,14 +499,8 @@ func _placement_block_reason(side: MatchRegion.Owner, building_id: StringName,
 		if not _battle.fortification_site_clear(Fortifications.footprint(position, definition.size)):
 			return "Keep structures and spawn exits clear"
 		return _purchase_block_reason(side, building_id)
-	var clearance := MatchBattle.BARRACKS_FOOTPRINT + MatchBattle.OUTPOST_CLEARANCE
-	for outpost: MatchBattle.Outpost in _outposts_by_region.values():
-		var offset := (outpost.position - position).abs()
-		if offset.x < clearance.x and offset.y < clearance.y:
-			return "Keep the outpost clear"
-	var spawn_size := MatchBattle.BARRACKS_SPAWN_CLEARANCE * 2.0
-	if not _battle.fortification_site_clear(Fortifications.footprint(position, spawn_size), true):
-		return "Keep defenses and spawn exits clear"
+	if not _battle.producer_site_clear(position, definition):
+		return "Keep structures and spawn exits clear"
 	return _purchase_block_reason(side, building_id)
 
 
@@ -620,7 +598,7 @@ func _add_structure_view(defense: MatchBattle.Fortification, regions: Array[Stri
 	_buildings[defense.side].add_child(view)
 	view.global_position = _world_position(defense.position)
 	view.rotation.y = -defense.angle
-	view.get_node("Marking").material_override = FACTION_ACCENTS[defense.side]
+	_structure_accent(view, defense.kind).material_override = FACTION_ACCENTS[defense.side]
 	var placed := PlacedFortification.new()
 	placed.defense = defense
 	placed.view = view
@@ -629,8 +607,16 @@ func _add_structure_view(defense: MatchBattle.Fortification, regions: Array[Stri
 	_fortification_ids[view] = defense.id
 
 
+func _structure_accent(view: Node3D, kind: StringName) -> MeshInstance3D:
+	return view.get_node(BUILDINGS[kind].get("accent_node", ^"Marking")) as MeshInstance3D
+
+
 func _remove_fortification(defense: MatchBattle.Fortification) -> void:
-	var placed := _fortifications[defense.id]
+	var placed: PlacedFortification = _fortifications.get(defense.id)
+	if placed == null:
+		return
+	if defense.kind == &"barracks":
+		economy.remove_barracks(defense.side)
 	_fortifications.erase(defense.id)
 	_fortification_ids.erase(placed.view)
 	placed.view.get_parent().remove_child(placed.view)
@@ -814,10 +800,6 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 	if landmark != null:
 		faction_stats.set_source_owner(landmark.source_id, side)
 		_refresh_legendary_summary()
-	for barracks: PlacedBarracks in _barracks_by_region.get(region_id, []):
-		var active := barracks.production.side == side
-		_battle.set_barracks_active(barracks.production, active)
-		barracks.accent.material_override = FACTION_ACCENTS[side] if active else INACTIVE_ACCENT
 	for placed in _fortifications.values():
 		if not placed.regions.has(region_id):
 			continue
@@ -827,7 +809,7 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 				active = false
 				break
 		_battle.set_fortification_active(placed.defense, active)
-		placed.view.get_node("Marking").material_override = FACTION_ACCENTS[placed.defense.side] \
+		_structure_accent(placed.view, placed.defense.kind).material_override = FACTION_ACCENTS[placed.defense.side] \
 			if active else INACTIVE_ACCENT
 	_refresh_hud()
 	if _preview != null:
@@ -921,7 +903,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("ui_cancel") and (selected_unit() != null
-			or _selected_fortification != MatchBattle.NO_TARGET or _selected_barracks != null):
+			or _selected_fortification != MatchBattle.NO_TARGET):
 		_select_unit(MatchBattle.NO_TARGET)
 		_select_fortification(MatchBattle.NO_TARGET)
 		get_viewport().set_input_as_handled()
@@ -985,8 +967,7 @@ func _pick_map(pointer: Vector2) -> void:
 	else:
 		_select_unit(MatchBattle.NO_TARGET)
 		var building := _pick_building(pointer)
-		_select_fortification(_fortification_ids.get(building, MatchBattle.NO_TARGET),
-			_barracks_by_view.get(building))
+		_select_fortification(_fortification_ids.get(building, MatchBattle.NO_TARGET))
 		var point: Variant = _ground_point(pointer) if building == null else building.global_position
 		_select_region(region_at_world_position(point) if point != null else &"")
 	_refresh_claim_control()
@@ -1085,10 +1066,9 @@ func _update_unit_selection() -> void:
 		_draw_unit_route(unit)
 
 
-func _select_fortification(id: int, barracks: PlacedBarracks = null) -> void:
-	if id != _selected_fortification or barracks != _selected_barracks:
+func _select_fortification(id: int) -> void:
+	if id != _selected_fortification:
 		_stat_sources.button_pressed = false
-	_selected_barracks = barracks
 	_selected_fortification = id
 	_update_fortification_inspection()
 
@@ -1098,9 +1078,6 @@ func _update_fortification_inspection() -> void:
 	if placed == null or not _placement_id.is_empty():
 		if _placement_id.is_empty():
 			_hide_ranges()
-			if _selected_barracks != null:
-				_update_barracks_inspection(_selected_barracks.production)
-				return
 		if selected_unit() == null or not _placement_id.is_empty():
 			_unit_panel.hide()
 		return
@@ -1111,6 +1088,14 @@ func _update_fortification_inspection() -> void:
 	_unit_stats.text = _health_text(fort)
 	var details := _breakdown_text("Maximum HP", fort.health_stat())
 	_unit_intent.text = "Active" if fort.active else "Inactive · territory lost"
+	if fort is MatchBattle.ProductionTimer:
+		var production := _production_stat(fort)
+		var unit: Dictionary = UnitCatalog.DEFINITIONS[fort.unit_type]
+		_unit_intent.text += "\n%s · %s per unit\nCapacity  %s units/s" % [
+			unit.label, MatchEconomy.cost_text({MatchEconomy.FOOD: unit.food}),
+			_stat_number(production.total),
+		]
+		details += "\n\n" + _breakdown_text("Production capacity", production, " units/s")
 	for resource_id in fort.profile.get("income", {}):
 		var production := faction_stats.inspect_source(resource_id, fort.source_id)
 		var label: String = MatchEconomy.RESOURCES[resource_id].label
@@ -1123,19 +1108,17 @@ func _update_fortification_inspection() -> void:
 	_show_ranges(fort.profile, fort.position, true)
 
 
-func _update_barracks_inspection(timer: MatchBattle.ProductionTimer) -> void:
-	var production := economy.production_stat(timer.side, timer.active)
-	_unit_panel.show()
-	_unit_name.text = "%s Barracks" % _side_label(timer.side)
-	_unit_name.modulate = FACTION_ACCENTS[timer.side].albedo_color.lightened(0.25)
-	_unit_stats.text = "Capacity  %s units/s" % _stat_number(production.total)
-	_unit_intent.text = "Active" if timer.active else "Inactive · territory lost"
-	_unit_intent.text += "\n%s · %s per unit" % [
-		UnitCatalog.DEFINITIONS[UnitCatalog.BARRACKS_TYPE].label,
-		MatchEconomy.cost_text(MatchEconomy.UNIT_COST),
+func _production_stat(timer: MatchBattle.ProductionTimer) -> Dictionary:
+	if timer.kind == &"barracks":
+		return economy.production_stat(timer.side, timer.active)
+	var rate := 1.0 / timer.interval(economy)
+	var breakdown: Array[Dictionary] = [
+		{"source_name": "Base", "source_type": FactionStats.BASELINE_TYPE, "magnitude": rate, "active": true},
 	]
-	_unit_order_hint.hide()
-	_refresh_stat_sources(_breakdown_text("Production capacity", production, " units/s"))
+	if not timer.active:
+		breakdown.append({"source_name": "Territory lost", "source_type": &"rule",
+			"magnitude": -rate, "active": true})
+	return {"total": rate if timer.active else 0.0, "breakdown": breakdown}
 
 
 func _refresh_stat_sources(details: String) -> void:
@@ -1476,10 +1459,20 @@ func _refresh_hud() -> void:
 		var reason := _purchase_block_reason(PLAYER, building_id)
 		_build_options[building_id].disabled = not reason.is_empty()
 		_build_options[building_id].tooltip_text = reason
+		var definition: Dictionary = BUILDINGS[building_id]
+		if definition.has("unit_type"):
+			var interval: float = economy.production_interval(PLAYER) if building_id == &"barracks" \
+				else definition.interval
+			var unit: Dictionary = UnitCatalog.DEFINITIONS[definition.unit_type]
+			_build_options[building_id].text = "%s · %s\n%s every %ss · %s per unit" % [
+				definition.label, MatchEconomy.cost_text(definition.cost), unit.label,
+				_stat_number(interval), MatchEconomy.cost_text({MatchEconomy.FOOD: unit.food}),
+			]
 	_build_button.disabled = _battle.is_finished()
 	if selected_unit() != null:
 		_update_unit_selection()
 	_update_fortification_inspection()
+	_upgrade_button.tooltip_text = "Shortens the Barracks production cycle."
 	_upgrade_button.disabled = _battle.is_finished() or not economy.can_upgrade(PLAYER)
 	_upgrade_button.text = (
 		"Upgraded" if economy.has_upgrade(PLAYER)

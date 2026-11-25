@@ -184,12 +184,19 @@ func _test_obstructed_site() -> void:
 	scene.economy.advance(50.0)
 	var region: MatchRegion = scene.get_region(&"region_3")
 	var neighbor: MatchRegion = scene.get_region(&"region_5")
-	var barracks_point := region.global_position + Vector3(1.6, 0, -0.1)
-	_check(scene.try_claim(CPU, &"region_2") and scene.try_claim(CPU, neighbor.region_id)
-		and scene.try_place_building(CPU, BARRACKS, barracks_point),
-		"Fixture places a barracks across the border from the new outpost site.")
 	var battle: MatchBattle = scene._battle
 	var site := region.interior_point()
+	_check(scene.try_claim(CPU, &"region_2") and scene.try_claim(CPU, neighbor.region_id),
+		"CPU claims the regions across the border from the outpost site.")
+	var barracks_point := Vector2.INF
+	for offset in [Vector2(1.6, -0.1), Vector2(2.0, -0.25), Vector2(2.0, 0.25),
+			Vector2(1.9, -1.1), Vector2(1.9, 1.1), Vector2(1.3, -1.4), Vector2(1.3, 1.4)]:
+		var point: Vector2 = site + offset
+		if scene._placement_block_reason(CPU, BARRACKS, scene._world_position(point)).is_empty():
+			barracks_point = point
+			break
+	_check(barracks_point.is_finite() and scene.try_place_building(CPU, BARRACKS, scene._world_position(barracks_point)),
+		"Fixture places a barracks across the border from the new outpost site.")
 	_check(not battle.outpost_site_clear(site), "The barracks occupies the default site.")
 	_check(scene.try_claim(PLAYER, region.region_id), "A claim can use an alternate clear site.")
 	var hub := scene._outposts_by_region.get(region.region_id) as MatchBattle.Outpost
