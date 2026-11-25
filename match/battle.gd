@@ -6,6 +6,7 @@ signal unit_removed(unit_id: int)
 signal base_destroyed(side: MatchRegion.Owner)
 signal outpost_destroyed(outpost: Outpost)
 signal fortification_destroyed(fortification: Fortification)
+signal fortification_fired(fortification: Fortification, impact: Vector2)
 
 const Fortifications := preload("res://match/fortification_rules.gd")
 
@@ -462,10 +463,13 @@ func _fire_fortifications(units: Array[Unit]) -> void:
 			continue
 
 		var target: Unit
-		var nearest := float(fort.profile.range) ** 2
+		var range_squared := float(fort.profile.range) ** 2
+		var nearest := range_squared
 		for unit in units:
 			var distance := fort.position.distance_squared_to(unit.position)
-			if unit.side == fort.side or distance > nearest:
+			if unit.side == fort.side or unit.hp <= 0.0 or distance > nearest:
+				continue
+			if target != null and distance == nearest and unit.id > target.id:
 				continue
 			if fort.profile.splash == 0.0 and not navigation.line_clear(
 					fort.position, unit.position, fort.obstacle):
@@ -479,10 +483,12 @@ func _fire_fortifications(units: Array[Unit]) -> void:
 		if fort.profile.splash > 0.0:
 			var radius_squared := float(fort.profile.splash) ** 2
 			for unit in units:
-				if unit != target and unit.side != fort.side \
+				if unit != target and unit.side != fort.side and unit.hp > 0.0 \
+						and fort.position.distance_squared_to(unit.position) <= range_squared \
 						and target.position.distance_squared_to(unit.position) <= radius_squared:
 					unit.hp -= fort.profile.damage
 		fort.cooldown = fort.profile.interval
+		fortification_fired.emit(fort, target.position)
 
 
 func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:

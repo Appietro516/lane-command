@@ -76,6 +76,8 @@ var _fortification_ids: Dictionary[Node3D, int] = {}
 var _selected_fortification := MatchBattle.NO_TARGET
 var _range_ring: MeshInstance3D
 var _splash_ring: MeshInstance3D
+var _shot_effects := Node3D.new()
+var _tracer_material := StandardMaterial3D.new()
 var _wall_start := Vector2.INF
 var _wall_release_pending := false
 var _barracks_by_region: Dictionary[StringName, Array] = {}
@@ -153,6 +155,12 @@ func _ready() -> void:
 	_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_range_ring = _create_radius_ring(Color("#ffe5a5"), 0.018)
 	_splash_ring = _create_radius_ring(Color("#ffa977"), 0.06)
+	add_child(_range_ring)
+	add_child(_splash_ring)
+	add_child(_shot_effects)
+	_tracer_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_tracer_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_tracer_material.albedo_color = Color("#fff0b8")
 	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
 	_claim_button.text = "Claim\n%s" % MatchEconomy.cost_text(MatchEconomy.CLAIM_COST)
 	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
@@ -198,6 +206,10 @@ func restart_match() -> void:
 		_battle.base_destroyed.disconnect(_hide_base)
 		_battle.outpost_destroyed.disconnect(_lose_region)
 		_battle.fortification_destroyed.disconnect(_remove_fortification)
+		_battle.fortification_fired.disconnect(_show_fortification_shot)
+	for shot in _shot_effects.get_children():
+		_shot_effects.remove_child(shot)
+		shot.queue_free()
 	for view in _outpost_views.values():
 		view.get_parent().remove_child(view)
 		view.queue_free()
@@ -232,6 +244,7 @@ func restart_match() -> void:
 	_battle.base_destroyed.connect(_hide_base)
 	_battle.outpost_destroyed.connect(_lose_region)
 	_battle.fortification_destroyed.connect(_remove_fortification)
+	_battle.fortification_fired.connect(_show_fortification_shot)
 	_refresh_hud()
 	set_process(true)
 
@@ -435,6 +448,31 @@ func _remove_fortification(defense: MatchBattle.Fortification) -> void:
 		_select_fortification(MatchBattle.NO_TARGET)
 
 
+func _show_fortification_shot(fort: MatchBattle.Fortification, impact: Vector2) -> void:
+	var effect := MeshInstance3D.new()
+	effect.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_shot_effects.add_child(effect)
+	var end := Vector3(impact.x, 0.20, impact.y)
+	if fort.profile.splash > 0.0:
+		effect.mesh = _splash_ring.mesh
+		effect.position = end
+		effect.scale = Vector3.ONE * float(fort.profile.splash)
+	else:
+		var start := Vector3(fort.position.x, 0.46, fort.position.y)
+		var perpendicular := fort.position.direction_to(impact).orthogonal() * 0.035
+		var width := Vector3(perpendicular.x, 0.0, perpendicular.y)
+		var tracer := ImmediateMesh.new()
+		tracer.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP, _tracer_material)
+		tracer.surface_add_vertex(start - width)
+		tracer.surface_add_vertex(start + width)
+		tracer.surface_add_vertex(end - width)
+		tracer.surface_add_vertex(end + width)
+		tracer.surface_end()
+		effect.mesh = tracer
+	effect.global_transform = _regions.global_transform * effect.transform
+	effect.create_tween().tween_callback(effect.queue_free).set_delay(0.16)
+
+
 func _world_position(point: Vector2) -> Vector3:
 	return _regions.to_global(Vector3(point.x, 0.0, point.y))
 
@@ -501,7 +539,7 @@ func _update_placement_preview(pointer: Vector2) -> void:
 	_placement_label.text = "%s · %s" % [definition.label, reason]
 	if definition.has("range"):
 		_placement_label.text += "\n" + _range_text(definition)
-		_show_ranges(definition, _preview.global_position, _preview.visible)
+		_show_ranges(definition, _map_position(_preview.global_position), _preview.visible)
 	else:
 		_hide_ranges()
 	_placement_panel.show()
@@ -851,7 +889,7 @@ func _update_fortification_inspection() -> void:
 	if fort.profile.range > 0.0:
 		_unit_intent.text += "\n" + _range_text(fort.profile).replace(" · ", "\n")
 	_unit_order_hint.hide()
-	_show_ranges(fort.profile, placed.view.global_position, true)
+	_show_ranges(fort.profile, fort.position, true)
 
 
 func _health_text(building: MatchBattle.BuildingHealth) -> String:
@@ -882,19 +920,19 @@ func _create_radius_ring(color: Color, width_fraction: float) -> MeshInstance3D:
 	ring.mesh = mesh
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	ring.hide()
-	add_child(ring)
 	return ring
 
 
-func _show_ranges(profile: Dictionary, center: Vector3, visible_at_point: bool) -> void:
-	_range_ring.visible = visible_at_point and profile.range > 0.0
-	_splash_ring.visible = visible_at_point and profile.splash > 0.0
-	if _range_ring.visible:
-		_range_ring.global_position = center + Vector3.UP * 0.15
-		_range_ring.scale = Vector3.ONE * float(profile.range)
-	if _splash_ring.visible:
-		_splash_ring.global_position = center + Vector3.UP * 0.16
-		_splash_ring.scale = Vector3.ONE * float(profile.splash)
+func _show_ranges(profile: Dictionary, center: Vector2, visible_at_point: bool) -> void:
+	_show_radius_ring(_range_ring, profile.range, Vector3(center.x, 0.15, center.y), visible_at_point)
+	_show_radius_ring(_splash_ring, profile.splash, Vector3(center.x, 0.16, center.y), visible_at_point)
+
+
+func _show_radius_ring(ring: MeshInstance3D, radius: float, center: Vector3, visible_at_point: bool) -> void:
+	ring.visible = visible_at_point and radius > 0.0
+	if ring.visible:
+		var map_transform := Transform3D(Basis.from_scale(Vector3.ONE * radius), center)
+		ring.global_transform = _regions.global_transform * map_transform
 
 
 func _hide_ranges() -> void:
