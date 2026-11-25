@@ -155,7 +155,7 @@ func _test_match_scene() -> void:
 	var initial_owners := _region_owners(regions)
 
 	scene._process(2.0)
-	_check(scene.try_build(PLAYER), "Build a player barracks alongside the autonomous CPU purchase.")
+	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2)), "Build a player barracks alongside the autonomous CPU purchase.")
 	scene._process(3.5)
 	if units.get_child_count() != 2:
 		_check(false, "Both barracks must deploy a unit.")
@@ -210,9 +210,10 @@ func _test_match_end_and_restart() -> void:
 	_check_full_reset(scene, initial_owners)
 
 	# Give the first player barracks a two-second lead, then keep pace with CPU purchases.
-	_click(build)
+	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2)),
+		"The first barracks starts the player advance.")
 	scene._process(10.0)
-	_check(scene.try_build(PLAYER), "The player adds the second barracks at 10 seconds.")
+	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -3.65)), "The player adds the second barracks at 10 seconds.")
 	scene._process(20.0)
 	_check(scene.try_upgrade(PLAYER) and scene.economy.has_upgrade(CPU),
 		"Both sides have upgraded before the deciding attack.")
@@ -227,7 +228,7 @@ func _test_match_end_and_restart() -> void:
 	_check(units.get_child_count() > 0 and battle.elapsed_time() > 30.0,
 		"The finished match still has units and elapsed time to clear.")
 	_check(not scene.is_processing() and build.disabled and upgrade.disabled
-		and not scene.try_build(PLAYER) and not scene.try_upgrade(PLAYER)
+		and not scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -2.4)) and not scene.try_upgrade(PLAYER)
 		and restart.visible and not restart.disabled,
 		"Ending a match stops simulation and purchases while leaving Restart available.")
 
@@ -241,9 +242,9 @@ func _test_match_end_and_restart() -> void:
 	scene._process(0.25)
 	_check(scene.economy.barracks_count(CPU) == 1 and scene.economy.energy(CPU) == 16.0,
 		"CPU resumes autonomous purchases using the starting energy and cadence.")
-	_click(build)
-	_check(scene.economy.barracks_count(PLAYER) == 1 and scene.economy.energy(PLAYER) == 16.0,
-		"The player can purchase through the HUD in the replay.")
+	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2))
+		and scene.economy.barracks_count(PLAYER) == 1 and scene.economy.energy(PLAYER) == 16.0,
+		"The player can place a barracks in the replay.")
 	scene._process(3.25)
 	_check(units.get_child_count() == 0, "Replay production does not inherit old timers.")
 	scene._process(0.25)
@@ -285,14 +286,14 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 		var base := scene.get_node("Regions/%s/%sBase" % [
 			start_region, "Player" if side == PLAYER else "CPU",
 		]) as Node3D
-		var slots := scene.get_node("Regions/%s/BarracksSlots" % start_region)
 		_check(base.visible and battle.base_hp(side) == MatchBattle.BASE_HP,
 			"Restart restores both bases and their HP.")
 		_check(economy.energy(side) == MatchEconomy.STARTING_ENERGY
 			and economy.barracks_count(side) == 0 and not economy.has_upgrade(side),
 			"Restart restores starting energy and clears barracks and upgrades for each side.")
-		for slot in slots.get_children():
-			_check(slot.get_child_count() == 0, "Restart empties the starting barracks slots.")
+	_check(scene.get_node("Buildings/Player").get_child_count() == 0
+		and scene.get_node("Buildings/CPU").get_child_count() == 0,
+		"Restart removes all placed buildings.")
 	_check(battle.active_units().is_empty() and scene.get_node("Units").get_child_count() == 0
 		and battle.elapsed_time() == 0.0 and battle.outcome() == MatchBattle.Outcome.IN_PROGRESS,
 		"Restart clears units, match time and the recorded outcome.")
@@ -318,8 +319,8 @@ func _click(button: Button) -> void:
 
 func _with_barracks(sides: Array) -> MatchBattle:
 	var battle := MatchBattle.new(CORRIDOR_LENGTH)
-	for index in range(sides.size()):
-		battle.add_barracks(sides[index], index)
+	for side in sides:
+		battle.add_barracks(side)
 	return battle
 
 

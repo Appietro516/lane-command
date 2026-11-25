@@ -1,6 +1,16 @@
 extends Node3D
 
-const BARRACKS := preload("res://match/barracks.tscn")
+const BUILDINGS := {
+	&"barracks": {
+		"label": "Barracks",
+		"cost": MatchEconomy.BARRACKS_COST,
+		"scene": preload("res://match/barracks.tscn"),
+		"rules": preload("res://match/barracks_rules.gd"),
+		"accent_node": ^"RoofMarking",
+	},
+}
+const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
+const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
 const UNIT := preload("res://match/unit.tscn")
 const STARTING_BASE := preload("res://match/starting_base.tscn")
 const PLAYER := MatchRegion.Owner.PLAYER
@@ -32,15 +42,28 @@ var _corridor_start: Vector3
 var _corridor_direction: Vector3
 var _time_until_cpu_decision: float
 
-var _slots: Dictionary[MatchRegion.Owner, Array] = {}
 var _bases: Dictionary[MatchRegion.Owner, Node3D] = {}
+var _pending_pick := Vector2.INF
+var _placement_id: StringName = &""
+var _preview: Node3D
+var _preview_material: StandardMaterial3D
+var _cpu_placement_rng := RandomNumberGenerator.new()
+var _build_options: Dictionary[StringName, Button] = {}
 
+@onready var _buildings: Dictionary[MatchRegion.Owner, Node3D] = {
+	PLAYER: $Buildings/Player,
+	CPU: $Buildings/CPU,
+}
 @onready var _regions: Node3D = $Regions
 @onready var _units: Node3D = $Units
 @onready var _energy_label: Label = %Energy
 @onready var _income_label: Label = %Income
 @onready var _barracks_label: Label = %BarracksCount
 @onready var _build_button: Button = %Build
+@onready var _build_menu: PanelContainer = %BuildMenu
+@onready var _build_list: VBoxContainer = %BuildList
+@onready var _placement_panel: PanelContainer = %PlacementPanel
+@onready var _placement_label: Label = %PlacementStatus
 @onready var _upgrade_button: Button = %Upgrade
 @onready var _claim_button: Button = %Claim
 @onready var _region_label: Label = %SelectedRegion
@@ -54,8 +77,20 @@ var _bases: Dictionary[MatchRegion.Owner, Node3D] = {}
 func _ready() -> void:
 	_generate_map()
 	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
-	_build_button.text = "Build · %d" % MatchEconomy.BARRACKS_COST
-	_build_button.pressed.connect(func() -> void: try_build(PLAYER))
+	for building_id in BUILDINGS:
+		var definition: Dictionary = BUILDINGS[building_id]
+		var option := Button.new()
+		option.text = "%s · %d energy" % [definition.label, definition.cost]
+		option.pressed.connect(_begin_placement.bind(building_id))
+		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_build_list.add_child(option)
+		_build_options[building_id] = option
+	%BuildScroll.custom_minimum_size.y = minf(_build_list.get_combined_minimum_size().y, 240.0)
+	_build_button.pressed.connect(_toggle_build_menu)
+	%CancelPlacement.pressed.connect(_cancel_placement)
+	_preview_material = StandardMaterial3D.new()
+	_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
 	_claim_button.text = "Claim · %d" % MatchEconomy.CLAIM_COST
 	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
@@ -79,10 +114,10 @@ func _generate_map() -> void:
 		_regions_by_id[cell.id] = region
 		_initial_owners[cell.id] = region.region_owner
 		if region.region_owner != MatchRegion.Owner.NEUTRAL:
-			_add_starting_structures(region)
+			_add_starting_base(region)
 
 
-func _add_starting_structures(region: MatchRegion) -> void:
+func _add_starting_base(region: MatchRegion) -> void:
 	var side := region.region_owner
 	var base := STARTING_BASE.instantiate() as Node3D
 	base.name = "PlayerBase" if side == PLAYER else "CPUBase"
@@ -90,16 +125,6 @@ func _add_starting_structures(region: MatchRegion) -> void:
 	base.get_node("Core").material_override = FACTION_ACCENTS[side]
 	region.add_child(base)
 	_bases[side] = base
-
-	var slots := Node3D.new()
-	slots.name = "BarracksSlots"
-	region.add_child(slots)
-	for i in range(MatchEconomy.BARRACKS_CAPACITY):
-		var marker := Marker3D.new()
-		marker.name = "Slot%d" % (i + 1)
-		marker.position.z = -2.9 if i == 0 else 2.9
-		slots.add_child(marker)
-	_slots[side] = slots.get_children()
 
 
 func restart_match() -> void:
@@ -109,11 +134,11 @@ func restart_match() -> void:
 		_battle.base_destroyed.disconnect(_hide_base)
 	for unit_id in _unit_views.keys():
 		_remove_unit(unit_id)
-	for side in _slots:
-		for slot: Marker3D in _slots[side]:
-			for building in slot.get_children():
-				slot.remove_child(building)
-				building.queue_free()
+	_cancel_placement()
+	for side in _buildings:
+		for building in _buildings[side].get_children():
+			_buildings[side].remove_child(building)
+			building.queue_free()
 		_bases[side].show()
 	for region_id in _initial_owners:
 		_regions_by_id[region_id].region_owner = _initial_owners[region_id]
@@ -121,6 +146,7 @@ func restart_match() -> void:
 
 	economy = MatchEconomy.new()
 	_time_until_cpu_decision = CPU_DECISION_INTERVAL
+	_cpu_placement_rng.seed = 46
 	_corridor_start = _units.to_local(_bases[PLAYER].global_position)
 	var corridor := _units.to_local(_bases[CPU].global_position) - _corridor_start
 	_corridor_direction = corridor.normalized()
@@ -148,6 +174,7 @@ func _process(delta: float) -> void:
 		_advance_simulation(delta)
 		_time_until_cpu_decision -= delta
 	if _battle.is_finished():
+		_cancel_placement()
 		set_process(false)
 
 	for unit in _battle.active_units():
@@ -155,18 +182,95 @@ func _process(delta: float) -> void:
 	_refresh_hud()
 
 
-func try_build(side: MatchRegion.Owner) -> bool:
-	if _battle.is_finished() or not economy.try_build(side):
+func try_place_building(side: MatchRegion.Owner, building_id: StringName,
+		world_position: Vector3) -> bool:
+	if not _placement_block_reason(side, building_id, world_position).is_empty():
 		return false
 
-	var slot_index := economy.barracks_count(side) - 1
-	var slot: Marker3D = _slots[side][slot_index]
-	var barracks := BARRACKS.instantiate()
-	barracks.get_node("RoofMarking").material_override = FACTION_ACCENTS[side]
-	slot.add_child(barracks)
-	_battle.add_barracks(side, slot_index)
+	var definition: Dictionary = BUILDINGS[building_id]
+	if not definition.rules.purchase(economy, _battle, side):
+		return false
+
+	var building := definition.scene.instantiate() as Node3D
+	if definition.has("accent_node"):
+		building.get_node(definition.accent_node).material_override = FACTION_ACCENTS[side]
+	var ground := _map_plane().project(world_position)
+	building.position = _buildings[side].to_local(ground)
+	_buildings[side].add_child(building)
 	_refresh_hud()
 	return true
+
+
+func _placement_block_reason(side: MatchRegion.Owner, building_id: StringName,
+		world_position: Vector3) -> String:
+	if not owns_region(side, region_at_world_position(world_position)):
+		return "Choose a spot in your territory"
+	return _purchase_block_reason(side, building_id)
+
+
+func _purchase_block_reason(side: MatchRegion.Owner, building_id: StringName) -> String:
+	if _battle.is_finished():
+		return "Match ended"
+	if not _buildings.has(side) or not BUILDINGS.has(building_id):
+		return "Building unavailable"
+	var definition: Dictionary = BUILDINGS[building_id]
+	return definition.rules.block_reason(economy, side)
+
+
+func _toggle_build_menu() -> void:
+	var opening := not _build_menu.visible
+	_cancel_placement()
+	_build_menu.visible = opening
+	if opening:
+		for option in _build_options.values():
+			if not option.disabled:
+				option.grab_focus()
+				break
+
+
+func _begin_placement(building_id: StringName) -> void:
+	if not _purchase_block_reason(PLAYER, building_id).is_empty():
+		return
+	_cancel_placement()
+	_placement_id = building_id
+	var definition: Dictionary = BUILDINGS[building_id]
+	_preview = definition.scene.instantiate() as Node3D
+	_preview.process_mode = Node.PROCESS_MODE_DISABLED
+	_preview.hide()
+	if _preview is MeshInstance3D:
+		_preview.material_override = _preview_material
+	for mesh: MeshInstance3D in _preview.find_children("*", "MeshInstance3D", true, false):
+		mesh.material_override = _preview_material
+	add_child(_preview)
+	_update_placement_preview(Vector2.INF)
+
+
+func _cancel_placement() -> void:
+	if _preview != null:
+		remove_child(_preview)
+		_preview.queue_free()
+		_preview = null
+	_placement_id = &""
+	_pending_pick = Vector2.INF
+	_placement_panel.hide()
+	_build_menu.hide()
+
+
+func _update_placement_preview(pointer: Vector2) -> void:
+	var definition: Dictionary = BUILDINGS[_placement_id]
+	var reason := _purchase_block_reason(PLAYER, _placement_id)
+	_preview.hide()
+	if pointer != Vector2.INF:
+		var point: Variant = _ground_point(pointer)
+		if point != null:
+			reason = _placement_block_reason(PLAYER, _placement_id, point)
+			_preview.global_position = point
+			_preview_material.albedo_color = VALID_PREVIEW if reason.is_empty() else INVALID_PREVIEW
+			_preview.show()
+	if reason.is_empty():
+		reason = "Click to place" if _preview.visible else "Choose a spot in your territory"
+	_placement_label.text = "%s · %s" % [definition.label, reason]
+	_placement_panel.show()
 
 
 func try_upgrade(side: MatchRegion.Owner) -> bool:
@@ -219,14 +323,46 @@ func _claim_block_reason(region_id: StringName) -> String:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		var ray_start := _camera.project_ray_origin(event.position)
-		var ray_end := ray_start + _camera.project_ray_normal(event.position) * _camera.far
-		var map_plane := Plane(_regions.global_basis.y.normalized(), _regions.global_position)
-		var hit: Variant = map_plane.intersects_segment(ray_start, ray_end)
-		_select_region(region_at_world_position(hit) if hit != null else &"")
-		_refresh_claim_control()
+	if (_preview != null or _build_menu.visible) and (event.is_action_pressed("ui_cancel") or (
+			event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT
+			and event.pressed)):
+		_cancel_placement()
 		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		if _build_menu.visible:
+			_build_menu.hide()
+		else:
+			_pending_pick = event.position
+		get_viewport().set_input_as_handled()
+
+
+func _physics_process(_delta: float) -> void:
+	var click := _pending_pick
+	_pending_pick = Vector2.INF
+	if _preview != null:
+		if click != Vector2.INF:
+			var point: Variant = _ground_point(click)
+			if point != null and try_place_building(PLAYER, _placement_id, point):
+				_cancel_placement()
+				return
+		var pointer := get_viewport().get_mouse_position()
+		if get_viewport().gui_get_hovered_control() != null:
+			pointer = Vector2.INF
+		_update_placement_preview(pointer)
+	elif click != Vector2.INF:
+		var point: Variant = _ground_point(click)
+		_select_region(region_at_world_position(point) if point != null else &"")
+		_refresh_claim_control()
+
+
+func _ground_point(pointer: Vector2) -> Variant:
+	var start := _camera.project_ray_origin(pointer)
+	var end := start + _camera.project_ray_normal(pointer) * _camera.far
+	return _map_plane().intersects_segment(start, end)
+
+
+func _map_plane() -> Plane:
+	return Plane(_regions.global_basis.y.normalized(), _regions.global_position)
 
 
 func _select_region(region_id: StringName) -> void:
@@ -244,12 +380,24 @@ func _advance_simulation(delta: float) -> void:
 
 func _try_cpu_purchase() -> void:
 	if economy.barracks_count(CPU) < MatchEconomy.BARRACKS_CAPACITY:
-		try_build(CPU)
+		if not economy.can_build(CPU):
+			return
+		var region: MatchRegion = get_region(TerritoryLayout.CPU_START)
+		var tile := region.geometry
+		var bounds := tile.get_aabb()
+		# Sample the territory and let the shared placement check validate its shape.
+		for attempt in range(8):
+			var point := tile.to_global(Vector3(
+				_cpu_placement_rng.randf_range(bounds.position.x, bounds.end.x),
+				bounds.end.y,
+				_cpu_placement_rng.randf_range(bounds.position.z, bounds.end.z)))
+			if try_place_building(CPU, &"barracks", point):
+				break
 	elif not economy.has_upgrade(CPU):
 		try_upgrade(CPU)
 
 
-func _spawn_unit(unit: MatchBattle.Unit, _slot_index: int) -> void:
+func _spawn_unit(unit: MatchBattle.Unit) -> void:
 	var view := UNIT.instantiate() as MeshInstance3D
 	view.material_override = FACTION_ACCENTS[unit.side]
 	# The prism is laid flat with its tip pointing along +Z before yaw.
@@ -280,7 +428,14 @@ func _refresh_hud() -> void:
 	_barracks_label.text = "Barracks %d/%d" % [
 		economy.barracks_count(PLAYER), MatchEconomy.BARRACKS_CAPACITY,
 	]
-	_build_button.disabled = _battle.is_finished() or not economy.can_build(PLAYER)
+	var has_available_building := false
+	for building_id in _build_options:
+		var available := _purchase_block_reason(PLAYER, building_id).is_empty()
+		_build_options[building_id].disabled = not available
+		has_available_building = has_available_building or available
+	_build_button.disabled = not has_available_building
+	if not has_available_building:
+		_build_menu.hide()
 	_upgrade_button.disabled = _battle.is_finished() or not economy.can_upgrade(PLAYER)
 	_upgrade_button.text = (
 		"Upgraded" if economy.has_upgrade(PLAYER) else "Upgrade · %d" % MatchEconomy.UPGRADE_COST

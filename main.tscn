@@ -67,6 +67,12 @@ mesh = SubResource("Mesh_corridor_edge")
 position = Vector3(0, 0.012, 0.65)
 mesh = SubResource("Mesh_corridor_edge")
 
+[node name="Buildings" type="Node3D" parent="."]
+
+[node name="Player" type="Node3D" parent="Buildings"]
+
+[node name="CPU" type="Node3D" parent="Buildings"]
+
 [node name="Units" type="Node3D" parent="."]
 
 [node name="HUD" type="CanvasLayer" parent="."]
@@ -153,6 +159,7 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
 theme_override_font_sizes/font_size = 18
+text = "Build"
 
 [node name="Upgrade" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls"]
 unique_name_in_owner = true
@@ -174,3 +181,57 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
 theme_override_font_sizes/font_size = 18
+
+[node name="BuildMenu" type="PanelContainer" parent="HUD"]
+unique_name_in_owner = true
+visible = false
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -150.0
+offset_top = -148.0
+offset_right = 110.0
+offset_bottom = -100.0
+grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBox_hud")
+
+[node name="BuildScroll" type="ScrollContainer" parent="HUD/BuildMenu"]
+unique_name_in_owner = true
+layout_mode = 2
+follow_focus = true
+horizontal_scroll_mode = 0
+
+[node name="BuildList" type="VBoxContainer" parent="HUD/BuildMenu/BuildScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="PlacementPanel" type="PanelContainer" parent="HUD"]
+unique_name_in_owner = true
+visible = false
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -235.0
+offset_top = -154.0
+offset_right = 235.0
+offset_bottom = -100.0
+theme_override_styles/panel = SubResource("StyleBox_hud")
+
+[node name="PlacementControls" type="HBoxContainer" parent="HUD/PlacementPanel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="PlacementStatus" type="Label" parent="HUD/PlacementPanel/PlacementControls"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
+
+[node name="CancelPlacement" type="Button" parent="HUD/PlacementPanel/PlacementControls"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Cancel"

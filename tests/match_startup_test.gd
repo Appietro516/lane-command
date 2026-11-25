@@ -130,9 +130,6 @@ func _test_scene() -> void:
 			var base := region.get_node("PlayerBase" if owner == MatchRegion.Owner.PLAYER else "CPUBase") as Node3D
 			_check(scene.region_at_world_position(base.global_position) == region.region_id,
 				"Each base is inside its starting region.")
-			for slot: Marker3D in region.get_node("BarracksSlots").get_children():
-				_check(scene.region_at_world_position(slot.global_position) == region.region_id,
-					"Each barracks slot is inside its starting region.")
 
 	scene.position = Vector3(45.0, 4.0, -30.0)
 	scene.rotate_y(0.8)

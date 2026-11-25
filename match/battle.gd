@@ -1,7 +1,7 @@
 class_name MatchBattle
 extends RefCounted
 
-signal unit_produced(unit: Unit, slot_index: int)
+signal unit_produced(unit: Unit)
 signal unit_removed(unit_id: int)
 signal base_destroyed(side: MatchRegion.Owner)
 
@@ -39,12 +39,10 @@ class Unit:
 
 class ProductionTimer:
 	var side: MatchRegion.Owner
-	var slot_index: int
 	var elapsed := 0.0
 
-	func _init(owner: MatchRegion.Owner, index: int) -> void:
+	func _init(owner: MatchRegion.Owner) -> void:
 		side = owner
-		slot_index = index
 
 
 var _corridor_length: float
@@ -61,8 +59,8 @@ func _init(corridor_length: float) -> void:
 	_corridor_length = corridor_length
 
 
-func add_barracks(side: MatchRegion.Owner, slot_index: int) -> void:
-	_timers.append(ProductionTimer.new(side, slot_index))
+func add_barracks(side: MatchRegion.Owner) -> void:
+	_timers.append(ProductionTimer.new(side))
 
 
 func active_units() -> Array[Unit]:
@@ -113,7 +111,7 @@ func _advance_production(delta: float, economy: MatchEconomy) -> void:
 			var unit := Unit.new(_next_unit_id, timer.side, spawn_position)
 			_units[unit.id] = unit
 			_next_unit_id += 1
-			unit_produced.emit(unit, timer.slot_index)
+			unit_produced.emit(unit)
 
 
 func _step_combat() -> void:

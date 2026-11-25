@@ -12,7 +12,7 @@ This treatment favors a tactical board over a natural landscape. Terrain detail 
 
 ## Shared economy and production
 
-Proposed defaults give each side 50 starting energy and 3 energy per second. A barracks costs 40 energy and fills the next free slot in the side's starting region, with two slots per side. A one-time production upgrade costs 60 energy and shortens the automatic spawn interval from about 3.5 seconds to 2.5 seconds. Apply the same costs, capacity checks, and production rules to both sides. Reject unaffordable actions and prevent negative energy.
+Proposed defaults give each side 50 starting energy and 3 energy per second. A barracks costs 40 energy, with a capacity of two barracks per side. The Build menu lists building types and their energy costs. Choose a building and click any point inside owned territory to place it. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 energy and shortens the automatic spawn interval from about 3.5 seconds to 2.5 seconds. Apply the same costs, capacity checks, and production rules to both sides. Reject unaffordable actions and prevent negative energy.
 
 Sources: S95c42ca9286d
 
@@ -30,6 +30,6 @@ Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 
 ## Optional region claiming
 
-The player can select a region on the map and use Claim to acquire a neutral region adjacent to any player-owned region. The initial prototype charges 50 energy per claim, a provisional balance value. A successful claim updates ownership and map color and deducts the cost once. Reject enemy-owned, nonadjacent, already claimed, and unaffordable targets. Claims have no income, production, building-slot, routing, or combat effects in this slice. CPU expansion is deferred.
+The player can select a region on the map and use Claim to acquire a neutral region adjacent to any player-owned region. The initial prototype charges 50 energy per claim, a provisional balance value. A successful claim updates ownership and map color and deducts the cost once. Reject enemy-owned, nonadjacent, already claimed, and unaffordable targets. Claimed regions immediately become available for building placement. Claims have no direct effect on income, production, routing, or combat. CPU expansion is deferred.
 
 Sources: S95c42ca9286d, S1389629da9a3, Se50c19e91616
