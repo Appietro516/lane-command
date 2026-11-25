@@ -38,6 +38,8 @@ jobs:
           unzip -q "$RUNNER_TEMP/templates.tpz" 'templates/windows_release_x86_64.exe' 'templates/web_nothreads_release.zip' -d "$RUNNER_TEMP"
           mkdir -p "$HOME/.local/share/godot/export_templates/$version_dir"
           mv "$RUNNER_TEMP/templates/"* "$HOME/.local/share/godot/export_templates/$version_dir/"
+      - name: Test Godot build preflight
+        run: python3 .github/scripts/test_build_godot.py
       - name: Validate and export
         run: bash .github/scripts/build-godot.sh "$RUNNER_TEMP/godot-build"
       - name: Upload Windows ZIP
