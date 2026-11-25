@@ -161,6 +161,14 @@ func add_barracks(side: MatchRegion.Owner, position: Vector2) -> ProductionTimer
 	return timer
 
 
+func active_barracks_count(side: MatchRegion.Owner) -> int:
+	var count := 0
+	for timer in _timers:
+		if timer.side == side and timer.active:
+			count += 1
+	return count
+
+
 func set_barracks_active(timer: ProductionTimer, active: bool) -> void:
 	if timer.active == active:
 		return

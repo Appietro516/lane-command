@@ -15,7 +15,6 @@ const BARRACKS_COST := {ENERGY: 40, MATERIALS: 20}
 const UNIT_COST := {FOOD: 4}
 const UPGRADE_COST := {ENERGY: 60, FOOD: 15}
 const CLAIM_COST := {ENERGY: 50}
-const BARRACKS_CAPACITY := 2
 const PRODUCTION_INTERVAL := 3.5
 const UPGRADED_PRODUCTION_INTERVAL := 2.5
 
@@ -147,19 +146,11 @@ func has_upgrade(side: MatchRegion.Owner) -> bool:
 	return production_interval(side) == UPGRADED_PRODUCTION_INTERVAL
 
 
-func build_block_reason(side: MatchRegion.Owner, cost: Dictionary) -> String:
-	if _sides.has(side) and barracks_count(side) >= BARRACKS_CAPACITY:
-		return "Barracks limit reached"
-	return cost_block_reason(side, cost)
-
-
 func can_upgrade(side: MatchRegion.Owner) -> bool:
 	return _sides.has(side) and not has_upgrade(side) and cost_block_reason(side, UPGRADE_COST).is_empty()
 
 
 func try_build(side: MatchRegion.Owner, cost: Dictionary) -> bool:
-	if not _sides.has(side) or barracks_count(side) >= BARRACKS_CAPACITY:
-		return false
 	if not try_spend(side, cost):
 		return false
 

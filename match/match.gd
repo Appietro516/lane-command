@@ -49,6 +49,7 @@ const INACTIVE_ACCENT := preload("res://match/inactive_accent.tres")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const CPU_DECISION_INTERVAL := 2.0
+const CPU_OPENING_SUPPLY_CYCLES := 4.0
 const ROUTE_HEIGHT := 0.12
 const ROUTE_HALF_WIDTH := 0.045
 const ROUTE_TIP_RADIUS := 0.18
@@ -419,9 +420,6 @@ func _purchase_block_reason(side: MatchRegion.Owner, building_id: StringName) ->
 		return "Match ended"
 	if not _buildings.has(side) or not BUILDINGS.has(building_id):
 		return "Building unavailable"
-	var definition: Dictionary = BUILDINGS[building_id]
-	if definition.has("rules"):
-		return definition.rules.block_reason(economy, side, definition.cost)
 	return economy.cost_block_reason(side, _minimum_build_cost(building_id))
 
 
@@ -1104,20 +1102,25 @@ func _advance_simulation(delta: float) -> void:
 
 
 func _try_cpu_purchase() -> void:
-	if economy.barracks_count(CPU) < MatchEconomy.BARRACKS_CAPACITY:
-		_try_cpu_build(&"barracks")
+	var active_barracks := _battle.active_barracks_count(CPU)
+	if active_barracks == 0 and _try_cpu_build(&"barracks"):
 		return
 
+	var food_per_unit := float(MatchEconomy.UNIT_COST[MatchEconomy.FOOD])
+	var food_income := economy.income_rate(CPU, MatchEconomy.FOOD)
+	var interval := economy.production_interval(CPU)
+	var demand := food_per_unit * active_barracks / MatchEconomy.UPGRADED_PRODUCTION_INTERVAL
+	# Opening stockpiles can fund expansion while the CPU saves for a Farm.
+	var opening_cycle_deficit := food_per_unit * (active_barracks + 1) - food_income * interval
+	if not economy.has_upgrade(CPU) and food_income < demand \
+			and economy.stockpile(CPU, MatchEconomy.FOOD) >= opening_cycle_deficit * CPU_OPENING_SUPPLY_CYCLES:
+		if not _purchase_block_reason(CPU, &"barracks").is_empty() or _try_cpu_build(&"barracks"):
+			return
+
 	# Secure the income needed to keep all barracks running after the upgrade.
-	for resource_id in MatchEconomy.UNIT_COST:
-		var demand := float(MatchEconomy.UNIT_COST[resource_id]) * economy.barracks_count(CPU) \
-			/ MatchEconomy.UPGRADED_PRODUCTION_INTERVAL
-		if economy.income_rate(CPU, resource_id) < demand:
-			for building_id in BUILDINGS:
-				var income: Dictionary = BUILDINGS[building_id].get("income", {})
-				if income.get(resource_id, 0.0) > 0.0:
-					_try_cpu_build(building_id)
-					return
+	if food_income < demand:
+		_try_cpu_build(&"farm")
+		return
 	if not economy.has_upgrade(CPU):
 		try_upgrade(CPU)
 		return
@@ -1134,6 +1137,12 @@ func _try_cpu_purchase() -> void:
 				break
 		if not has_active_building and _try_cpu_build(building_id):
 			return
+
+	# Support the next barracks with recurring income before adding its unit costs.
+	if food_income >= demand + food_per_unit / interval:
+		_try_cpu_build(&"barracks")
+	elif _purchase_block_reason(CPU, &"barracks").is_empty():
+		_try_cpu_build(&"farm")
 
 
 func _try_cpu_build(building_id: StringName) -> bool:
@@ -1255,9 +1264,7 @@ func _refresh_hud() -> void:
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
 	_refresh_resource_readouts()
-	_barracks_label.text = "Barracks %d/%d" % [
-		economy.barracks_count(PLAYER), MatchEconomy.BARRACKS_CAPACITY,
-	]
+	_barracks_label.text = "Barracks %d" % economy.barracks_count(PLAYER)
 	for building_id in _build_options:
 		var reason := _purchase_block_reason(PLAYER, building_id)
 		_build_options[building_id].disabled = not reason.is_empty()

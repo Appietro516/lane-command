@@ -1,11 +1,6 @@
 extends RefCounted
 
 
-static func block_reason(economy: MatchEconomy, side: MatchRegion.Owner,
-		cost: Dictionary) -> String:
-	return economy.build_block_reason(side, cost)
-
-
 static func purchase(economy: MatchEconomy, battle: MatchBattle,
 		side: MatchRegion.Owner, position: Vector2, cost: Dictionary) -> MatchBattle.ProductionTimer:
 	if not economy.try_build(side, cost):

@@ -18,7 +18,7 @@ This treatment favors a tactical board over a natural landscape. Terrain detail 
 
 ## Shared economy and production
 
-Provisional defaults give each side 50 Energy at +3/s, 30 Materials at +2/s, and 20 Food at +1/s. A barracks costs 40 Energy and 20 Materials, with a capacity of two barracks per side. The Build menu lists building types and their prices. Choose a building and click inside owned territory to place it, keeping outpost footprints clear. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 Energy and 15 Food and shortens the automatic spawn interval from 3.5 seconds to 2.5 seconds. Both sides use the same costs, capacity checks, and production rules. Purchases require sufficient stock in every listed resource and deduct the full price together.
+Provisional defaults give each side 50 Energy at +3/s, 30 Materials at +2/s, and 20 Food at +1/s. A barracks costs 40 Energy and 20 Materials. The Build menu lists building types and their prices. Choose a building and click inside owned territory to place it, keeping outpost footprints clear. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 Energy and 15 Food and shortens the automatic spawn interval from 3.5 seconds to 2.5 seconds. Both sides use the same construction costs, placement checks, and production rules. Purchases require sufficient stock in every listed resource and deduct the full price together.
 
 Each unit costs 4 Food. A barracks with a completed cycle waits until the faction can pay, then deploys one unit. Generators cost 26 Materials and add 2 Energy/s. Mines cost 24 Materials and 15 Energy and add 2 Materials/s. Farms cost 20 Materials and add 3 Food/s. Producers stack and can be placed in starting or claimed territory. Destroyed producers lose their income. Producers in lost territory pause until their original owner reclaims the region. These prices and rates are provisional.
 
@@ -31,7 +31,7 @@ Sources: S95c42ca9286d
 
 ## CPU opponent and automatic combat
 
-Every two seconds the CPU checks for a purchase. It builds its barracks, adds enough producer income to fund upgraded unit production, buys the upgrade, and adds the remaining producer types. Both sides use the same single unit type and combat rules. Units deploy from their producing barracks and pursue the nearest reachable opponent within their detection radius by default. When no local enemy unit is available, autonomous units attack reachable enemy outposts or advance toward the opposing base. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
+Every two seconds the CPU checks for a purchase. It uses opening food reserves to establish production, adds enough income to fund upgraded production, buys the upgrade, and develops its economy. It adds more barracks as food income and construction resources allow. Both sides use the same single unit type and combat rules. Units deploy from their producing barracks and pursue the nearest reachable opponent within their detection radius by default. When no local enemy unit is available, autonomous units attack reachable enemy outposts or advance toward the opposing base. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
 
 Sources: S95c42ca9286d, S1389629da9a3
 
@@ -53,6 +53,6 @@ Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 
 The player can select a neutral region adjacent to existing territory and use Claim to spend 50 Energy and acquire it. A successful claim changes the map color, opens building placement, and adds one outpost with 24 HP by default. Select its region to inspect its health. Both factions use the same claim rules. Automated CPU expansion is deferred.
 
-Destroying an outpost returns its region to neutral, so it no longer supports building placement or further claims for the former owner. Existing barracks remain visible and count toward their faction's capacity. Production pauses until their original faction pays to reclaim the region, then resumes from the existing timer. Only the starting bases determine victory and defeat. Restart clears expansion outposts.
+Destroying an outpost returns its region to neutral, so it no longer supports building placement or further claims for the former owner. Existing barracks stay visible and still appear in their faction's barracks count. Production pauses until their original faction pays to reclaim the region, then resumes from the existing timer. Only the starting bases determine victory and defeat. Restart clears expansion outposts.
 
 Sources: S95c42ca9286d, S1389629da9a3, Se50c19e91616

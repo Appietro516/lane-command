@@ -513,7 +513,7 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 	_check(scene.get_node("%PlayerHP").text == "Player base · 80 HP"
 		and scene.get_node("%CPUHP").text == "CPU base · 80 HP"
 		and scene.get_node("%Resources/energy/Stockpile").text == "Energy 50"
-		and scene.get_node("%BarracksCount").text == "Barracks 0/2"
+		and scene.get_node("%BarracksCount").text == "Barracks 0"
 		and not scene.get_node("%Outcome").visible and not scene.get_node("%Build").disabled
 		and scene.get_node("%Upgrade").disabled and scene.get_node("%Upgrade").text == "Upgrade\n60 Energy + 15 Food",
 		"The HUD refreshes to its starting readouts and purchase controls.")
