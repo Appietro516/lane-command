@@ -12,7 +12,8 @@ const RESOURCES := {
 	FOOD: {"label": "Food", "starting_stock": 20.0, "baseline": 1.0},
 }
 const BARRACKS_COST := {ENERGY: 40, MATERIALS: 20}
-const UNIT_COST := {FOOD: 4}
+const UnitCatalog := preload("res://match/unit_catalog.gd")
+const UNIT_COST := {FOOD: UnitCatalog.DEFINITIONS[UnitCatalog.BARRACKS_TYPE].food}
 const UPGRADE_COST := {ENERGY: 60, FOOD: 15}
 const CLAIM_COST := {ENERGY: 50}
 const PRODUCTION_INTERVAL := 3.5

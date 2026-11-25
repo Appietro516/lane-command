@@ -42,7 +42,7 @@ const BUILDINGS := {
 }
 const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
 const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
-const UNIT := preload("res://match/unit.tscn")
+const UnitCatalog := preload("res://match/unit_catalog.gd")
 const STARTING_BASE := preload("res://match/starting_base.tscn")
 const OUTPOST := preload("res://match/outpost.tscn")
 const LANDMARK := preload("res://match/legendary_landmark.tscn")
@@ -138,6 +138,7 @@ var _selected_resource: StringName
 var _income_details: Dictionary[StringName, String] = {}
 var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
+var _unit_materials: Dictionary[StringName, StandardMaterial3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
 var _route_mesh := ImmediateMesh.new()
 var _time_until_cpu_decision: float
@@ -215,7 +216,10 @@ func _ready() -> void:
 		if definition.has("income"):
 			effect = _income_text(definition.income)
 		elif definition.has("rules"):
-			effect = "Auto-spawn · %s per unit" % MatchEconomy.cost_text(MatchEconomy.UNIT_COST)
+			effect = "Auto-spawn %s · %s per unit" % [
+				UnitCatalog.DEFINITIONS[UnitCatalog.BARRACKS_TYPE].label,
+				MatchEconomy.cost_text(MatchEconomy.UNIT_COST),
+			]
 		if not effect.is_empty():
 			option.text += "\n" + effect
 		option.pressed.connect(_begin_placement.bind(building_id))
@@ -1052,22 +1056,30 @@ func _update_unit_selection() -> void:
 		return
 
 	_unit_selection.global_position = _unit_views[unit.id].global_position
-	_unit_name.text = "%s combat unit #%d" % [_side_label(unit.side), unit.id]
+	_unit_selection.scale = Vector3.ONE * float(unit.definition.selection_scale)
+	_unit_name.text = "%s %s #%d" % [_side_label(unit.side), unit.definition.label, unit.id]
 	_unit_name.modulate = FACTION_ACCENTS[unit.side].albedo_color.lightened(0.25)
 	var attack := _battle.unit_attack_stat(unit)
 	var health := _battle.unit_health_stat(unit)
 	var speed := _battle.unit_speed_stat(unit)
-	_unit_stats.text = "HP  %s / %s\nAttack  %s · Speed  %s units/s" % [
+	_unit_stats.text = "HP  %s / %s\nAttack  %s · Speed  %s units/s\nRange  %s · Cooldown  %ss" % [
 		_stat_number(unit.hp), _stat_number(health.total), _stat_number(attack.total),
-		_stat_number(speed.total),
+		_stat_number(speed.total), _stat_number(unit.definition.range),
+		_stat_number(unit.attack_interval),
 	]
-	_refresh_stat_sources("\n\n".join([
+	var sources := PackedStringArray([
 		_breakdown_text("Damage per second", _battle.unit_dps_stat(unit)),
 		_breakdown_text("Maximum HP", health),
 		_breakdown_text("Damage per attack", attack),
 		_breakdown_text("Movement speed", speed, " units/s"),
-	]))
-	_unit_intent.text = "Target  %s\nState  %s" % [_target_label(unit), _unit_state_label(unit)]
+	])
+	if unit.definition.structure_damage_multiplier != 1.0:
+		sources.append("Damage per attack against structures  %s" %
+			_stat_number(attack.total * unit.definition.structure_damage_multiplier))
+	_refresh_stat_sources("\n\n".join(sources))
+	_unit_intent.text = "Target  %s\nOrder  %s\nState  %s" % [
+		_target_label(unit), MatchBattle.Order.keys()[unit.order].capitalize(), _unit_state_label(unit),
+	]
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
 	if not unit.waypoints.is_empty():
 		_draw_unit_route(unit)
@@ -1118,7 +1130,10 @@ func _update_barracks_inspection(timer: MatchBattle.ProductionTimer) -> void:
 	_unit_name.modulate = FACTION_ACCENTS[timer.side].albedo_color.lightened(0.25)
 	_unit_stats.text = "Capacity  %s units/s" % _stat_number(production.total)
 	_unit_intent.text = "Active" if timer.active else "Inactive · territory lost"
-	_unit_intent.text += "\n%s per unit" % MatchEconomy.cost_text(MatchEconomy.UNIT_COST)
+	_unit_intent.text += "\n%s · %s per unit" % [
+		UnitCatalog.DEFINITIONS[UnitCatalog.BARRACKS_TYPE].label,
+		MatchEconomy.cost_text(MatchEconomy.UNIT_COST),
+	]
 	_unit_order_hint.hide()
 	_refresh_stat_sources(_breakdown_text("Production capacity", production, " units/s"))
 
@@ -1188,7 +1203,7 @@ func _target_label(unit: MatchBattle.Unit) -> String:
 		return "CPU base" if unit.side == PLAYER else "Player base"
 	var target := _battle.get_unit(unit.target)
 	if target != null:
-		return "%s unit #%d" % [_side_label(target.side), target.id]
+		return "%s %s #%d" % [_side_label(target.side), target.definition.label, target.id]
 	var outpost := _battle.get_outpost(unit.target)
 	if outpost != null:
 		return "%s outpost · %d/%d HP" % [_side_label(outpost.side), outpost.hp, outpost.max_hp]
@@ -1267,16 +1282,29 @@ func _try_cpu_purchase() -> void:
 
 
 func _spawn_unit(unit: MatchBattle.Unit) -> void:
-	var view := UNIT.instantiate() as MeshInstance3D
-	view.material_override = FACTION_ACCENTS[unit.side]
+	var view := unit.definition.scene.instantiate() as MeshInstance3D
+	view.material_override = _unit_material(unit)
 	_units.add_child(view)
 	_unit_views[unit.id] = view
 	_update_unit_view(unit, view)
 
 
+func _unit_material(unit: MatchBattle.Unit) -> StandardMaterial3D:
+	var accent: StandardMaterial3D = FACTION_ACCENTS[unit.side]
+	var weight: float = unit.definition.tint_weight
+	if weight == 0.0:
+		return accent
+	var key := StringName("%d/%s" % [unit.side, unit.type_id])
+	if not _unit_materials.has(key):
+		var material := accent.duplicate() as StandardMaterial3D
+		material.albedo_color = accent.albedo_color.lerp(unit.definition.tint, weight)
+		_unit_materials[key] = material
+	return _unit_materials[key]
+
+
 func _update_unit_view(unit: MatchBattle.Unit, view: MeshInstance3D) -> void:
 	view.global_position = _regions.to_global(Vector3(unit.position.x, 0.14, unit.position.y))
-	# The prism is laid flat with its tip pointing along +Z before yaw.
+	# Unit meshes face +Z before yaw.
 	view.rotation.y = atan2(unit.heading.x, unit.heading.y)
 
 

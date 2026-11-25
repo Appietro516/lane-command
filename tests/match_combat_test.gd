@@ -330,9 +330,9 @@ func _test_match_scene() -> void:
 		_check(false, "Clicking the enemy token selects it.")
 		scene.free()
 		return
-	_check(panel.visible and unit_name.text == "CPU combat unit #%d" % cpu.id
-		and stats.text == "HP  12 / 12\nAttack  3 · Speed  2.4 units/s"
-		and intent.text == "Target  Player base\nState  Advancing"
+	_check(panel.visible and unit_name.text == "CPU Infantry #%d" % cpu.id
+		and stats.text == "HP  12 / 12\nAttack  3 · Speed  2.4 units/s\nRange  0.9 · Cooldown  1s"
+		and intent.text == "Target  Player base\nOrder  Autonomous\nState  Advancing"
 		and marker.global_position == cpu_view.global_position
 		and not order_hint.visible and route.get_surface_count() == 1,
 		"Enemy inspection shows the live stats, strategic target, ring and route.")
@@ -348,13 +348,13 @@ func _test_match_scene() -> void:
 		return
 	_check(marker.visible and marker.global_position == player_view.global_position,
 		"The scene identifies the selected friendly unit with a ring.")
-	_check(unit_name.text == "Player combat unit #%d" % player.id
-		and intent.text == "Target  CPU base\nState  Advancing" and order_hint.visible,
+	_check(unit_name.text == "Player Infantry #%d" % player.id
+		and intent.text == "Target  CPU base\nOrder  Autonomous\nState  Advancing" and order_hint.visible,
 		"Switching to a friendly unit refreshes the name, target and move hint.")
 	_click_at_world(destination, MOUSE_BUTTON_RIGHT)
 	_check(player.ordered_destination.is_equal_approx(Vector2(destination.x, destination.z)),
 		"A right-click issues a real move order through viewport input.")
-	_check(intent.text == "Target  None\nState  Moving to order"
+	_check(intent.text == "Target  None\nOrder  Move\nState  Moving to order"
 		and route.get_surface_count() == 1 and route.get_aabb().end.x > destination.x,
 		"The route and panel refresh immediately to show the order destination.")
 	_click_at_world(player_building, MOUSE_BUTTON_RIGHT)
@@ -370,12 +370,12 @@ func _test_match_scene() -> void:
 		and player.position.is_equal_approx(Vector2(replacement.x, replacement.z))
 		and player.order == MatchBattle.Order.HOLD and marker.global_position == player_view.global_position,
 		"A second right-click supersedes the first and the visible unit and marker reach it.")
-	_check(route.get_surface_count() == 0 and intent.text == "Target  None\nState  Holding",
+	_check(route.get_surface_count() == 0 and intent.text == "Target  None\nOrder  Hold\nState  Holding",
 		"The route clears when the selected unit reaches its hold point.")
 
 	cpu.position = player.position + Vector2(0.0, -2.0)
 	scene._process(MatchBattle.STEP)
-	_check(player.target == cpu.id and intent.text == "Target  CPU unit #%d\nState  Pursuing" % cpu.id
+	_check(player.target == cpu.id and intent.text == "Target  CPU Infantry #%d\nOrder  Hold\nState  Pursuing" % cpu.id
 		and route.get_surface_count() == 1 and route.get_aabb().position.z < cpu.position.y,
 		"A new target and its pursuit route replace the previous movement intent live.")
 	cpu.position = player.position + Vector2(0.0, -0.55)

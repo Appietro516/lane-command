@@ -25,6 +25,7 @@ var revision := 0
 var _bounds: Rect2
 var _obstacles: Dictionary[int, Obstacle] = {}
 var _next_obstacle_id := 0
+var _clearance_routes: Dictionary[float, BattleNavigation] = {}
 var _graph := AStar2D.new()
 var _graph_revision := -1
 var _start_links: Dictionary[Vector2, PackedInt64Array] = {}
@@ -40,12 +41,29 @@ func add_obstacle(footprint: Rect2, angle := 0.0) -> int:
 	_next_obstacle_id += 1
 	_obstacles[id] = Obstacle.new(footprint, angle)
 	revision += 1
+	_clearance_routes.clear()
 	return id
 
 
 func remove_obstacle(id: int) -> void:
 	if _obstacles.erase(id):
 		revision += 1
+		_clearance_routes.clear()
+
+
+## Cache one route graph per movement clearance until the static map changes.
+func with_clearance(clearance: float) -> BattleNavigation:
+	if clearance == 0.0:
+		return self
+	var routes := _clearance_routes.get(clearance) as BattleNavigation
+	if routes == null:
+		routes = BattleNavigation.new(_bounds.grow(-clearance))
+		for obstacle in _obstacles.values():
+			var footprint := Rect2(obstacle.rect.position + obstacle.transform.origin,
+				obstacle.rect.size)
+			routes.add_obstacle(footprint.grow(clearance), obstacle.transform.get_rotation())
+		_clearance_routes[clearance] = routes
+	return routes
 
 
 func is_passable(point: Vector2) -> bool:

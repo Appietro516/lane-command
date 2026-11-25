@@ -418,7 +418,7 @@ func _choose_barracks(build: Button) -> void:
 	await process_frame
 	await process_frame
 	_check(list.is_visible_in_tree() and list.get_child_count() == scene.BUILDINGS.size()
-		and option.text == "Barracks · 40 Energy + 20 Materials\nAuto-spawn · 4 Food per unit",
+		and option.text == "Barracks · 40 Energy + 20 Materials\nAuto-spawn Infantry · 4 Food per unit",
 		"Build opens the catalog menu with the configured price.")
 	_click(option)
 	await process_frame
