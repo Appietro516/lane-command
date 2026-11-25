@@ -38,6 +38,7 @@ class PlacedBarracks:
 	var accent: MeshInstance3D
 
 
+var faction_stats: FactionStats
 var economy: MatchEconomy
 @export var map_seed: int = 17
 @export_range(5, 7) var region_count: int = 6
@@ -101,6 +102,8 @@ func _ready() -> void:
 	_unit_route.mesh = _route_mesh
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
+	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label]:
+		label.mouse_filter = Control.MOUSE_FILTER_PASS
 	for building_id in BUILDINGS:
 		var definition: Dictionary = BUILDINGS[building_id]
 		var option := Button.new()
@@ -177,11 +180,13 @@ func restart_match() -> void:
 		_regions_by_id[region_id].region_owner = _initial_owners[region_id]
 	_select_region(&"")
 
-	economy = MatchEconomy.new()
+	faction_stats = FactionStats.new()
+	economy = MatchEconomy.new(faction_stats)
 	_time_until_cpu_decision = CPU_DECISION_INTERVAL
 	_cpu_placement_rng.seed = 46
 	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
-		_map_position(_bases[CPU].global_position), unit_aggro_radius)
+		_map_position(_bases[CPU].global_position), unit_aggro_radius,
+		TerritoryLayout.BOUNDS, faction_stats)
 	_battle.target_priority = unit_target_priority
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
@@ -363,6 +368,7 @@ func _lose_region(outpost: MatchBattle.Outpost) -> void:
 
 func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 	get_region(region_id).region_owner = side
+	faction_stats.set_source_owner(region_source_id(region_id), side)
 	for barracks: PlacedBarracks in _barracks_by_region.get(region_id, []):
 		var active := barracks.production.side == side
 		_battle.set_barracks_active(barracks.production, active)
@@ -370,6 +376,18 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 	_refresh_hud()
 	if _preview != null:
 		_refresh_placement_preview()
+
+
+## Use this ID for contributions that follow control of a region.
+static func region_source_id(region_id: StringName) -> StringName:
+	return StringName("region/" + region_id)
+
+
+func set_region_modifier(region_id: StringName, stat: StringName, magnitude: float,
+		source_name: String, source_type := &"landmark", description := "") -> bool:
+	var region := get_region(region_id)
+	return region != null and faction_stats.set_modifier(region_source_id(region_id),
+		region.region_owner, stat, magnitude, source_type, source_name, description)
 
 
 func owns_region(side: MatchRegion.Owner, region_id: StringName) -> bool:
@@ -542,9 +560,13 @@ func _update_unit_selection() -> void:
 	_unit_selection.global_position = _unit_views[unit.id].global_position
 	_unit_name.text = "%s combat unit #%d" % [_side_label(unit.side), unit.id]
 	_unit_name.modulate = FACTION_ACCENTS[unit.side].albedo_color.lightened(0.25)
-	_unit_stats.text = "HP  %d / %d\nAttack  %d · Speed  %.1f units/s" % [
-		unit.hp, MatchBattle.UNIT_HP, MatchBattle.ATTACK_DAMAGE, MatchBattle.MOVEMENT_SPEED,
+	var attack := _battle.unit_attack_stat(unit)
+	_unit_stats.text = "HP  %s / %d\nAttack  %s · Speed  %.1f units/s" % [
+		_stat_number(unit.hp), MatchBattle.UNIT_HP, _stat_number(attack.total),
+		MatchBattle.MOVEMENT_SPEED,
 	]
+	_unit_stats.tooltip_text = _stat_tooltip("Damage per attack", attack) + "\n\n" \
+		+ _stat_tooltip("Damage per second", _battle.unit_dps_stat(unit))
 	_unit_intent.text = "Target  %s\nState  %s" % [_target_label(unit), _unit_state_label(unit)]
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
 	if not unit.waypoints.is_empty():
@@ -710,24 +732,37 @@ func _refresh_resource_readouts() -> void:
 		var stockpile := readout.get_node(^"Stockpile") as Label
 		var rate := readout.get_node(^"Rate") as Label
 		stockpile.text = "%s %d" % [resource_label, floori(economy.stockpile(PLAYER, resource_id))]
-		rate.text = _rate_text(economy.income_rate(PLAYER, resource_id))
-		var lines := PackedStringArray([resource_label + " income"])
-		for source: Dictionary in economy.income_sources(PLAYER, resource_id).values():
-			lines.append("%s  %s" % [source.label, _rate_text(source.rate)])
-		lines.append("Total  " + rate.text)
-		readout.tooltip_text = "\n".join(lines)
+		var income := economy.income_stat(PLAYER, resource_id)
+		rate.text = _stat_amount(income.total, "/s")
+		readout.tooltip_text = _stat_tooltip(resource_label + " income", income, "/s")
 
 
-func _rate_text(rate: float) -> String:
-	var amount := String.num(rate, 3)
+func _stat_number(value: float) -> String:
+	var amount := String.num(value, 3)
 	if amount.contains("."):
 		amount = amount.rstrip("0").rstrip(".")
-	return "%s%s/s" % ["+" if rate >= 0.0 else "", amount]
+	return amount
+
+
+func _stat_amount(value: float, suffix: String) -> String:
+	return "%s%s%s" % ["+" if value >= 0.0 and not suffix.is_empty() else "",
+		_stat_number(value), suffix]
+
+
+func _stat_tooltip(title: String, result: Dictionary, suffix := "") -> String:
+	var lines := PackedStringArray([title])
+	for source: Dictionary in result.breakdown:
+		if source.active:
+			lines.append("%s  %s" % [source.source_name, _stat_amount(source.magnitude, suffix)])
+	lines.append("Total  " + _stat_amount(result.total, suffix))
+	return "\n".join(lines)
 
 
 func _refresh_hud() -> void:
-	_player_hp_label.text = "Player base · %d HP" % _battle.base_hp(PLAYER)
-	_cpu_hp_label.text = "CPU base · %d HP" % _battle.base_hp(CPU)
+	_player_hp_label.text = "Player base · %s HP" % _stat_number(_battle.base_hp(PLAYER))
+	_cpu_hp_label.text = "CPU base · %s HP" % _stat_number(_battle.base_hp(CPU))
+	_player_hp_label.tooltip_text = _stat_tooltip("Maximum HP", _battle.base_health_stat(PLAYER))
+	_cpu_hp_label.tooltip_text = _stat_tooltip("Maximum HP", _battle.base_health_stat(CPU))
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
 	_refresh_resource_readouts()
@@ -753,6 +788,7 @@ func _refresh_hud() -> void:
 func _refresh_claim_control() -> void:
 	var reason := _claim_block_reason(_selected_region_id)
 	_claim_button.disabled = not reason.is_empty()
+	var tooltip := ""
 	if _regions_by_id.has(_selected_region_id):
 		var region := get_region(_selected_region_id)
 		var title := str(_selected_region_id).capitalize()
@@ -760,9 +796,12 @@ func _refresh_claim_control() -> void:
 			title += " · Neutral"
 		var outpost := _outposts_by_region.get(_selected_region_id) as MatchBattle.Outpost
 		if outpost != null:
-			reason += "\nOutpost · %d/%d HP" % [outpost.hp, outpost.max_hp]
+			var health := outpost.health_stat()
+			reason += "\nOutpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(health.total)]
+			tooltip = _stat_tooltip("Maximum HP", health)
 		_region_label.text = "%s\n%s" % [
 			title, reason,
 		]
 	else:
 		_region_label.text = reason
+	_region_label.tooltip_text = tooltip

@@ -12,7 +12,11 @@ Generate the region graph by clipping the map bounds around seeded Voronoi sites
 
 Sources: S8f6e375bbe16, S95c42ca9286d
 
-`MatchEconomy` defines resources by stable ID, label, starting stockpile, and baseline rate. Each side holds its own stockpiles and income contributions keyed by resource and source ID. Simulation and HUD totals sum the same contributions. A purchase validates every entry in its resource-to-amount cost before debiting stockpiles.
+`MatchEconomy` defines resources by stable ID, label, starting stockpile, and baseline rate. Each side holds its own stockpiles. A purchase validates every entry in its resource-to-amount cost before debiting stockpiles.
+
+The match shares one `FactionStats` between economy and battle. Register a flat modifier with `set_modifier()` using a stable source ID and a stat key. Reusing that pair replaces its contribution. One source can contribute to several stats, and `remove_source()`, `set_source_owner()`, and `set_source_active()` update the whole source. Use `set_region_modifier()` for contributions that follow region ownership. Battle exposes source IDs for bases, outposts, and barracks so contributions can follow destruction or activation. Restart creates a fresh registry.
+
+Income, unit DPS, damage per attack, and maximum building HP expose computed totals with named source breakdowns. The registry adds the baseline first and then modifiers in lexical source ID order. Disabled entries retain their configured magnitude and contribute zero. Damage per attack scales each DPS contribution by the unit's attack interval. Bases and outposts start at their effective maximum HP. Later cap increases preserve current HP, and decreases clamp it to the new cap.
 
 Combat consumes elapsed time in fixed 60 Hz steps. Units plan from the same snapshot before movement and damage, and casualties are removed after all attacks for that step. The match scene projects pointer input to the same map plane and renders the battle state. Routes use direct segments or an AStar2D graph of building footprint corners. Adding a building invalidates cached routes. Unit state is available by ID through `MatchBattle.get_unit()` and by current selection through `selected_unit()` on the match scene.
 

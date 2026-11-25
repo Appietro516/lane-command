@@ -46,10 +46,11 @@ class Unit:
 	var strategic_destination := Vector2.INF
 	var strategic_target := BASE_TARGET
 	var strategic_revision := -1
-	var hp := UNIT_HP
+	var hp := float(UNIT_HP)
 	var target := NO_TARGET
 	var can_attack_target := false
 	var cooldown := 0.0
+	var attack_interval := ATTACK_COOLDOWN
 
 	func _init(unit_id: int, owner: MatchRegion.Owner, spawn_position: Vector2) -> void:
 		id = unit_id
@@ -58,6 +59,7 @@ class Unit:
 
 
 class ProductionTimer:
+	var source_id: StringName
 	var side: MatchRegion.Owner
 	var position: Vector2
 	var elapsed := 0.0
@@ -69,22 +71,40 @@ class ProductionTimer:
 		position = building_position
 
 
-class Outpost:
+class BuildingHealth:
+	var side: MatchRegion.Owner
+	var source_id: StringName
+	var hp: float
+	var base_max_hp: float
+	var max_hp: float:
+		get:
+			return _stats.value(side, FactionStats.BUILDING_MAX_HP, base_max_hp)
+	var _stats: FactionStats
+
+	func _init(stats: FactionStats, owner: MatchRegion.Owner, base_health: float) -> void:
+		_stats = stats
+		side = owner
+		base_max_hp = base_health
+		hp = max_hp
+
+	func health_stat() -> Dictionary:
+		return _stats.inspect(side, FactionStats.BUILDING_MAX_HP, base_max_hp)
+
+
+class Outpost extends BuildingHealth:
 	var id: int
 	var region_id: StringName
-	var side: MatchRegion.Owner
 	var position: Vector2
-	var hp: int
-	var max_hp: int
 	var obstacle: int
 
 
+var stats: FactionStats
 var aggro_radius: float
 var target_priority := TargetPriority.NEAREST
 var navigation: BattleNavigation
 var _bases: Dictionary[MatchRegion.Owner, Vector2]
 var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
-var _base_hp: Dictionary[MatchRegion.Owner, int] = {PLAYER: BASE_HP, CPU: BASE_HP}
+var _base_health: Dictionary[MatchRegion.Owner, BuildingHealth] = {}
 var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
 var _outposts: Dictionary[int, Outpost] = {}
@@ -96,16 +116,22 @@ var _outcome := Outcome.IN_PROGRESS
 
 
 func _init(player_base: Vector2, cpu_base: Vector2, detection_radius := DEFAULT_AGGRO_RADIUS,
-		bounds := TerritoryLayout.BOUNDS) -> void:
+		bounds := TerritoryLayout.BOUNDS, faction_stats: FactionStats = null) -> void:
+	stats = faction_stats if faction_stats != null else FactionStats.new()
 	aggro_radius = detection_radius
 	navigation = BattleNavigation.new(bounds)
 	_bases = {PLAYER: player_base, CPU: cpu_base}
 	for side in _bases:
+		var building := BuildingHealth.new(stats, side, BASE_HP)
+		building.source_id = StringName("base/%d" % side)
+		_base_health[side] = building
 		_base_obstacles[side] = _add_footprint(_bases[side], BASE_FOOTPRINT)
+	stats.stat_changed.connect(_on_stat_changed)
 
 
 func add_barracks(side: MatchRegion.Owner, position: Vector2) -> ProductionTimer:
 	var timer := ProductionTimer.new(side, position)
+	timer.source_id = StringName("barracks/%d" % _timers.size())
 	timer.obstacle = _add_footprint(position, BARRACKS_FOOTPRINT)
 	_timers.append(timer)
 	return timer
@@ -119,18 +145,17 @@ func set_barracks_active(timer: ProductionTimer, active: bool) -> void:
 		timer.obstacle = _add_footprint(timer.position, BARRACKS_FOOTPRINT)
 	else:
 		navigation.remove_obstacle(timer.obstacle)
+	stats.set_source_active(timer.source_id, active)
 
 
 func add_outpost(region_id: StringName, side: MatchRegion.Owner, position: Vector2,
 		max_hp: int) -> Outpost:
-	var outpost := Outpost.new()
+	var outpost := Outpost.new(stats, side, max_hp)
 	outpost.id = _next_outpost_id
 	_next_outpost_id -= 1
 	outpost.region_id = region_id
-	outpost.side = side
+	outpost.source_id = StringName("outpost/%d" % outpost.id)
 	outpost.position = position
-	outpost.max_hp = max_hp
-	outpost.hp = max_hp
 	outpost.obstacle = _add_footprint(position, OUTPOST_FOOTPRINT)
 	_outposts[outpost.id] = outpost
 	return outpost
@@ -178,8 +203,41 @@ func active_units() -> Array[Unit]:
 	return _units.values()
 
 
-func base_hp(side: MatchRegion.Owner) -> int:
-	return _base_hp[side]
+func base_hp(side: MatchRegion.Owner) -> float:
+	return _base_health[side].hp
+
+
+func base_health_stat(side: MatchRegion.Owner) -> Dictionary:
+	return _base_health[side].health_stat()
+
+
+func base_source_id(side: MatchRegion.Owner) -> StringName:
+	return _base_health[side].source_id
+
+
+func unit_dps_stat(unit: Unit) -> Dictionary:
+	return stats.inspect(unit.side, FactionStats.UNIT_DPS, ATTACK_DAMAGE / unit.attack_interval)
+
+
+func unit_attack_stat(unit: Unit) -> Dictionary:
+	var result := unit_dps_stat(unit)
+	result.total *= unit.attack_interval
+	for entry: Dictionary in result.breakdown:
+		entry.stat = &"attack_damage"
+		entry.magnitude *= unit.attack_interval
+		if entry.has("configured_magnitude"):
+			entry.configured_magnitude *= unit.attack_interval
+	return result
+
+
+func _on_stat_changed(stat: StringName) -> void:
+	if stat != FactionStats.BUILDING_MAX_HP:
+		return
+	# Cap reductions discard surplus HP. Higher caps never heal existing buildings.
+	for building in _base_health.values():
+		building.hp = minf(building.hp, building.max_hp)
+	for outpost in _outposts.values():
+		outpost.hp = minf(outpost.hp, outpost.max_hp)
 
 
 func is_finished() -> bool:
@@ -257,15 +315,17 @@ func _step_combat() -> void:
 
 	# A unit killed this step still resolves the attack it planned.
 	for unit in attacks:
+		var damage := stats.value(unit.side, FactionStats.UNIT_DPS,
+			ATTACK_DAMAGE / unit.attack_interval) * unit.attack_interval
 		if unit.target == BASE_TARGET:
 			var side := _opponent(unit.side)
-			_base_hp[side] = maxi(0, base_hp(side) - ATTACK_DAMAGE)
+			_base_health[side].hp = maxf(0.0, base_hp(side) - damage)
 		elif unit.target < BASE_TARGET:
 			var outpost := _outposts[unit.target]
-			outpost.hp = maxi(0, outpost.hp - ATTACK_DAMAGE)
+			outpost.hp = maxf(0.0, outpost.hp - damage)
 		else:
-			_units[unit.target].hp -= ATTACK_DAMAGE
-		unit.cooldown = ATTACK_COOLDOWN
+			_units[unit.target].hp -= damage
+		unit.cooldown = unit.attack_interval
 
 	for unit in units:
 		if unit.hp <= 0:
@@ -277,6 +337,7 @@ func _step_combat() -> void:
 		if outpost.hp == 0:
 			_outposts.erase(outpost.id)
 			navigation.remove_obstacle(outpost.obstacle)
+			stats.remove_source(outpost.source_id)
 			destroyed_outposts.append(outpost)
 
 	for unit in _units.values():
@@ -295,8 +356,10 @@ func _step_combat() -> void:
 		_outcome = Outcome.VICTORY
 
 	if base_hp(PLAYER) == 0:
+		stats.remove_source(base_source_id(PLAYER))
 		base_destroyed.emit(PLAYER)
 	if base_hp(CPU) == 0:
+		stats.remove_source(base_source_id(CPU))
 		base_destroyed.emit(CPU)
 
 
@@ -342,7 +405,7 @@ func _plan_local_engagement(unit: Unit, units: Array[Unit]) -> bool:
 		if opponent.side == unit.side:
 			continue
 		var distance := unit.position.distance_squared_to(opponent.position)
-		var priority := opponent.hp if target_priority == TargetPriority.LOWEST_HP else 0
+		var priority := opponent.hp if target_priority == TargetPriority.LOWEST_HP else 0.0
 		if distance > detection_squared or priority > best_priority \
 				or (priority == best_priority and distance >= nearest_distance):
 			continue

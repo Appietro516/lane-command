@@ -1,10 +1,10 @@
 class_name MatchEconomy
 extends RefCounted
 
-const ENERGY := &"energy"
-const MATERIALS := &"materials"
-const FOOD := &"food"
-const BASE_INCOME := &"base"
+const ENERGY := FactionStats.ENERGY
+const MATERIALS := FactionStats.MATERIALS
+const FOOD := FactionStats.FOOD
+const BASE_INCOME := FactionStats.BASELINE
 const STARTING_ENERGY := 50.0
 const RESOURCES := {
 	ENERGY: {"label": "Energy", "starting_stock": STARTING_ENERGY, "baseline": 3.0},
@@ -20,7 +20,6 @@ const UPGRADED_PRODUCTION_INTERVAL := 2.5
 
 class SideState:
 	var stockpiles: Dictionary[StringName, float] = {}
-	var sources: Dictionary[StringName, Dictionary] = {}
 	var barracks_count := 0
 	var production_interval := PRODUCTION_INTERVAL
 
@@ -28,15 +27,17 @@ class SideState:
 		for resource_id in RESOURCES:
 			var definition: Dictionary = RESOURCES[resource_id]
 			stockpiles[resource_id] = definition.starting_stock
-			sources[resource_id] = {
-				BASE_INCOME: {"label": "Base", "rate": definition.baseline},
-			}
 
 
+var stats: FactionStats
 var _sides: Dictionary[MatchRegion.Owner, SideState] = {
 	MatchRegion.Owner.PLAYER: SideState.new(),
 	MatchRegion.Owner.CPU: SideState.new(),
 }
+
+
+func _init(faction_stats: FactionStats = null) -> void:
+	stats = faction_stats if faction_stats != null else FactionStats.new()
 
 
 func advance(delta: float) -> void:
@@ -59,28 +60,39 @@ func energy(side: MatchRegion.Owner) -> float:
 
 
 func income_rate(side: MatchRegion.Owner, resource_id: StringName) -> float:
-	var total := 0.0
-	for source: Dictionary in _sides[side].sources[resource_id].values():
-		total += source.rate
-	return total
+	return stats.value(side, resource_id, RESOURCES[resource_id].baseline)
+
+
+func income_stat(side: MatchRegion.Owner, resource_id: StringName) -> Dictionary:
+	return stats.inspect(side, resource_id, RESOURCES[resource_id].baseline)
 
 
 func income_sources(side: MatchRegion.Owner, resource_id: StringName) -> Dictionary:
-	return _sides[side].sources[resource_id].duplicate(true)
+	var sources := {}
+	var prefix := _income_prefix(side)
+	for entry: Dictionary in income_stat(side, resource_id).breakdown:
+		if entry.active:
+			var id := StringName(str(entry.source_id).trim_prefix(prefix))
+			sources[id] = {"label": entry.source_name, "rate": entry.magnitude}
+	return sources
 
 
-# A source ID is unique for its side and resource. A zero rate removes the source.
+# The original income API scopes IDs to each side and resource.
 func set_income_source(side: MatchRegion.Owner, resource_id: StringName,
-		source_id: StringName, label: String, rate: float) -> void:
+		source_id: StringName, label: String, rate: float, source_type := &"building") -> void:
 	if not _sides.has(side) or not RESOURCES.has(resource_id) or source_id.is_empty() \
 			or source_id == BASE_INCOME or not is_finite(rate):
 		return
 
-	var sources := _sides[side].sources[resource_id]
+	var scoped_id := StringName(_income_prefix(side) + source_id)
 	if rate == 0.0:
-		sources.erase(source_id)
+		stats.remove_source(scoped_id, resource_id)
 	else:
-		sources[source_id] = {"label": label, "rate": rate}
+		stats.set_modifier(scoped_id, side, resource_id, rate, source_type, label)
+
+
+func _income_prefix(side: MatchRegion.Owner) -> String:
+	return "income/%d/" % side
 
 
 static func cost_text(cost: Dictionary) -> String:
