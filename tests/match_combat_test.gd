@@ -150,8 +150,8 @@ func _test_match_scene() -> void:
 	var units := scene.get_node("Units") as Node3D
 	var regions := scene.get_node("Regions")
 	# Deliberately vary ownership across the same corridor to exercise both and neutral.
-	regions.get_node("Northwest").region_owner = CPU
-	regions.get_node("Southeast").region_owner = PLAYER
+	scene.get_region(&"region_1").region_owner = CPU
+	scene.get_region(&"region_2").region_owner = PLAYER
 	var initial_owners := _region_owners(regions)
 
 	scene._process(2.0)
@@ -166,13 +166,17 @@ func _test_match_scene() -> void:
 	var cpu_start := cpu_view.position
 	var player_start := player_view.position
 	scene._process(3.5)
-	var x_gap := cpu_view.position.x - player_view.position.x
-	var corridor_z: float = scene.get_node("Corridor").position.z
-	_check(cpu_view.position.x < cpu_start.x and player_view.position.x > player_start.x
-		and is_equal_approx(cpu_view.position.z, corridor_z)
-		and is_equal_approx(player_view.position.z, corridor_z)
-		and x_gap > 0.0 and x_gap <= MatchBattle.UNIT_ATTACK_RANGE,
-		"The scene renders both waves meeting along the straight corridor.")
+	var player_base := scene.get_node("Regions/PlayerStart/PlayerBase") as Node3D
+	var cpu_base := scene.get_node("Regions/CPUStart/CPUBase") as Node3D
+	var route := cpu_base.global_position - player_base.global_position
+	var direction := route.normalized()
+	var gap := (cpu_view.position - player_view.position).dot(direction)
+	_check((cpu_view.position - cpu_start).dot(direction) < 0.0
+		and (player_view.position - player_start).dot(direction) > 0.0
+		and (cpu_view.global_position - player_base.global_position).cross(direction).is_zero_approx()
+		and (player_view.global_position - player_base.global_position).cross(direction).is_zero_approx()
+		and gap > 0.0 and gap <= MatchBattle.UNIT_ATTACK_RANGE,
+		"The scene renders both waves meeting on the route between the bases.")
 	var battle: MatchBattle = scene._battle
 	_check(battle.active_units().size() == 4 and battle.active_units()[0].hp == 9
 		and battle.active_units()[1].hp == 9, "The initial cubes exchange damage in the match scene.")
@@ -212,7 +216,7 @@ func _test_match_end_and_restart() -> void:
 	scene._process(20.0)
 	_check(scene.try_upgrade(PLAYER) and scene.economy.has_upgrade(CPU),
 		"Both sides have upgraded before the deciding attack.")
-	regions.get_node("Northwest").region_owner = PLAYER
+	scene.get_region(&"region_1").region_owner = PLAYER
 	regions.get_node("CPUStart").region_owner = PLAYER
 	scene._process(30.0)
 	var battle: MatchBattle = scene._battle
@@ -271,7 +275,7 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 	var battle: MatchBattle = scene._battle
 	var economy: MatchEconomy = scene.economy
 	var regions := scene.get_node("Regions")
-	_check(_region_owners(regions) == initial_owners, "Restart restores authored ownership.")
+	_check(_region_owners(regions) == initial_owners, "Restart restores initial ownership.")
 	for region: MatchRegion in regions.get_children():
 		var material := region.geometry.material_override as StandardMaterial3D
 		_check(material.albedo_color == MatchRegion.OWNER_COLORS[region.region_owner],
@@ -288,7 +292,7 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 			and economy.barracks_count(side) == 0 and not economy.has_upgrade(side),
 			"Restart restores starting energy and clears barracks and upgrades for each side.")
 		for slot in slots.get_children():
-			_check(slot.get_child_count() == 0, "Restart empties the authored barracks slots.")
+			_check(slot.get_child_count() == 0, "Restart empties the starting barracks slots.")
 	_check(battle.active_units().is_empty() and scene.get_node("Units").get_child_count() == 0
 		and battle.elapsed_time() == 0.0 and battle.outcome() == MatchBattle.Outcome.IN_PROGRESS,
 		"Restart clears units, match time and the recorded outcome.")

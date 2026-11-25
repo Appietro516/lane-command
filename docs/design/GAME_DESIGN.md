@@ -2,9 +2,9 @@
 
 ## Map and starting territories
 
-Show roughly 5–7 fixed regions and both bases together. The human and CPU each own one starting region at opposite ends of the map. The remaining regions start neutral. Pre-authored irregular cells are preferred and simple placeholder shapes are acceptable. One straight corridor connects the bases. Units cross regions without capturing them, and ownership has no effect on movement or combat.
+Generate 5–7 irregular territories across the playable map and frame all regions and both bases together. The human and CPU each own one starting region at opposite ends of the map. The remaining regions start neutral. The map seed and region count are configurable on the Match scene. The existing combat simulation moves units between the bases. Units cross regions without capturing them, and ownership has no effect on movement or combat.
 
-Sources: S95c42ca9286d, Se50c19e91616
+Sources: S95c42ca9286d, Se50c19e91616, [generated territory map ticket](https://trello.com/c/gV8QZqOh/9-generate-a-2d-voronoi-style-territory-map)
 
 ## Shared economy and production
 
