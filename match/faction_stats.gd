@@ -35,6 +35,7 @@ func set_modifier(source_id: StringName, owner: MatchRegion.Owner, stat: StringN
 	contribution["description"] = description
 	if building_id != 0:
 		contribution["building_id"] = building_id
+	if not region_id.is_empty():
 		contribution["region_id"] = region_id
 	var sources := _sources.get_or_add(stat, {}) as Dictionary
 	if sources.get(source_id) != contribution:

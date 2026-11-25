@@ -132,6 +132,7 @@ var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
 var _outposts: Dictionary[int, Outpost] = {}
 var _fortifications: Dictionary[int, Fortification] = {}
+var _landmark_footprints: Array[Rect2] = []
 var _next_structure_id := BASE_TARGET - 1
 var _next_unit_id := 1
 var _pending_time := 0.0
@@ -233,7 +234,15 @@ func set_fortification_active(fort: Fortification, active: bool) -> void:
 	stats.set_source_active(fort.source_id, active)
 
 
+func add_landmark_footprint(footprint: Rect2) -> void:
+	_landmark_footprints.append(footprint)
+	navigation.add_obstacle(footprint)
+
+
 func fortification_site_clear(polygon: PackedVector2Array, fortifications_only := false) -> bool:
+	for footprint in _landmark_footprints:
+		if not Geometry2D.intersect_polygons(polygon, BattleNavigation.corners_of(footprint)).is_empty():
+			return false
 	if not fortifications_only:
 		for center in _bases.values():
 			if _footprints_overlap(polygon, center, BASE_FOOTPRINT * 2.0):

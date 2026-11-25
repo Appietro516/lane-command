@@ -1,0 +1,66 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://match/legendary_landmark.gd" id="1"]
+
+[sub_resource type="StandardMaterial3D" id="Material_base"]
+albedo_color = Color(0.28, 0.21, 0.4, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_gold"]
+shading_mode = 0
+albedo_color = Color(1, 0.76, 0.37, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_crystal"]
+albedo_color = Color(1, 0.67, 0.28, 1)
+emission_enabled = true
+emission = Color(0.49, 0.22, 0.03, 1)
+
+[sub_resource type="CylinderMesh" id="Mesh_base"]
+material = SubResource("Material_base")
+top_radius = 0.48
+bottom_radius = 0.64
+height = 0.34
+radial_segments = 8
+
+[sub_resource type="CylinderMesh" id="Mesh_trim"]
+material = SubResource("Material_gold")
+top_radius = 0.48
+bottom_radius = 0.52
+height = 0.08
+radial_segments = 8
+
+[sub_resource type="PrismMesh" id="Mesh_crystal"]
+material = SubResource("Material_crystal")
+size = Vector3(0.82, 0.66, 0.13)
+
+[node name="Legendary" type="Node3D"]
+script = ExtResource("1")
+
+[node name="Plinth" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.17, 0)
+mesh = SubResource("Mesh_base")
+
+[node name="Trim" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.35, 0)
+mesh = SubResource("Mesh_trim")
+
+[node name="Crystal" type="Node3D" parent="."]
+position = Vector3(0, 1.06, 0)
+
+[node name="Upper" type="MeshInstance3D" parent="Crystal"]
+position = Vector3(0, 0.33, 0)
+mesh = SubResource("Mesh_crystal")
+
+[node name="Lower" type="MeshInstance3D" parent="Crystal"]
+position = Vector3(0, -0.33, 0)
+rotation = Vector3(0, 0, 3.1415927)
+mesh = SubResource("Mesh_crystal")
+
+[node name="Marker" type="Label3D" parent="."]
+position = Vector3(0, 2.31, 0)
+pixel_size = 0.017
+billboard = 1
+modulate = Color(1, 0.83, 0.49, 1)
+outline_modulate = Color(0.12, 0.10, 0.18, 1)
+text = "Legendary"
+font_size = 40
+outline_size = 10

@@ -55,4 +55,6 @@ The player can select a neutral region adjacent to existing territory and use Cl
 
 Destroying an outpost returns its region to neutral, so it no longer supports building placement or further claims for the former owner. Existing barracks stay visible and still appear in their faction's barracks count. Production pauses until their original faction pays to reclaim the region, then resumes from the existing timer. Only the starting bases determine victory and defeat. Restart clears expansion outposts.
 
+Legendary landmarks mark contested regions with a gold crystal. Select the landmark or its region to see the name, bonus, and current controller. A neutral landmark is inactive. Its bonus applies to the faction that owns the region and stacks with bonuses from other landmarks. Destroying the claim outpost returns the region to neutral and suspends the bonus. The landmark stays in place and activates for the next owner.
+
 Sources: S95c42ca9286d, S1389629da9a3, Se50c19e91616

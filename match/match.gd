@@ -45,6 +45,9 @@ const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
 const UNIT := preload("res://match/unit.tscn")
 const STARTING_BASE := preload("res://match/starting_base.tscn")
 const OUTPOST := preload("res://match/outpost.tscn")
+const LANDMARK := preload("res://match/legendary_landmark.tscn")
+const LEGENDARY_SEED_SALT := 0x4C4547454E444152
+const LEGENDARY_OUTPOST_SPACING := 2.0
 const INACTIVE_ACCENT := preload("res://match/inactive_accent.tres")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -86,6 +89,18 @@ var economy: MatchEconomy
 var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 @export_range(1, TerritoryLayout.MAX_REGIONS) var player_start_count := 1
 @export_range(1, TerritoryLayout.MAX_REGIONS) var cpu_start_count := 1
+@export_group("Legendary Landmarks", "legendary_")
+## Maximum number of landmarks. Each eligible region also rolls against spawn probability.
+@export_range(0, TerritoryLayout.MAX_REGIONS) var legendary_count := 2
+@export_range(0.0, 1.0, 0.01) var legendary_spawn_probability := 1.0
+@export var legendary_neutral_only := true
+@export var legendary_catalog: Array[LegendaryBuff] = [
+	LegendaryBuff.new("War Spire", FactionStats.UNIT_DPS),
+	LegendaryBuff.new("Sun Vault", FactionStats.ENERGY),
+	LegendaryBuff.new("Founder’s Forge", FactionStats.MATERIALS),
+	LegendaryBuff.new("Harvest Shrine", FactionStats.FOOD),
+	LegendaryBuff.new("Ancient Bastion", FactionStats.BUILDING_MAX_HP, 10.0),
+]
 @export_group("")
 @export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
 @export var unit_target_priority := MatchBattle.TargetPriority.NEAREST
@@ -99,6 +114,7 @@ var _battle: MatchBattle
 var _layout: TerritoryLayout
 var _regions_by_id: Dictionary[StringName, MatchRegion] = {}
 var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
+var _landmarks: Dictionary[StringName, LegendaryLandmark] = {}
 var _outposts_by_region: Dictionary[StringName, MatchBattle.Outpost] = {}
 var _outpost_views: Dictionary[StringName, Node3D] = {}
 var _fortifications: Dictionary[int, PlacedFortification] = {}
@@ -148,6 +164,9 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _upgrade_button: Button = %Upgrade
 @onready var _claim_button: Button = %Claim
 @onready var _region_label: Label = %SelectedRegion
+@onready var _landmark_panel: PanelContainer = %LandmarkInspection
+@onready var _landmark_details: Label = %LandmarkDetails
+@onready var _legendary_summary: Label = %LegendarySummary
 @onready var _camera: StrategyCamera = $Camera
 @onready var _player_hp_label: Label = %PlayerHP
 @onready var _cpu_hp_label: Label = %CPUHP
@@ -160,7 +179,7 @@ func _ready() -> void:
 	_unit_route.mesh = _route_mesh
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
-	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label]:
+	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label, _legendary_summary]:
 		label.mouse_filter = Control.MOUSE_FILTER_PASS
 	for building_id in BUILDINGS:
 		var definition: Dictionary = BUILDINGS[building_id]
@@ -231,6 +250,69 @@ func _generate_map() -> void:
 		_initial_owners[cell.id] = region.region_owner
 		if cell.id == TerritoryLayout.PLAYER_START or cell.id == TerritoryLayout.CPU_START:
 			_add_starting_base(region)
+	_generate_landmarks()
+
+
+func _generate_landmarks() -> void:
+	if legendary_count <= 0 or legendary_spawn_probability <= 0.0:
+		return
+	var catalog: Array[LegendaryBuff] = []
+	var weights := PackedFloat32Array()
+	for buff in legendary_catalog:
+		if buff != null and buff.weight > 0 and not buff.landmark_name.strip_edges().is_empty() \
+				and FactionStats.STAT_DEFINITIONS.has(buff.stat) and is_finite(buff.magnitude):
+			catalog.append(buff)
+			weights.append(buff.weight)
+	if catalog.is_empty():
+		return
+
+	var eligible: Array[MatchRegion] = []
+	for region in _regions_by_id.values():
+		if not legendary_neutral_only or region.region_owner == MatchRegion.Owner.NEUTRAL:
+			eligible.append(region)
+	var occupied: Array[Rect2] = []
+	for base in _bases.values():
+		var center := _map_position(base.global_position)
+		occupied.append(Rect2(center - MatchBattle.BASE_FOOTPRINT, MatchBattle.BASE_FOOTPRINT * 2.0))
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = active_map_seed ^ LEGENDARY_SEED_SALT
+	# Draw without replacement in seeded order, and skip cells with no safe site.
+	for i in range(eligible.size()):
+		if _landmarks.size() == legendary_count:
+			break
+		var next := rng.randi_range(i, eligible.size() - 1)
+		var region := eligible[next]
+		eligible[next] = eligible[i]
+		if legendary_spawn_probability < 1.0 and rng.randf() >= legendary_spawn_probability:
+			continue
+		var outpost_site := region.interior_point() if region.region_owner == MatchRegion.Owner.NEUTRAL \
+			else Vector2.INF
+		var point := region.interior_point(_landmark_site_clear.bind(region, outpost_site, occupied))
+		if not point.is_finite():
+			continue
+		var landmark := LANDMARK.instantiate() as LegendaryLandmark
+		landmark.configure(region.region_id, point, catalog[rng.rand_weighted(weights)])
+		region.add_child(landmark)
+		landmark.global_position = _world_position(point)
+		_landmarks[region.region_id] = landmark
+		occupied.append(landmark.footprint)
+
+
+func _landmark_site_clear(point: Vector2, region: MatchRegion, outpost_site: Vector2,
+		occupied: Array[Rect2]) -> bool:
+	if point.distance_squared_to(outpost_site) < LEGENDARY_OUTPOST_SPACING ** 2:
+		return false
+	var half_size := LegendaryLandmark.HALF_SIZE
+	var footprint := Rect2(point - half_size, half_size * 2.0)
+	for obstacle in occupied:
+		if footprint.intersects(obstacle):
+			return false
+	var boundary_clearance := footprint.grow(MatchRegion.EDGE_GAP + MatchRegion.BORDER_WIDTH)
+	for corner in BattleNavigation.corners_of(boundary_clearance):
+		if not Geometry2D.is_point_in_polygon(corner, region.polygon):
+			return false
+	return true
 
 
 func _add_starting_base(region: MatchRegion) -> void:
@@ -286,12 +368,18 @@ func restart_match() -> void:
 	_select_region(&"")
 
 	faction_stats = FactionStats.new()
+	for landmark in _landmarks.values():
+		faction_stats.set_modifier(landmark.source_id, _initial_owners[landmark.region_id],
+			landmark.stat, landmark.magnitude, &"legendary", landmark.display_name,
+			"", true, 0, landmark.region_id)
 	economy = MatchEconomy.new(faction_stats)
 	_time_until_cpu_decision = CPU_DECISION_INTERVAL
 	_cpu_placement_rng.seed = 46
 	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
 		_map_position(_bases[CPU].global_position), unit_aggro_radius,
 		_layout.bounds, faction_stats)
+	for landmark in _landmarks.values():
+		_battle.add_landmark_footprint(landmark.footprint)
 	_battle.target_priority = unit_target_priority
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
@@ -299,6 +387,7 @@ func restart_match() -> void:
 	_battle.outpost_destroyed.connect(_lose_region)
 	_battle.fortification_destroyed.connect(_remove_fortification)
 	_battle.fortification_fired.connect(_show_fortification_shot)
+	_refresh_legendary_summary()
 	_refresh_hud()
 	set_process(true)
 
@@ -665,6 +754,7 @@ func try_claim(side: MatchRegion.Owner, region_id: StringName) -> bool:
 	if not economy.try_spend(side, MatchEconomy.CLAIM_COST):
 		return false
 
+	_set_region_owner(region_id, side)
 	var outpost := _battle.add_outpost(region_id, side, point, maxi(1, outpost_hp))
 	_outposts_by_region[region_id] = outpost
 	var view := OUTPOST.instantiate() as Node3D
@@ -672,7 +762,7 @@ func try_claim(side: MatchRegion.Owner, region_id: StringName) -> bool:
 	region.add_child(view)
 	view.global_position = _regions.to_global(Vector3(point.x, 0.0, point.y))
 	_outpost_views[region_id] = view
-	_set_region_owner(region_id, side)
+	_refresh_claim_control()
 	return true
 
 
@@ -690,6 +780,10 @@ func _lose_region(outpost: MatchBattle.Outpost) -> void:
 func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 	get_region(region_id).region_owner = side
 	faction_stats.set_source_owner(region_source_id(region_id), side)
+	var landmark := _landmarks.get(region_id) as LegendaryLandmark
+	if landmark != null:
+		faction_stats.set_source_owner(landmark.source_id, side)
+		_refresh_legendary_summary()
 	for barracks: PlacedBarracks in _barracks_by_region.get(region_id, []):
 		var active := barracks.production.side == side
 		_battle.set_barracks_active(barracks.production, active)
@@ -870,6 +964,7 @@ func _pick_building(pointer: Vector2) -> Node3D:
 	buildings.append_array(_buildings[PLAYER].get_children())
 	buildings.append_array(_buildings[CPU].get_children())
 	buildings.append_array(_outpost_views.values())
+	buildings.append_array(_landmarks.values())
 	var nearest: Node3D
 	var depth := INF
 	for building: Node3D in buildings:
@@ -1256,6 +1351,35 @@ func _stat_tooltip(title: String, result: Dictionary, suffix := "") -> String:
 	return "\n".join(lines)
 
 
+func _legendary_effect(landmark: LegendaryLandmark) -> String:
+	if MatchEconomy.RESOURCES.has(landmark.stat):
+		return _income_text({landmark.stat: landmark.magnitude})
+	var label := str(landmark.stat).capitalize()
+	match landmark.stat:
+		FactionStats.UNIT_DPS:
+			label = "Unit DPS"
+		FactionStats.BUILDING_MAX_HP:
+			label = "Building max HP"
+	return "%s%s %s" % ["+" if landmark.magnitude >= 0.0 else "",
+		_stat_number(landmark.magnitude), label]
+
+
+func _refresh_legendary_summary() -> void:
+	_legendary_summary.get_parent().visible = not _landmarks.is_empty()
+	var counts := {PLAYER: 0, CPU: 0}
+	var entries := PackedStringArray()
+	for landmark in _landmarks.values():
+		var side := get_region(landmark.region_id).region_owner
+		if side == MatchRegion.Owner.NEUTRAL:
+			continue
+		counts[side] += 1
+		entries.append("%s · %s (%s) · %s" % [_side_label(side), landmark.display_name,
+			str(landmark.region_id).capitalize(), _legendary_effect(landmark)])
+	_legendary_summary.text = "Legendary bonuses · Player %d · CPU %d" % [counts[PLAYER], counts[CPU]]
+	_legendary_summary.tooltip_text = "Claim landmark regions to activate their bonuses." \
+		if entries.is_empty() else "\n".join(entries)
+
+
 func _refresh_hud() -> void:
 	_player_hp_label.text = "Player base · %s HP" % _stat_number(_battle.base_hp(PLAYER))
 	_cpu_hp_label.text = "CPU base · %s HP" % _stat_number(_battle.base_hp(CPU))
@@ -1299,3 +1423,11 @@ func _refresh_claim_control() -> void:
 	else:
 		_region_label.text = reason
 	_region_label.tooltip_text = tooltip
+	var landmark := _landmarks.get(_selected_region_id) as LegendaryLandmark
+	_landmark_panel.visible = landmark != null
+	if landmark != null:
+		var side := get_region(landmark.region_id).region_owner
+		var status := "Neutral · Inactive" if side == MatchRegion.Owner.NEUTRAL \
+			else "%s-controlled · Active" % _side_label(side)
+		_landmark_details.text = "%s · %s\n%s\n%s" % [landmark.display_name,
+			str(landmark.region_id).capitalize(), _legendary_effect(landmark), status]

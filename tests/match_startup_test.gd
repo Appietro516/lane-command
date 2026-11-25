@@ -202,7 +202,7 @@ func _test_scene() -> void:
 			for corner in BattleNavigation.corners_of(footprint):
 				_check(scene._layout.region_at(corner) == region.region_id,
 					"Each base footprint is inside its starting region.")
-		else:
+		elif not scene._landmarks.has(region.region_id):
 			_check(region.get_child_count() == 2, "Only base regions contain a starting structure.")
 
 	var claim_id: StringName = &""
