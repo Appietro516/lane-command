@@ -2,6 +2,7 @@ extends Node3D
 
 const BARRACKS := preload("res://match/barracks.tscn")
 const UNIT := preload("res://match/unit.tscn")
+const STARTING_BASE := preload("res://match/starting_base.tscn")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const CPU_DECISION_INTERVAL := 2.0
@@ -18,24 +19,23 @@ const OUTCOME_LABELS := {
 }
 
 var economy: MatchEconomy
+@export var map_seed: int = 17
+@export_range(5, 7) var region_count: int = 6
+
 var _battle: MatchBattle
+var _layout: TerritoryLayout
 var _regions_by_id: Dictionary[StringName, MatchRegion] = {}
 var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
 var _selected_region_id: StringName = &""
-var _pending_pick := Vector2.INF
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _corridor_start: Vector3
 var _corridor_direction: Vector3
 var _time_until_cpu_decision: float
 
-@onready var _slots := {
-	PLAYER: $Regions/PlayerStart/BarracksSlots.get_children(),
-	CPU: $Regions/CPUStart/BarracksSlots.get_children(),
-}
-@onready var _bases: Dictionary[MatchRegion.Owner, Node3D] = {
-	PLAYER: $Regions/PlayerStart/PlayerBase,
-	CPU: $Regions/CPUStart/CPUBase,
-}
+var _slots: Dictionary[MatchRegion.Owner, Array] = {}
+var _bases: Dictionary[MatchRegion.Owner, Node3D] = {}
+
+@onready var _regions: Node3D = $Regions
 @onready var _units: Node3D = $Units
 @onready var _energy_label: Label = %Energy
 @onready var _income_label: Label = %Income
@@ -52,11 +52,7 @@ var _time_until_cpu_decision: float
 
 
 func _ready() -> void:
-	for region: MatchRegion in $Regions.get_children():
-		_regions_by_id[region.region_id] = region
-		_initial_owners[region.region_id] = region.region_owner
-	for side in _bases:
-		_bases[side].get_node("Core").material_override = FACTION_ACCENTS[side]
+	_generate_map()
 	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
 	_build_button.text = "Build · %d" % MatchEconomy.BARRACKS_COST
 	_build_button.pressed.connect(func() -> void: try_build(PLAYER))
@@ -65,6 +61,45 @@ func _ready() -> void:
 	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
 	_restart_button.pressed.connect(restart_match)
 	restart_match()
+
+
+func _generate_map() -> void:
+	_layout = TerritoryLayout.new(map_seed, region_count)
+	for cell in _layout.cells:
+		var region := MatchRegion.new(cell)
+		region.name = cell.id
+		match cell.id:
+			TerritoryLayout.PLAYER_START:
+				region.name = "PlayerStart"
+				region.region_owner = PLAYER
+			TerritoryLayout.CPU_START:
+				region.name = "CPUStart"
+				region.region_owner = CPU
+		_regions.add_child(region)
+		_regions_by_id[cell.id] = region
+		_initial_owners[cell.id] = region.region_owner
+		if region.region_owner != MatchRegion.Owner.NEUTRAL:
+			_add_starting_structures(region)
+
+
+func _add_starting_structures(region: MatchRegion) -> void:
+	var side := region.region_owner
+	var base := STARTING_BASE.instantiate() as Node3D
+	base.name = "PlayerBase" if side == PLAYER else "CPUBase"
+	base.position = Vector3(0, 0.08, 2)
+	base.get_node("Core").material_override = FACTION_ACCENTS[side]
+	region.add_child(base)
+	_bases[side] = base
+
+	var slots := Node3D.new()
+	slots.name = "BarracksSlots"
+	region.add_child(slots)
+	for i in range(MatchEconomy.BARRACKS_CAPACITY):
+		var marker := Marker3D.new()
+		marker.name = "Slot%d" % (i + 1)
+		marker.position.z = -2.9 if i == 0 else 2.9
+		slots.add_child(marker)
+	_slots[side] = slots.get_children()
 
 
 func restart_match() -> void:
@@ -83,7 +118,6 @@ func restart_match() -> void:
 	for region_id in _initial_owners:
 		_regions_by_id[region_id].region_owner = _initial_owners[region_id]
 	_select_region(&"")
-	_pending_pick = Vector2.INF
 
 	economy = MatchEconomy.new()
 	_time_until_cpu_decision = CPU_DECISION_INTERVAL
@@ -155,13 +189,21 @@ func try_claim(side: MatchRegion.Owner, region_id: StringName) -> bool:
 
 
 func owns_region(side: MatchRegion.Owner, region_id: StringName) -> bool:
-	var region: MatchRegion = _regions_by_id.get(region_id)
+	var region := get_region(region_id)
 	return region != null and region.region_owner == side
 
 
+func get_region(region_id: StringName) -> MatchRegion:
+	return _regions_by_id.get(region_id)
+
+
+func region_at_world_position(world_position: Vector3) -> StringName:
+	var point := _regions.to_local(world_position)
+	return _layout.region_at(Vector2(point.x, point.z))
+
 
 func _claim_block_reason(region_id: StringName) -> String:
-	var region: MatchRegion = _regions_by_id.get(region_id)
+	var region := get_region(region_id)
 	if region == null:
 		return "Select a region"
 	if region.region_owner == PLAYER:
@@ -178,23 +220,13 @@ func _claim_block_reason(region_id: StringName) -> String:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		_pending_pick = event.position
+		var ray_start := _camera.project_ray_origin(event.position)
+		var ray_end := ray_start + _camera.project_ray_normal(event.position) * _camera.far
+		var map_plane := Plane(_regions.global_basis.y.normalized(), _regions.global_position)
+		var hit: Variant = map_plane.intersects_segment(ray_start, ray_end)
+		_select_region(region_at_world_position(hit) if hit != null else &"")
+		_refresh_claim_control()
 		get_viewport().set_input_as_handled()
-
-
-func _physics_process(_delta: float) -> void:
-	if _pending_pick == Vector2.INF:
-		return
-	var origin := _camera.project_ray_origin(_pending_pick)
-	var end := origin + _camera.project_ray_normal(_pending_pick) * _camera.far
-	_pending_pick = Vector2.INF
-	var query := PhysicsRayQueryParameters3D.create(origin, end, MatchRegion.PICK_LAYER)
-	var hit := get_world_3d().direct_space_state.intersect_ray(query)
-	var region: MatchRegion = null
-	if not hit.is_empty():
-		region = hit.collider.get_parent() as MatchRegion
-	_select_region(region.region_id if region != null else &"")
-	_refresh_claim_control()
 
 
 func _select_region(region_id: StringName) -> void:

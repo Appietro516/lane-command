@@ -2,17 +2,17 @@
 
 ## Runtime and presentation
 
-The proposed runtime uses Godot 4.6.3 and GDScript with Compatibility rendering, a fixed orthographic Camera3D, Windows export, and single-threaded Web export. Use built-in primitives or authored polygon geometry. The prototype excludes C#, networking, procedural map generation, navigation agents, terrain tooling, and complex third-party frameworks.
+The proposed runtime uses Godot 4.6.3 and GDScript with Compatibility rendering, a fixed orthographic Camera3D, Windows export, and single-threaded Web export. Use built-in primitives for structures and generate polygon geometry for territories. The prototype excludes C#, networking, navigation agents, terrain tooling, and complex third-party frameworks.
 
 Sources: S8f6e375bbe16, Se50c19e91616
 
 ## State and simulation
 
-Author the region graph explicitly with stable IDs, owner values, neighbor IDs, and geometry references. Track each side's energy, owned regions, base HP, barracks count, upgrade, and timers. Track unit side, position along the corridor, HP, attack cooldown, and target. Track simulation time and match outcome. Keep rules testable independently of rendering where practical, step shared combat deterministically with delta, and centralize balance values and CPU cadence.
+Generate the region graph by clipping the map bounds around seeded Voronoi sites. Each cell has a stable ID, a polygon, and neighbors that share a border of positive length. The scene tracks ownership and resolves world positions to the nearest site inside the map bounds, breaking ties by site order. Track each side's energy, owned regions, base HP, barracks count, upgrade, and timers. Track unit side, position along the corridor, HP, attack cooldown, and target. Track simulation time and match outcome. Keep rules testable independently of rendering where practical, step shared combat deterministically with delta, and centralize balance values and CPU cadence.
 
 Sources: S8f6e375bbe16, S95c42ca9286d
 
-Corridor combat consumes elapsed time in fixed 60 Hz steps. Units target from the same snapshot before resolving attacks, and casualties are removed after all attacks for that step. The match scene derives the corridor endpoints from the authored bases and renders the battle state.
+Corridor combat consumes elapsed time in fixed 60 Hz steps. Units target from the same snapshot before resolving attacks, and casualties are removed after all attacks for that step. The match scene derives the combat endpoints from bases placed in the generated starting regions and renders the battle state.
 
 ## Rules interfaces and validation
 
