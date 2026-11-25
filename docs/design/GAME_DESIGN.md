@@ -24,8 +24,8 @@ Show player energy, income, barracks count, Build and Upgrade controls, both bas
 
 Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 
-## Optional follow-on region claiming
+## Optional region claiming
 
-The human can select a neutral region adjacent to a region they own and claim it through a Claim button for a proposed 50 energy. A successful claim updates ownership and map color and deducts the cost once. Reject enemy-owned, nonadjacent, already claimed, and unaffordable targets. Claims have no income, production, building-slot, routing, or combat effects in this slice. CPU expansion is deferred.
+The player can select a region on the map and use Claim to acquire a neutral region adjacent to any player-owned region. The initial prototype charges 50 energy per claim, a provisional balance value. A successful claim updates ownership and map color and deducts the cost once. Reject enemy-owned, nonadjacent, already claimed, and unaffordable targets. Claims have no income, production, building-slot, routing, or combat effects in this slice. CPU expansion is deferred.
 
 Sources: S95c42ca9286d, S1389629da9a3, Se50c19e91616

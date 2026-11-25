@@ -19,7 +19,10 @@ const OUTCOME_LABELS := {
 
 var economy: MatchEconomy
 var _battle: MatchBattle
-var _initial_owners: Dictionary[MatchRegion, MatchRegion.Owner] = {}
+var _regions_by_id: Dictionary[StringName, MatchRegion] = {}
+var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
+var _selected_region_id: StringName = &""
+var _pending_pick := Vector2.INF
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _corridor_start: Vector3
 var _corridor_direction: Vector3
@@ -39,6 +42,9 @@ var _time_until_cpu_decision: float
 @onready var _barracks_label: Label = %BarracksCount
 @onready var _build_button: Button = %Build
 @onready var _upgrade_button: Button = %Upgrade
+@onready var _claim_button: Button = %Claim
+@onready var _region_label: Label = %SelectedRegion
+@onready var _camera: Camera3D = $Camera
 @onready var _player_hp_label: Label = %PlayerHP
 @onready var _cpu_hp_label: Label = %CPUHP
 @onready var _outcome_label: Label = %Outcome
@@ -47,11 +53,14 @@ var _time_until_cpu_decision: float
 
 func _ready() -> void:
 	for region: MatchRegion in $Regions.get_children():
-		_initial_owners[region] = region.region_owner
+		_regions_by_id[region.region_id] = region
+		_initial_owners[region.region_id] = region.region_owner
 	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
 	_build_button.text = "Build · %d" % MatchEconomy.BARRACKS_COST
 	_build_button.pressed.connect(func() -> void: try_build(PLAYER))
 	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
+	_claim_button.text = "Claim · %d" % MatchEconomy.CLAIM_COST
+	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
 	_restart_button.pressed.connect(restart_match)
 	restart_match()
 
@@ -69,8 +78,10 @@ func restart_match() -> void:
 				slot.remove_child(building)
 				building.queue_free()
 		_bases[side].show()
-	for region in _initial_owners:
-		region.region_owner = _initial_owners[region]
+	for region_id in _initial_owners:
+		_regions_by_id[region_id].region_owner = _initial_owners[region_id]
+	_select_region(&"")
+	_pending_pick = Vector2.INF
 
 	economy = MatchEconomy.new()
 	_time_until_cpu_decision = CPU_DECISION_INTERVAL
@@ -128,6 +139,68 @@ func try_upgrade(side: MatchRegion.Owner) -> bool:
 	return true
 
 
+func try_claim(side: MatchRegion.Owner, region_id: StringName) -> bool:
+	if side != PLAYER or not _claim_block_reason(region_id).is_empty():
+		return false
+	if not economy.try_spend_energy(side, MatchEconomy.CLAIM_COST):
+		return false
+
+	_regions_by_id[region_id].region_owner = side
+	_refresh_hud()
+	return true
+
+
+func owns_region(side: MatchRegion.Owner, region_id: StringName) -> bool:
+	var region: MatchRegion = _regions_by_id.get(region_id)
+	return region != null and region.region_owner == side
+
+
+
+func _claim_block_reason(region_id: StringName) -> String:
+	var region: MatchRegion = _regions_by_id.get(region_id)
+	if region == null:
+		return "Select a region"
+	if region.region_owner == PLAYER:
+		return "Player-owned"
+	if region.region_owner == CPU:
+		return "CPU-owned"
+	if _battle.is_finished():
+		return "Match ended"
+	for neighbor_id in region.neighbor_ids:
+		if owns_region(PLAYER, neighbor_id):
+			return "Need more energy" if economy.energy(PLAYER) < MatchEconomy.CLAIM_COST else ""
+	return "Not adjacent"
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		_pending_pick = event.position
+		get_viewport().set_input_as_handled()
+
+
+func _physics_process(_delta: float) -> void:
+	if _pending_pick == Vector2.INF:
+		return
+	var origin := _camera.project_ray_origin(_pending_pick)
+	var end := origin + _camera.project_ray_normal(_pending_pick) * _camera.far
+	_pending_pick = Vector2.INF
+	var query := PhysicsRayQueryParameters3D.create(origin, end, MatchRegion.PICK_LAYER)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var region: MatchRegion = null
+	if not hit.is_empty():
+		region = hit.collider.get_parent() as MatchRegion
+	_select_region(region.region_id if region != null else &"")
+	_refresh_claim_control()
+
+
+func _select_region(region_id: StringName) -> void:
+	if _regions_by_id.has(_selected_region_id):
+		_regions_by_id[_selected_region_id].set_selected(false)
+	_selected_region_id = region_id
+	if _regions_by_id.has(_selected_region_id):
+		_regions_by_id[_selected_region_id].set_selected(true)
+
+
 func _advance_simulation(delta: float) -> void:
 	economy.advance(delta)
 	_battle.advance(delta, economy)
@@ -173,3 +246,15 @@ func _refresh_hud() -> void:
 	_upgrade_button.text = (
 		"Upgraded" if economy.has_upgrade(PLAYER) else "Upgrade · %d" % MatchEconomy.UPGRADE_COST
 	)
+	_refresh_claim_control()
+
+
+func _refresh_claim_control() -> void:
+	var reason := _claim_block_reason(_selected_region_id)
+	_claim_button.disabled = not reason.is_empty()
+	if _regions_by_id.has(_selected_region_id):
+		_region_label.text = "%s\n%s" % [
+			str(_selected_region_id).capitalize(), "Neutral" if reason.is_empty() else reason,
+		]
+	else:
+		_region_label.text = reason

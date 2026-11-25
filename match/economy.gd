@@ -6,6 +6,7 @@ const INCOME_PER_SECOND := 3.0
 const BARRACKS_COST := 40
 const BARRACKS_CAPACITY := 2
 const UPGRADE_COST := 60
+const CLAIM_COST := 50
 const PRODUCTION_INTERVAL := 3.5
 const UPGRADED_PRODUCTION_INTERVAL := 2.5
 
@@ -68,4 +69,13 @@ func try_upgrade(side: MatchRegion.Owner) -> bool:
 	var state := _sides[side]
 	state.energy -= UPGRADE_COST
 	state.production_interval = UPGRADED_PRODUCTION_INTERVAL
+	return true
+
+
+
+func try_spend_energy(side: MatchRegion.Owner, cost: int) -> bool:
+	if not _sides.has(side) or cost < 0 or energy(side) < cost:
+		return false
+
+	_sides[side].energy -= cost
 	return true

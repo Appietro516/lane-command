@@ -219,9 +219,9 @@ anchor_left = 0.5
 anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
-offset_left = -352.0
+offset_left = -520.0
 offset_top = -92.0
-offset_right = 352.0
+offset_right = 520.0
 offset_bottom = -24.0
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
@@ -258,5 +258,20 @@ theme_override_font_sizes/font_size = 18
 [node name="Upgrade" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(148, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+
+[node name="RegionDivider" type="VSeparator" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+layout_mode = 2
+
+[node name="SelectedRegion" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(152, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+
+[node name="Claim" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
 theme_override_font_sizes/font_size = 18
