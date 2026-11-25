@@ -11,12 +11,19 @@ const UNIT_MATERIALS := {
 	CPU: preload("res://match/cpu_unit_material.tres"),
 }
 
-var economy := MatchEconomy.new()
+const OUTCOME_LABELS := {
+	MatchBattle.Outcome.IN_PROGRESS: "",
+	MatchBattle.Outcome.VICTORY: "Victory",
+	MatchBattle.Outcome.DEFEAT: "Defeat",
+}
+
+var economy: MatchEconomy
 var _battle: MatchBattle
+var _initial_owners: Dictionary[MatchRegion, MatchRegion.Owner] = {}
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _corridor_start: Vector3
 var _corridor_direction: Vector3
-var _time_until_cpu_decision := CPU_DECISION_INTERVAL
+var _time_until_cpu_decision: float
 
 @onready var _slots := {
 	PLAYER: $Regions/PlayerStart/BarracksSlots.get_children(),
@@ -32,9 +39,41 @@ var _time_until_cpu_decision := CPU_DECISION_INTERVAL
 @onready var _barracks_label: Label = %BarracksCount
 @onready var _build_button: Button = %Build
 @onready var _upgrade_button: Button = %Upgrade
+@onready var _player_hp_label: Label = %PlayerHP
+@onready var _cpu_hp_label: Label = %CPUHP
+@onready var _outcome_label: Label = %Outcome
+@onready var _restart_button: Button = %Restart
 
 
 func _ready() -> void:
+	for region: MatchRegion in $Regions.get_children():
+		_initial_owners[region] = region.region_owner
+	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
+	_build_button.text = "Build · %d" % MatchEconomy.BARRACKS_COST
+	_build_button.pressed.connect(func() -> void: try_build(PLAYER))
+	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
+	_restart_button.pressed.connect(restart_match)
+	restart_match()
+
+
+func restart_match() -> void:
+	if _battle != null:
+		_battle.unit_produced.disconnect(_spawn_unit)
+		_battle.unit_removed.disconnect(_remove_unit)
+		_battle.base_destroyed.disconnect(_hide_base)
+	for unit_id in _unit_views.keys():
+		_remove_unit(unit_id)
+	for side in _slots:
+		for slot: Marker3D in _slots[side]:
+			for building in slot.get_children():
+				slot.remove_child(building)
+				building.queue_free()
+		_bases[side].show()
+	for region in _initial_owners:
+		region.region_owner = _initial_owners[region]
+
+	economy = MatchEconomy.new()
+	_time_until_cpu_decision = CPU_DECISION_INTERVAL
 	_corridor_start = _units.to_local(_bases[PLAYER].global_position)
 	var corridor := _units.to_local(_bases[CPU].global_position) - _corridor_start
 	_corridor_direction = corridor.normalized()
@@ -42,11 +81,8 @@ func _ready() -> void:
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
 	_battle.base_destroyed.connect(_hide_base)
-	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
-	_build_button.text = "Build · %d" % MatchEconomy.BARRACKS_COST
-	_build_button.pressed.connect(func() -> void: try_build(PLAYER))
-	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
 	_refresh_hud()
+	set_process(true)
 
 
 func _process(delta: float) -> void:
@@ -124,6 +160,10 @@ func _hide_base(side: MatchRegion.Owner) -> void:
 
 
 func _refresh_hud() -> void:
+	_player_hp_label.text = "Player base · %d HP" % _battle.base_hp(PLAYER)
+	_cpu_hp_label.text = "CPU base · %d HP" % _battle.base_hp(CPU)
+	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
+	_outcome_label.visible = _battle.is_finished()
 	_energy_label.text = "Energy %d" % floori(economy.energy(PLAYER))
 	_barracks_label.text = "Barracks %d/%d" % [
 		economy.barracks_count(PLAYER), MatchEconomy.BARRACKS_CAPACITY,

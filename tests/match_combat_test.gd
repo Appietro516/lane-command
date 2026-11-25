@@ -20,9 +20,9 @@ func _run() -> void:
 	_test_base_destruction(PLAYER, CPU)
 	_test_base_destruction(CPU, PLAYER)
 	_test_match_scene()
-	_test_match_end()
+	await _test_match_end_and_restart()
 	if failures == 0:
-		print("Corridor movement, combat rules and match scene checks passed.")
+		print("Corridor combat, outcomes, HUD and full replay checks passed.")
 	quit(1 if failures else 0)
 
 
@@ -126,15 +126,21 @@ func _test_base_destruction(attacker_side: MatchRegion.Owner, defender_side: Mat
 	battle.advance(0.25, economy)
 	_check(battle.base_hp(defender_side) == 77, "An undefended base in close range takes 3 damage.")
 	battle.advance(60.0, economy)
+	var expected_outcome := MatchBattle.Outcome.VICTORY if attacker_side == PLAYER else (
+		MatchBattle.Outcome.DEFEAT
+	)
 	_check(battle.is_finished() and battle.base_hp(defender_side) == 0
-		and battle.base_hp(attacker_side) == 80 and destroyed == [defender_side],
-		"A destroyed base reaches zero HP and finishes combat once.")
+		and battle.base_hp(attacker_side) == 80 and destroyed == [defender_side]
+		and battle.outcome() == expected_outcome,
+		"A destroyed base reaches zero HP and records the outcome once.")
 
 	var final_units := _unit_state(battle)
+	var final_time := battle.elapsed_time()
 	battle.advance(60.0, economy)
 	_check(not final_units.is_empty() and _unit_state(battle) == final_units
-		and destroyed == [defender_side],
-		"After destruction, further time causes no spawning, movement, attacks or cooldown changes.")
+		and destroyed == [defender_side] and battle.elapsed_time() == final_time
+		and battle.outcome() == expected_outcome,
+		"Further time leaves the completed battle, clock and outcome unchanged.")
 
 
 func _test_match_scene() -> void:
@@ -178,21 +184,132 @@ func _test_match_scene() -> void:
 	scene.free()
 
 
-func _test_match_end() -> void:
+func _test_match_end_and_restart() -> void:
+	root.size = Vector2i(1280, 800)
 	var scene := MATCH_SCENE.instantiate()
 	root.add_child(scene)
-	scene._process(60.0)
-	var battle: MatchBattle = scene._battle
+	scene.set_process(false)
+	await process_frame
+	await process_frame
+
+	var regions := scene.get_node("Regions")
+	var initial_owners := _region_owners(regions)
 	var player_base := scene.get_node("Regions/PlayerStart/PlayerBase") as Node3D
 	var cpu_base := scene.get_node("Regions/CPUStart/CPUBase") as Node3D
+	var player_hp := scene.get_node("%PlayerHP") as Label
+	var cpu_hp := scene.get_node("%CPUHP") as Label
+	var outcome := scene.get_node("%Outcome") as Label
 	var build := scene.get_node("%Build") as Button
 	var upgrade := scene.get_node("%Upgrade") as Button
-	_check(battle.is_finished() and not player_base.visible and cpu_base.visible,
-		"The CPU destroys the idle player's base and the scene hides it.")
+	var restart := scene.get_node("%Restart") as Button
+	var units := scene.get_node("Units")
+	_check_full_reset(scene, initial_owners)
+
+	# Give the first player barracks a two-second lead, then keep pace with CPU purchases.
+	_click(build)
+	scene._process(10.0)
+	_check(scene.try_build(PLAYER), "The player adds the second barracks at 10 seconds.")
+	scene._process(20.0)
+	_check(scene.try_upgrade(PLAYER) and scene.economy.has_upgrade(CPU),
+		"Both sides have upgraded before the deciding attack.")
+	regions.get_node("Northwest").region_owner = PLAYER
+	regions.get_node("CPUStart").region_owner = PLAYER
+	scene._process(30.0)
+	var battle: MatchBattle = scene._battle
+	_check(battle.outcome() == MatchBattle.Outcome.VICTORY and outcome.visible
+		and outcome.text == "Victory" and player_base.visible and not cpu_base.visible
+		and player_hp.text == "Player base · 80 HP" and cpu_hp.text == "CPU base · 0 HP",
+		"Destroying the CPU base shows Victory and updates both base readouts.")
+	_check(units.get_child_count() > 0 and battle.elapsed_time() > 30.0,
+		"The finished match still has units and elapsed time to clear.")
 	_check(not scene.is_processing() and build.disabled and upgrade.disabled
-		and not scene.try_build(PLAYER) and not scene.try_upgrade(PLAYER),
-		"Ending the match stops automatic processing and disables purchases.")
+		and not scene.try_build(PLAYER) and not scene.try_upgrade(PLAYER)
+		and restart.visible and not restart.disabled,
+		"Ending a match stops simulation and purchases while leaving Restart available.")
+
+	_click(restart)
+	_check(scene.is_processing(), "Restart re-enables automatic processing after Victory.")
+	scene.set_process(false)
+	_check_full_reset(scene, initial_owners)
+
+	scene._process(1.75)
+	_check(scene.economy.barracks_count(CPU) == 0, "CPU waits through its initial decision interval.")
+	scene._process(0.25)
+	_check(scene.economy.barracks_count(CPU) == 1 and scene.economy.energy(CPU) == 16.0,
+		"CPU resumes autonomous purchases using the starting energy and cadence.")
+	_click(build)
+	_check(scene.economy.barracks_count(PLAYER) == 1 and scene.economy.energy(PLAYER) == 16.0,
+		"The player can purchase through the HUD in the replay.")
+	scene._process(3.25)
+	_check(units.get_child_count() == 0, "Replay production does not inherit old timers.")
+	scene._process(0.25)
+	var replay_battle: MatchBattle = scene._battle
+	var replay_units := replay_battle.active_units()
+	_check(units.get_child_count() == 2 and replay_units.size() == 2
+		and replay_units[0].id == 1 and is_equal_approx(replay_battle.elapsed_time(), 5.5),
+		"Both first barracks deploy on schedule with fresh unit IDs and match time.")
+
+	_click(restart)
+	scene.set_process(false)
+	_check_full_reset(scene, initial_owners)
+	scene._process(13.0)
+	_check(player_hp.text == "Player base · 77 HP" and cpu_hp.text == "CPU base · 80 HP"
+		and not outcome.visible, "The HUD reflects nonlethal base damage during play.")
+	scene._process(47.0)
+	_check(scene._battle.outcome() == MatchBattle.Outcome.DEFEAT
+		and outcome.visible and outcome.text == "Defeat"
+		and not player_base.visible and cpu_base.visible
+		and player_hp.text == "Player base · 0 HP" and cpu_hp.text == "CPU base · 80 HP",
+		"The idle replay ends in Defeat when the CPU destroys the player base.")
+	_click(restart)
+	_check(scene.is_processing(), "Restart re-enables automatic processing after Defeat.")
+	_check_full_reset(scene, initial_owners)
 	scene.free()
+
+
+func _check_full_reset(scene: Node, initial_owners: Array) -> void:
+	var battle: MatchBattle = scene._battle
+	var economy: MatchEconomy = scene.economy
+	var regions := scene.get_node("Regions")
+	_check(_region_owners(regions) == initial_owners, "Restart restores authored ownership.")
+	for region: MatchRegion in regions.get_children():
+		var material := region.geometry.material_override as StandardMaterial3D
+		_check(material.albedo_color == MatchRegion.OWNER_COLORS[region.region_owner],
+			"Region color reflects its restored ownership.")
+	for side in [PLAYER, CPU]:
+		var start_region := "PlayerStart" if side == PLAYER else "CPUStart"
+		var base := scene.get_node("Regions/%s/%sBase" % [
+			start_region, "Player" if side == PLAYER else "CPU",
+		]) as Node3D
+		var slots := scene.get_node("Regions/%s/BarracksSlots" % start_region)
+		_check(base.visible and battle.base_hp(side) == MatchBattle.BASE_HP,
+			"Restart restores both bases and their HP.")
+		_check(economy.energy(side) == MatchEconomy.STARTING_ENERGY
+			and economy.barracks_count(side) == 0 and not economy.has_upgrade(side),
+			"Restart restores starting energy and clears barracks and upgrades for each side.")
+		for slot in slots.get_children():
+			_check(slot.get_child_count() == 0, "Restart empties the authored barracks slots.")
+	_check(battle.active_units().is_empty() and scene.get_node("Units").get_child_count() == 0
+		and battle.elapsed_time() == 0.0 and battle.outcome() == MatchBattle.Outcome.IN_PROGRESS,
+		"Restart clears units, match time and the recorded outcome.")
+	_check(scene.get_node("%PlayerHP").text == "Player base · 80 HP"
+		and scene.get_node("%CPUHP").text == "CPU base · 80 HP"
+		and scene.get_node("%Energy").text == "Energy 50"
+		and scene.get_node("%BarracksCount").text == "Barracks 0/2"
+		and not scene.get_node("%Outcome").visible and not scene.get_node("%Build").disabled
+		and scene.get_node("%Upgrade").disabled and scene.get_node("%Upgrade").text == "Upgrade · 60",
+		"The HUD refreshes to its starting readouts and purchase controls.")
+
+
+func _click(button: Button) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.position = button.get_global_rect().get_center()
+	event.pressed = true
+	root.push_input(event, true)
+	var release := event.duplicate() as InputEventMouseButton
+	release.pressed = false
+	root.push_input(release, true)
 
 
 func _with_barracks(sides: Array) -> MatchBattle:

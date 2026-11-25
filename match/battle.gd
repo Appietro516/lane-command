@@ -5,6 +5,8 @@ signal unit_produced(unit: Unit, slot_index: int)
 signal unit_removed(unit_id: int)
 signal base_destroyed(side: MatchRegion.Owner)
 
+enum Outcome { IN_PROGRESS, VICTORY, DEFEAT }
+
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const UNIT_HP := 12
@@ -51,6 +53,8 @@ var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
 var _next_unit_id := 1
 var _pending_time := 0.0
+var _elapsed_time := 0.0
+var _outcome := Outcome.IN_PROGRESS
 
 
 func _init(corridor_length: float) -> void:
@@ -70,7 +74,15 @@ func base_hp(side: MatchRegion.Owner) -> int:
 
 
 func is_finished() -> bool:
-	return base_hp(PLAYER) == 0 or base_hp(CPU) == 0
+	return _outcome != Outcome.IN_PROGRESS
+
+
+func outcome() -> Outcome:
+	return _outcome
+
+
+func elapsed_time() -> float:
+	return _elapsed_time
 
 
 func advance(delta: float, economy: MatchEconomy) -> void:
@@ -82,6 +94,7 @@ func advance(delta: float, economy: MatchEconomy) -> void:
 	_pending_time += delta
 	while _pending_time + TIME_EPSILON >= STEP and not is_finished():
 		_pending_time = maxf(0.0, _pending_time - STEP)
+		_elapsed_time += STEP
 		_step_combat()
 		if not is_finished():
 			_advance_production(STEP, economy)
@@ -131,6 +144,11 @@ func _step_combat() -> void:
 	for unit in _units.values():
 		if unit.target > NO_TARGET and not _units.has(unit.target):
 			unit.target = NO_TARGET
+
+	if base_hp(PLAYER) == 0:
+		_outcome = Outcome.DEFEAT
+	elif base_hp(CPU) == 0:
+		_outcome = Outcome.VICTORY
 
 	if base_hp(PLAYER) == 0:
 		base_destroyed.emit(PLAYER)
