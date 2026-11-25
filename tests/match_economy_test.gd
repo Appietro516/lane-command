@@ -15,8 +15,10 @@ func _run() -> void:
 	_test_rules(PLAYER, CPU)
 	_test_rules(CPU, PLAYER)
 	await _test_match_controls()
+	_test_cpu_purchases()
+	_test_symmetric_production()
 	if failures == 0:
-		print("Match economy rules and controls passed.")
+		print("Match economy, controls, CPU purchases and symmetric production passed.")
 	quit(1 if failures > 0 else 0)
 
 
@@ -88,11 +90,9 @@ func _test_match_controls() -> void:
 	_check(energy_label.text == "Energy 1" and upgrade.disabled and upgrade.text == "Upgraded",
 		"Upgrade updates the HUD immediately.")
 
-	_check(match_scene.try_build(CPU) and match_scene.try_build(CPU),
-		"Both CPU barracks use the shared match API.")
 	_check(cpu_slots.get_node("Slot1").get_child_count() == 1
 		and cpu_slots.get_node("Slot2").get_child_count() == 1,
-		"CPU barracks fill both authored CPU slots.")
+		"Autonomous CPU purchases fill both authored CPU slots.")
 	match_scene._process(13.0)
 	_click(build)
 	_check_state(match_scene.economy, PLAYER, [0.0, 2, 2.5], "Build button at capacity")
@@ -100,6 +100,84 @@ func _test_match_controls() -> void:
 	_check(player_slots.get_node("Slot2").get_child_count() == 1
 		and barracks_label.text == "Barracks 2/2" and build.disabled and upgrade.disabled,
 		"The second player slot is occupied and both controls stay disabled after income.")
+	match_scene.free()
+
+
+func _test_cpu_purchases() -> void:
+	var match_scene := MATCH_SCENE.instantiate()
+	root.add_child(match_scene)
+	match_scene.set_process(false)
+	var cpu_slots := match_scene.get_node("Regions/CPUStart/BarracksSlots")
+
+	match_scene._process(1.75)
+	_check_state(match_scene.economy, CPU, [55.25, 0, 3.5], "Before the first CPU decision")
+	match_scene._process(0.25)
+	_check_state(match_scene.economy, CPU, [16.0, 1, 3.5], "First CPU purchase at 2 seconds")
+	_check(cpu_slots.get_node("Slot1").get_child_count() == 1
+		and cpu_slots.get_node("Slot2").get_child_count() == 0,
+		"The first CPU barracks appears in the first slot.")
+
+	match_scene._process(7.75)
+	_check_state(match_scene.economy, CPU, [39.25, 1, 3.5], "Before the CPU can afford slot two")
+	_check(match_scene.get_node("Units").get_child_count() == 2,
+		"The first CPU barracks spawns at 5.5 and 9 seconds without player input.")
+	match_scene._process(0.25)
+	_check_state(match_scene.economy, CPU, [0.0, 2, 3.5], "Second CPU purchase at 10 seconds")
+	_check(cpu_slots.get_node("Slot2").get_child_count() == 1,
+		"The second CPU barracks appears in the second slot.")
+
+	match_scene._process(19.75)
+	_check_state(match_scene.economy, CPU, [59.25, 2, 3.5], "Before the CPU can afford its upgrade")
+	match_scene._process(0.25)
+	_check_state(match_scene.economy, CPU, [0.0, 2, 2.5], "CPU upgrade at 30 seconds")
+	match_scene._process(22.0)
+	_check_state(match_scene.economy, CPU, [66.0, 2, 2.5], "After reaching CPU capacity")
+	_check_state(match_scene.economy, PLAYER, [206.0, 0, 3.5], "Idle player")
+	match_scene.free()
+
+
+func _test_symmetric_production() -> void:
+	var match_scene := MATCH_SCENE.instantiate()
+	root.add_child(match_scene)
+	match_scene.set_process(false)
+	var units := match_scene.get_node("Units")
+
+	match_scene._process(2.0)
+	_check(match_scene.try_build(PLAYER), "The player can buy at the same time as the CPU.")
+	match_scene._process(3.25)
+	_check(units.get_child_count() == 0, "Neither barracks spawns early.")
+	match_scene._process(0.25)
+	_check(units.get_child_count() == 2, "Both sides spawn at 3.5 seconds after construction.")
+	if units.get_child_count() == 2:
+		var cpu_unit := units.get_child(0) as MeshInstance3D
+		var player_unit := units.get_child(1) as MeshInstance3D
+		_check(cpu_unit.mesh == player_unit.mesh and cpu_unit.mesh is BoxMesh,
+			"Both sides spawn the same cube mesh.")
+		_check(cpu_unit.position.x > 0 and player_unit.position.x < 0
+			and cpu_unit.material_override != player_unit.material_override,
+			"Cubes spawn on their own side and use distinct colors.")
+
+	match_scene._process(4.5)
+	_check(match_scene.try_build(PLAYER), "Both sides add a second barracks at 10 seconds.")
+	match_scene._process(2.5)
+	_check(units.get_child_count() == 6, "The first barracks on each side keeps its own timer.")
+	match_scene._process(1.0)
+	_check(units.get_child_count() == 8, "The second barracks on each side starts a full cycle.")
+
+	match_scene._process(16.5)
+	_check(match_scene.try_upgrade(PLAYER), "Both sides upgrade at 30 seconds.")
+	match_scene._process(0.0)
+	_check(units.get_child_count() == 28, "Both upgrades preserve elapsed production time.")
+	match_scene._process(2.25)
+	_check(units.get_child_count() == 28, "Upgraded barracks wait for the 2.5-second interval.")
+	match_scene._process(0.25)
+	_check(units.get_child_count() == 32, "All four barracks spawn at the upgraded interval.")
+	var player_units := 0
+	for unit: MeshInstance3D in units.get_children():
+		if unit.position.x < 0.0:
+			player_units += 1
+	_check(player_units == 16, "Both sides produce the same number of units across both rates.")
+	match_scene.free()
 
 
 func _click(button: Button) -> void:

@@ -168,6 +168,8 @@ position = Vector3(0, 0, -1.2)
 [node name="Slot2" type="Marker3D" parent="Regions/CPUStart/BarracksSlots"]
 position = Vector3(0, 0, -3.65)
 
+[node name="Units" type="Node3D" parent="."]
+
 [node name="HUD" type="CanvasLayer" parent="."]
 
 [node name="EconomyPanel" type="PanelContainer" parent="HUD"]

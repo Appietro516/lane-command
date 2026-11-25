@@ -1,0 +1,8 @@
+[gd_scene format=3]
+
+[sub_resource type="BoxMesh" id="Mesh_unit"]
+size = Vector3(0.8, 0.8, 0.8)
+center_offset = Vector3(0, 0.4, 0)
+
+[node name="Unit" type="MeshInstance3D"]
+mesh = SubResource("Mesh_unit")
