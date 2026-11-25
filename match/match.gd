@@ -115,6 +115,12 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 @export_range(2.0, 60.0, 0.5) var cpu_placement_retry := 8.0
 @export_range(0, 16) var cpu_expansion_limit := 3
 @export_range(8.0, 45.0, 0.5) var cpu_investment_horizon := 26.0
+@export_range(1, 16) var cpu_production_target := 4
+@export_range(1, 16) var cpu_production_limit := 8
+@export_range(1.0, 6.0, 0.5) var cpu_food_buffer_cycles := 3.0
+@export_range(0.0, 5.0, 0.1) var cpu_diversity_weight := 0.8
+@export_range(0.0, 5.0, 0.1) var cpu_counter_weight := 2.8
+@export_range(0.0, 1.0, 0.05) var cpu_counter_gap := 0.15
 @export_group("")
 @export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
 @export var unit_target_priority := MatchBattle.TargetPriority.NEAREST

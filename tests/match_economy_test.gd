@@ -209,8 +209,8 @@ func _test_match_controls() -> void:
 		and upgrade.disabled and upgrade.text == "Upgraded",
 		"Upgrade updates the HUD immediately.")
 
-	_check(cpu_buildings.get_child_count() == 3 and match_scene.economy.barracks_count(CPU) == 2,
-		"The CPU places both barracks and a Farm autonomously.")
+	_check(cpu_buildings.get_child_count() >= 2 and match_scene.economy.barracks_count(CPU) >= 1,
+		"The CPU builds up its opening economy autonomously.")
 	match_scene._process(13.0)
 	await _choose_barracks(build)
 	var second_position := Vector3(-12.73, 0.0, 5.0)
@@ -380,10 +380,10 @@ func _test_producers() -> void:
 	scene.free()
 
 
-func _clear_producer_point(scene: Node, region_id: StringName, kind: StringName) -> Vector3:
+func _clear_producer_point(scene: Node, region_id: StringName, kind: StringName, side := PLAYER) -> Vector3:
 	var region: MatchRegion = scene.get_region(region_id)
 	var point := region.interior_point(func(candidate: Vector2) -> bool:
-		var reason: String = scene._placement_block_reason(PLAYER, kind, scene._world_position(candidate))
+		var reason: String = scene._placement_block_reason(side, kind, scene._world_position(candidate))
 		return reason.is_empty() or reason.begins_with("Need more"))
 	return scene._world_position(point)
 
@@ -461,16 +461,16 @@ func _test_cpu_purchases() -> void:
 		"The CPU spends Materials from its own stockpile.")
 
 	match_scene._process(7.75)
-	_check_state(match_scene.economy, CPU, [39.25, 1, 3.5], "Before the CPU can afford its second barracks")
 	_check(match_scene.get_node("Units").get_child_count() == 2,
 		"The first CPU barracks spawns at 5.5 and 9 seconds without player input.")
 	match_scene._process(0.25)
-	_check_state(match_scene.economy, CPU, [0.0, 2, 3.5], "Second CPU purchase at 10 seconds")
-	_check(cpu_buildings.get_child_count() == 2
-		and match_scene.owns_region(CPU, match_scene.region_at_world_position(
-			cpu_buildings.get_child(1).global_position)),
-		"The second CPU barracks also appears inside CPU territory.")
+
 	_check_state(match_scene.economy, PLAYER, [80.0, 0, 3.5], "Idle player")
+	match_scene._process(20.0)
+	_check(match_scene._battle._timers.size() >= 2, "The CPU adds more production after its opening.")
+	for building in cpu_buildings.get_children():
+		_check(match_scene.owns_region(CPU, match_scene.region_at_world_position(building.global_position)),
+			"Further CPU construction takes place inside CPU territory.")
 	match_scene.free()
 
 
@@ -500,8 +500,13 @@ func _test_symmetric_production() -> void:
 			and cpu_unit.material_override != player_unit.material_override,
 			"Units start on their own side, face the opposing base and use distinct colors.")
 
+	# Schedule identical purchases to isolate the shared production rules.
+	match_scene._time_until_cpu_decision = 120.0
 	match_scene._process(4.5)
-	_check(match_scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -3.65)), "Both sides add a second barracks at 10 seconds.")
+	_check(match_scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -3.65))
+		and match_scene.try_place_building(CPU, &"barracks", _clear_producer_point(
+			match_scene, TerritoryLayout.CPU_START, &"barracks", CPU)),
+		"Both sides add a second Barracks at 10 seconds.")
 	match_scene._process(2.5)
 	_check(produced.size() == 6, "The first barracks on each side keeps its own timer.")
 	match_scene._process(1.0)
@@ -509,10 +514,10 @@ func _test_symmetric_production() -> void:
 
 	match_scene._process(2.5)
 	_check(match_scene.try_place_building(PLAYER, &"farm",
-		_clear_producer_point(match_scene, TerritoryLayout.PLAYER_START, &"farm")),
+		_clear_producer_point(match_scene, TerritoryLayout.PLAYER_START, &"farm"))
+		and match_scene.try_place_building(CPU, &"farm", _clear_producer_point(
+			match_scene, TerritoryLayout.CPU_START, &"farm", CPU)),
 		"Both sides add Food income at 16 seconds.")
-	# Compare the shared production timers with identical upgrade timing.
-	match_scene._time_until_cpu_decision = 120.0
 	match_scene._process(14.0)
 	_check(match_scene.try_upgrade(PLAYER) and match_scene.try_upgrade(CPU),
 		"Both factions can buy the same upgrade at 30 seconds.")

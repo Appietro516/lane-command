@@ -9,7 +9,6 @@ const NEUTRAL := MatchRegion.Owner.NEUTRAL
 const FIRST_CLAIM: StringName = &"region_1"
 const NEXT_CLAIM: StringName = &"region_4"
 const OTHER_ADJACENT: StringName = &"region_3"
-const UNCLAIMED: StringName = &"region_2"
 
 var failures := 0
 
@@ -57,7 +56,11 @@ func _test_claim_rules(scene: Node) -> void:
 	_check_rejected(scene, PLAYER, TerritoryLayout.CPU_START, CPU, "Affordable adjacent enemy territory")
 	scene._process(120.0)
 	_check(scene._battle.is_finished(), "The CPU wins the unattended match.")
-	_check_rejected(scene, PLAYER, UNCLAIMED, NEUTRAL, "Claim after the match ends")
+	var neutral: Array = scene._regions_by_id.values().filter(func(region: MatchRegion) -> bool:
+		return region.region_owner == NEUTRAL)
+	_check(not neutral.is_empty(), "At least one neutral territory remains after the match.")
+	if not neutral.is_empty():
+		_check_rejected(scene, PLAYER, neutral[0].region_id, NEUTRAL, "Claim after the match ends")
 
 	scene.restart_match()
 	scene.set_process(false)

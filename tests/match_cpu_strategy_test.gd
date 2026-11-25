@@ -4,6 +4,7 @@ const MatchScene := preload("res://main.tscn")
 const Fixture := preload("res://tests/prototype_match_fixture.gd")
 const Pressure := preload("res://tests/capture_cpu_defense.gd")
 const Rules := preload("res://match/fortification_rules.gd")
+const Catalog := preload("res://match/unit_catalog.gd")
 const CPU := MatchRegion.Owner.CPU
 const PLAYER := MatchRegion.Owner.PLAYER
 const NEUTRAL := MatchRegion.Owner.NEUTRAL
@@ -38,9 +39,22 @@ func _run() -> void:
 	_check(defense == _snapshot(scene), "The same pressure produces the same walls after restart.")
 	_test_defense_replacement(scene)
 	_test_blocked_placement(scene)
+	_test_scarcity(scene)
+	scene.free()
+
+	scene = MatchScene.instantiate()
+	scene.region_count = 6
+	scene.legendary_count = 0
+	root.add_child(scene)
+	_test_threat_opening(scene, Catalog.RANGED, true, &"heavy_factory")
+	_test_threat_opening(scene, Catalog.HEAVY, false, &"heavy_factory")
+	_test_threat_opening(scene, Catalog.HEAVY, true, &"training_range")
+	_test_existing_force(scene, Catalog.INFANTRY, &"heavy_factory")
+	_test_existing_force(scene, Catalog.HEAVY, &"barracks")
+	_test_military_recovery(scene)
 	scene.free()
 	if _failures == 0:
-		print("Seeded CPU economy, construction, claims, defenses, recovery and restart passed.")
+		print("Seeded CPU economy, mixed production, claims, defenses, recovery and restart passed.")
 	quit(int(_failures > 0))
 
 
@@ -58,7 +72,7 @@ func _economy_match(scene: Node) -> Array:
 			unit.order = MatchBattle.Order.HOLD
 			unit.ordered_destination = unit.position
 			garrison.append(unit)
-			if garrison.size() > 6:
+			if garrison.size() > 5:
 				var retired: MatchBattle.Unit = garrison.pop_front()
 				retired.hp = 0.0)
 	scene._process(2.0)
@@ -76,8 +90,8 @@ func _economy_match(scene: Node) -> Array:
 		var count := _structures(scene, kind).size()
 		_check(count >= 1 and count <= (2 if kind == &"farm" else 1),
 			"Resource demand results in enough %s without runaway duplication." % kind)
-	_check(battle.active_barracks_count(CPU) >= 2 and scene.economy.has_upgrade(CPU)
-		and deployments.size() >= 24, "The CPU upgrades and sustains multiple barracks under normal income.")
+	_check(battle.active_barracks_count(CPU) >= 1 and scene.economy.has_upgrade(CPU)
+		and deployments.size() >= 24, "The CPU upgrades its Barracks and sustains deployments under normal income.")
 	_check(not scene._outposts_by_region.is_empty(), "The CPU buys an outpost on the expanded map.")
 	_check(_structures(scene, Rules.NEST).is_empty() and _structures(scene, Rules.MORTAR).is_empty()
 		and _structures(scene, Rules.WALL).is_empty(), "The CPU saves combat spending in an uncontested match.")
@@ -86,6 +100,18 @@ func _economy_match(scene: Node) -> Array:
 	scene._process(40.0)
 	_check(deployed_types.size() == MatchBattle.UnitCatalog.DEFINITIONS.size(),
 		"The seeded CPU deploys every roster type through construction. Deployed %s." % [deployed_types.keys()])
+	var food_demand := 0.0
+	for timer in battle._timers:
+		if timer.side == CPU and timer.active:
+			food_demand += float(Catalog.DEFINITIONS[timer.unit_type].food) / timer.interval(scene.economy)
+	_check(scene.economy.income_rate(CPU, MatchEconomy.FOOD) >= food_demand,
+		"The mature economy can pay for every active producer's ongoing deployments.")
+	var fielded_types := {}
+	for unit in garrison:
+		fielded_types[unit.type_id] = true
+	_check(fielded_types.size() >= 2, "Different CPU unit types operate together in the field.")
+	_check(battle._timers.size() <= scene.cpu_production_limit,
+		"Sustained economic growth respects the military construction limit.")
 	_check_ownership(scene)
 	return _snapshot(scene)
 
@@ -118,7 +144,7 @@ func _test_losses(scene: Node) -> void:
 	# Depleted materials should prompt mine replacement, even after an established economy.
 	scene.economy.try_spend(CPU, {MatchEconomy.MATERIALS: int(scene.economy.stockpile(CPU, MatchEconomy.MATERIALS))})
 	scene._process(30.0)
-	_check(_structures(scene, &"mine").size() == 1 and battle.active_barracks_count(CPU) >= 2,
+	_check(_structures(scene, &"mine").size() == 1 and battle.active_barracks_count(CPU) >= 1,
 		"The CPU recovers from producer loss and keeps its barracks active.")
 
 
@@ -179,6 +205,110 @@ func _test_blocked_placement(scene: Node) -> void:
 	scene._process(2.0)
 	_check(retry_at.get(&"barracks", 0.0) == deadline and scene.economy.energy(CPU) == 62.0,
 		"The next decision does not repeat a failed site search.")
+
+
+func _test_scarcity(scene: Node) -> void:
+	scene.restart_match()
+	scene.set_process(false)
+	var costs := {}
+	for resource in MatchEconomy.RESOURCES:
+		costs[resource] = int(scene.economy.stockpile(CPU, resource))
+	scene.economy.try_spend(CPU, costs)
+	scene._process(10.0)
+	_check(scene._battle._timers.is_empty() and scene._cpu_strategy._retry_at.is_empty()
+		and _stock(scene) == {MatchEconomy.ENERGY: 30.0, MatchEconomy.MATERIALS: 20.0,
+			MatchEconomy.FOOD: 10.0}, "Resource scarcity waits without site searches or spending.")
+	scene._process(4.0)
+	_check(_structures(scene, &"barracks").size() == 1
+		and scene.economy.energy(CPU) == 42.0 - MatchEconomy.BARRACKS_COST[MatchEconomy.ENERGY],
+		"The CPU resumes affordable production as soon as starting income covers the shared price.")
+
+
+func _test_threat_opening(scene: Node, enemy_type: StringName, covered: bool, expected: StringName) -> void:
+	_prepare_military_case(scene)
+	if covered:
+		_check(_place_cpu(scene, Rules.NEST), "A gun covers the CPU base in the defended opening.")
+	_seed_force(scene, PLAYER, enemy_type, 3)
+	var before := _stock(scene)
+	scene._try_cpu_purchase()
+	_check(_structures(scene, expected).size() == 1,
+		"The opening against %s with cover %s selects %s." % [enemy_type, covered, expected])
+	for resource in MatchEconomy.RESOURCES:
+		_check(scene.economy.stockpile(CPU, resource) == before[resource]
+			- scene.BUILDINGS[expected].cost.get(resource, 0), "The specialized opening pays the shared price.")
+
+
+func _test_existing_force(scene: Node, allied_type: StringName, expected: StringName) -> void:
+	_prepare_military_case(scene)
+	_check(_place_cpu(scene, &"barracks") and _place_cpu(scene, &"training_range"),
+		"The existing force fixture starts with two kinds of producers.")
+	_check(scene.try_upgrade(CPU), "The existing force fixture has an upgraded Barracks.")
+	_seed_force(scene, CPU, Catalog.RANGED, 1)
+	_seed_force(scene, CPU, allied_type, 5)
+	var count := _structures(scene, expected).size()
+	scene._try_cpu_purchase()
+	_check(_structures(scene, expected).size() == count + 1,
+		"Existing forces reinforced with %s shift investment toward %s. Buildings: %s."
+			% [allied_type, expected, _snapshot(scene)[0]])
+
+
+func _test_military_recovery(scene: Node) -> void:
+	_prepare_military_case(scene)
+	scene.cpu_production_target = 2
+	scene.cpu_production_limit = 3
+	_check(_place_cpu(scene, &"barracks") and _place_cpu(scene, &"training_range")
+		and scene.try_upgrade(CPU), "The recovery fixture starts at its peacetime cap without Heavy production.")
+	_seed_force(scene, PLAYER, Catalog.RANGED, 4)
+	scene._process(2.0)
+	var factories := _structures(scene, &"heavy_factory")
+	_check(factories.size() == 1, "Incoming Ranged units prompt a counter investment above the peacetime cap. Buildings: %s."
+		% [_snapshot(scene)[0]])
+	if factories.is_empty():
+		return
+	var battle: MatchBattle = scene._battle
+	var original: MatchBattle.Fortification = factories[0]
+	original.hp = 0.0
+	scene._advance_simulation(MatchBattle.STEP)
+	_check(battle.get_fortification(original.id) == null, "Losing a factory removes its production timer.")
+	scene._process(8.0)
+	factories = _structures(scene, &"heavy_factory")
+	_check(factories.size() == 1 and factories[0].id != original.id and battle._timers.size() == 3,
+		"The CPU replaces lost counter production without exceeding the construction cap.")
+	scene._process(2.0)
+	_check(battle.active_units().any(func(unit: MatchBattle.Unit) -> bool:
+		return unit.side == CPU and unit.type_id == Catalog.HEAVY),
+		"The replacement factory completes a normal Heavy deployment.")
+	_check_ownership(scene)
+
+
+func _prepare_military_case(scene: Node) -> void:
+	scene.restart_match()
+	scene.set_process(false)
+	scene.cpu_expansion_limit = 0
+	scene.economy.advance(100.0)
+	scene.economy.set_income_source(CPU, MatchEconomy.FOOD, &"test_supply", "Test supply", 10.0)
+	# The defense tests exercise new fortification purchases separately.
+	scene._cpu_strategy._next_defense = 60.0
+
+
+func _place_cpu(scene: Node, kind: StringName) -> bool:
+	var region: MatchRegion = scene.get_region(TerritoryLayout.CPU_START)
+	var point := region.interior_point(func(site: Vector2) -> bool:
+		return scene._placement_block_reason(CPU, kind, scene._world_position(site)).is_empty())
+	return point.is_finite() and scene.try_place_building(CPU, kind, scene._world_position(point))
+
+
+func _seed_force(scene: Node, side: MatchRegion.Owner, type: StringName, count: int) -> void:
+	var battle: MatchBattle = scene._battle
+	var base: Vector2 = battle._bases[CPU]
+	var distance := -7.5 if side == PLAYER else 1.5
+	for index in range(count):
+		var position := base + Vector2(distance, 3.0 + index * 0.35)
+		var unit := battle.spawn_unit(side, position, type)
+		_check(unit != null, "The scenario can position its starting force.")
+		if unit != null:
+			unit.order = MatchBattle.Order.HOLD
+			unit.ordered_destination = unit.position
 
 
 func _check_ownership(scene: Node) -> void:
