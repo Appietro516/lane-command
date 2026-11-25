@@ -17,11 +17,12 @@ const UPGRADE_COST := {ENERGY: 60, FOOD: 15}
 const CLAIM_COST := {ENERGY: 50}
 const PRODUCTION_INTERVAL := 3.5
 const UPGRADED_PRODUCTION_INTERVAL := 2.5
+const PRODUCTION_UPGRADE := &"barracks_upgrade"
 
 class SideState:
 	var stockpiles: Dictionary[StringName, float] = {}
 	var barracks_count := 0
-	var production_interval := PRODUCTION_INTERVAL
+	var upgraded := false
 
 	func _init() -> void:
 		for resource_id in RESOURCES:
@@ -139,11 +140,40 @@ func barracks_count(side: MatchRegion.Owner) -> int:
 
 
 func production_interval(side: MatchRegion.Owner) -> float:
-	return _sides[side].production_interval
+	return stats.value(side, FactionStats.BARRACKS_INTERVAL, PRODUCTION_INTERVAL)
+
+
+## A shorter cycle increases production capacity. Paused barracks have zero capacity.
+## Food is charged separately when a cycle deploys a unit.
+func production_stat(side: MatchRegion.Owner, active: bool) -> Dictionary:
+	var result := stats.inspect(side, FactionStats.BARRACKS_INTERVAL, PRODUCTION_INTERVAL)
+	var interval := PRODUCTION_INTERVAL
+	var rate := 1.0 / interval
+	var breakdown: Array[Dictionary] = []
+	for entry: Dictionary in result.breakdown:
+		if entry.source_id == FactionStats.LIMIT:
+			continue # The marginal rates already respect the minimum cycle time.
+		entry.stat = &"barracks_rate"
+		if entry.source_id == FactionStats.BASELINE:
+			entry.magnitude = rate
+			breakdown.append(entry)
+			continue
+		# Attribute each change in throughput in the same order as the cycle modifiers.
+		var minimum: float = FactionStats.STAT_DEFINITIONS[FactionStats.BARRACKS_INTERVAL].minimum
+		entry.configured_magnitude = 1.0 / maxf(interval + entry.configured_magnitude, minimum) - rate
+		interval += entry.magnitude
+		var next_rate := 1.0 / maxf(interval, minimum)
+		entry.magnitude = next_rate - rate
+		rate = next_rate
+		breakdown.append(entry)
+	if not active:
+		breakdown.append({"source_name": "Territory lost", "source_type": &"rule",
+			"magnitude": -rate, "active": true})
+	return {"total": 1.0 / result.total if active else 0.0, "breakdown": breakdown}
 
 
 func has_upgrade(side: MatchRegion.Owner) -> bool:
-	return production_interval(side) == UPGRADED_PRODUCTION_INTERVAL
+	return _sides[side].upgraded
 
 
 func can_upgrade(side: MatchRegion.Owner) -> bool:
@@ -162,5 +192,8 @@ func try_upgrade(side: MatchRegion.Owner) -> bool:
 	if not _sides.has(side) or has_upgrade(side) or not try_spend(side, UPGRADE_COST):
 		return false
 
-	_sides[side].production_interval = UPGRADED_PRODUCTION_INTERVAL
+	_sides[side].upgraded = true
+	stats.set_modifier(StringName("%s/%d" % [PRODUCTION_UPGRADE, side]), side,
+		FactionStats.BARRACKS_INTERVAL, UPGRADED_PRODUCTION_INTERVAL - PRODUCTION_INTERVAL,
+		&"upgrade", "Barracks upgrade")
 	return true

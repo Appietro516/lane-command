@@ -316,7 +316,23 @@ func base_source_id(side: MatchRegion.Owner) -> StringName:
 
 
 func unit_dps_stat(unit: Unit) -> Dictionary:
-	return stats.inspect(unit.side, FactionStats.UNIT_DPS, ATTACK_DAMAGE / unit.attack_interval)
+	return stats.inspect(unit.side, FactionStats.UNIT_DPS, _base_dps(unit))
+
+
+func unit_health_stat(unit: Unit) -> Dictionary:
+	return stats.inspect(unit.side, FactionStats.UNIT_MAX_HP, UNIT_HP)
+
+
+func unit_speed_stat(unit: Unit) -> Dictionary:
+	return stats.inspect(unit.side, FactionStats.UNIT_SPEED, MOVEMENT_SPEED)
+
+
+func _base_dps(unit: Unit) -> float:
+	return ATTACK_DAMAGE / unit.attack_interval
+
+
+func _unit_max_hp(unit: Unit) -> float:
+	return stats.value(unit.side, FactionStats.UNIT_MAX_HP, UNIT_HP)
 
 
 func unit_attack_stat(unit: Unit) -> Dictionary:
@@ -331,6 +347,9 @@ func unit_attack_stat(unit: Unit) -> Dictionary:
 
 
 func _on_stat_changed(stat: StringName) -> void:
+	if stat == FactionStats.UNIT_MAX_HP:
+		for unit in _units.values():
+			unit.hp = minf(unit.hp, _unit_max_hp(unit))
 	if stat != FactionStats.BUILDING_MAX_HP:
 		return
 	# Cap reductions discard surplus HP. Higher caps never heal existing buildings.
@@ -385,6 +404,7 @@ func _advance_production(delta: float, economy: MatchEconomy) -> void:
 			timer.elapsed = maxf(0.0, timer.elapsed - interval)
 			var direction := timer.position.direction_to(_bases[_opponent(timer.side)])
 			var unit := Unit.new(_next_unit_id, timer.side, _spawn_position(timer.position, direction))
+			unit.hp = _unit_max_hp(unit)
 			unit.heading = unit.position.direction_to(_bases[_opponent(timer.side)])
 			_units[unit.id] = unit
 			_next_unit_id += 1
@@ -423,8 +443,7 @@ func _step_combat() -> void:
 
 	# A unit killed this step still resolves the attack it planned.
 	for unit in attacks:
-		var damage := stats.value(unit.side, FactionStats.UNIT_DPS,
-			ATTACK_DAMAGE / unit.attack_interval) * unit.attack_interval
+		var damage := stats.value(unit.side, FactionStats.UNIT_DPS, _base_dps(unit)) * unit.attack_interval
 		if unit.target == BASE_TARGET:
 			var side := _opponent(unit.side)
 			_base_health[side].hp = maxf(0.0, base_hp(side) - damage)
@@ -706,7 +725,7 @@ func _clear_route(unit: Unit) -> void:
 
 
 func _move(unit: Unit) -> void:
-	var remaining := MOVEMENT_SPEED * STEP
+	var remaining := stats.value(unit.side, FactionStats.UNIT_SPEED, MOVEMENT_SPEED) * STEP
 	while remaining > 0.0 and not unit.waypoints.is_empty():
 		var waypoint := unit.waypoints[0]
 		var distance := unit.position.distance_to(waypoint)

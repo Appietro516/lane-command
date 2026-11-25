@@ -153,7 +153,7 @@ func _test_match_controls() -> void:
 	var food_readout := food_label.get_parent() as Control
 	match_scene.economy.set_income_source(PLAYER, FOOD, &"bonus", "Supply bonus", 0.5)
 	match_scene._process(0.0)
-	_check(food_readout.tooltip_text == "Food income\nBase  +1/s\nSupply bonus  +0.5/s\nTotal  +1.5/s"
+	_check(food_readout.tooltip_text == "Food income\nPassive trickle  +1/s\nSupply bonus  +0.5/s\nTotal  +1.5/s"
 		and food_readout.get_node("Rate").text == "+1.5/s",
 		"Unexpected HUD source text: %s" % food_readout.tooltip_text)
 	match_scene.economy.set_income_source(PLAYER, FOOD, &"bonus", "", 0.0)

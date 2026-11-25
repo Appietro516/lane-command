@@ -121,7 +121,7 @@ func _test_match_lifecycle() -> void:
 	scene._refresh_hud()
 	var energy_readout := scene.get_node("%Resources/energy") as Control
 	_check(energy_readout.get_node("Rate").text == "+5/s"
-		and energy_readout.tooltip_text == "Energy income\nBase  +3/s\nReactor  +1/s\nTrade  +1/s\nTotal  +5/s",
+		and energy_readout.tooltip_text == "Energy income\nPassive trickle  +3/s\nReactor  +1/s · Region 1\nTrade  +1/s\nTotal  +5/s",
 		"HUD and stockpile updates use the same attributed income.")
 	economy.advance(2.0)
 	_check(economy.energy(PLAYER) == 10.0 and economy.energy(CPU) == 56.0
@@ -155,8 +155,8 @@ func _test_match_lifecycle() -> void:
 	var unit_stats := scene.get_node("%UnitStats") as Label
 	var cpu_health := scene.get_node("%CPUHP") as Label
 	_check(unit_stats.text.contains("Attack  4.5")
-		and unit_stats.tooltip_text.contains("Damage per second\nBase  3\nTraining  1.5\nTotal  4.5")
-		and cpu_health.tooltip_text == "Maximum HP\nBase  80\nArmor  5\nTotal  85",
+		and unit_stats.tooltip_text.contains("Damage per second\nBase  3\nTraining  +1.5\nTotal  4.5")
+		and cpu_health.tooltip_text == "Maximum HP\nBase  80\nArmor  +5\nTotal  85",
 		"Unit and base inspectors report the same attributed stats used by combat.")
 	scene.restart_match()
 	scene.set_process(false)

@@ -5,7 +5,10 @@ extends RefCounted
 signal stat_changed(stat: StringName)
 
 const UNIT_DPS := &"unit_dps"
+const UNIT_MAX_HP := &"unit_max_hp"
+const UNIT_SPEED := &"unit_speed"
 const BUILDING_MAX_HP := &"building_max_hp"
+const BARRACKS_INTERVAL := &"barracks_interval"
 const ENERGY := &"energy"
 const MATERIALS := &"materials"
 const FOOD := &"food"
@@ -14,7 +17,10 @@ const LIMIT := &"_minimum"
 const BASELINE_TYPE := &"baseline"
 const STAT_DEFINITIONS := {
 	UNIT_DPS: {"minimum": 0.0},
+	UNIT_MAX_HP: {"minimum": 1.0},
+	UNIT_SPEED: {"minimum": 0.0},
 	BUILDING_MAX_HP: {"minimum": 1.0},
+	BARRACKS_INTERVAL: {"minimum": 0.1},
 	ENERGY: {},
 	MATERIALS: {},
 	FOOD: {},
@@ -72,6 +78,16 @@ func inspect(owner: MatchRegion.Owner, stat: StringName, base_value: float) -> D
 	return _compute(owner, stat, base_value).duplicate(true)
 
 
+## The source's own contribution, independent of the owning faction's baseline.
+func inspect_source(stat: StringName, source_id: StringName) -> Dictionary:
+	var sources: Dictionary = _sources.get(stat, {})
+	var source: Dictionary = sources.get(source_id, {})
+	if source.is_empty():
+		return {"total": 0.0, "breakdown": []}
+	var entry := _effective_source(source)
+	return {"total": entry.magnitude, "breakdown": [entry]}
+
+
 func _compute(owner: MatchRegion.Owner, stat: StringName, base_value: float) -> Dictionary:
 	var cache := _computed.get_or_add(stat, {}) as Dictionary
 	var owner_cache := cache.get_or_add(owner, {}) as Dictionary
@@ -89,10 +105,7 @@ func _compute(owner: MatchRegion.Owner, stat: StringName, base_value: float) -> 
 		var source: Dictionary = sources[StringName(source_id)]
 		if source.owner != owner or owner == MatchRegion.Owner.NEUTRAL:
 			continue
-		var entry := source.duplicate()
-		entry["configured_magnitude"] = source.magnitude
-		if not entry.active:
-			entry.magnitude = 0.0
+		var entry := _effective_source(source)
 		total += entry.magnitude
 		breakdown.append(entry)
 
@@ -105,6 +118,15 @@ func _compute(owner: MatchRegion.Owner, stat: StringName, base_value: float) -> 
 	var result := {"total": total, "breakdown": breakdown}
 	owner_cache[base_value] = result
 	return result
+
+
+func _effective_source(source: Dictionary) -> Dictionary:
+	var entry := source.duplicate()
+	entry["configured_magnitude"] = source.magnitude
+	entry.active = source.active and source.owner != MatchRegion.Owner.NEUTRAL
+	if not entry.active:
+		entry.magnitude = 0.0
+	return entry
 
 
 func _update_source(source_id: StringName, field: StringName, value_to_set: Variant) -> void:

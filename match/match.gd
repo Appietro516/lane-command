@@ -126,6 +126,9 @@ var _tracer_material := StandardMaterial3D.new()
 var _wall_start := Vector2.INF
 var _wall_release_pending := false
 var _barracks_by_region: Dictionary[StringName, Array] = {}
+var _barracks_by_view: Dictionary[Node3D, PlacedBarracks] = {}
+var _selected_barracks: PlacedBarracks
+var _selected_resource: StringName
 var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
@@ -154,7 +157,13 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _unit_stats: Label = %UnitStats
 @onready var _unit_intent: Label = %UnitIntent
 @onready var _unit_order_hint: Label = %UnitOrderHint
+@onready var _stat_sources: Button = %StatSources
+@onready var _stat_source_scroll: ScrollContainer = %StatSourceScroll
+@onready var _stat_source_text: Label = %StatSourceText
 @onready var _resource_readouts: HBoxContainer = %Resources
+@onready var _income_sources: PanelContainer = %IncomeSources
+@onready var _income_source_scroll: ScrollContainer = %IncomeSourceScroll
+@onready var _income_source_text: Label = %IncomeSourceText
 @onready var _barracks_label: Label = %BarracksCount
 @onready var _build_button: Button = %Build
 @onready var _build_menu: PanelContainer = %BuildMenu
@@ -179,7 +188,11 @@ func _ready() -> void:
 	_unit_route.mesh = _route_mesh
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
-	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label, _legendary_summary]:
+	_stat_sources.toggled.connect(func(open: bool) -> void:
+		_stat_source_scroll.visible = open
+		_stat_source_scroll.scroll_vertical = 0)
+	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label, _legendary_summary,
+			_landmark_details]:
 		label.mouse_filter = Control.MOUSE_FILTER_PASS
 	for building_id in BUILDINGS:
 		var definition: Dictionary = BUILDINGS[building_id]
@@ -352,6 +365,9 @@ func restart_match() -> void:
 	_outpost_views.clear()
 	_outposts_by_region.clear()
 	_barracks_by_region.clear()
+	_barracks_by_view.clear()
+	_selected_barracks = null
+	_show_income_sources(&"")
 	_fortifications.clear()
 	_fortification_ids.clear()
 	_select_fortification(MatchBattle.NO_TARGET)
@@ -415,7 +431,6 @@ func _process(delta: float) -> void:
 
 	for unit in _battle.active_units():
 		_update_unit_view(unit, _unit_views[unit.id])
-	_update_unit_selection()
 	_refresh_hud()
 
 
@@ -467,6 +482,7 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 	if not _barracks_by_region.has(region_id):
 		_barracks_by_region[region_id] = []
 	_barracks_by_region[region_id].append(barracks)
+	_barracks_by_view[building] = barracks
 	_refresh_hud()
 	return true
 
@@ -774,7 +790,6 @@ func _lose_region(outpost: MatchBattle.Outpost) -> void:
 	_outpost_views.erase(region_id)
 	_outposts_by_region.erase(region_id)
 	_set_region_owner(region_id, MatchRegion.Owner.NEUTRAL)
-	_update_unit_selection()
 
 
 func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
@@ -813,7 +828,7 @@ func set_region_modifier(region_id: StringName, stat: StringName, magnitude: flo
 		source_name: String, source_type := &"landmark", description := "") -> bool:
 	var region := get_region(region_id)
 	return region != null and faction_stats.set_modifier(region_source_id(region_id),
-		region.region_owner, stat, magnitude, source_type, source_name, description)
+		region.region_owner, stat, magnitude, source_type, source_name, description, true, 0, region_id)
 
 
 func owns_region(side: MatchRegion.Owner, region_id: StringName) -> bool:
@@ -886,8 +901,12 @@ func _clear_wall_drag() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and _income_sources.visible:
+		_show_income_sources(&"")
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("ui_cancel") and (selected_unit() != null
-			or _selected_fortification != MatchBattle.NO_TARGET):
+			or _selected_fortification != MatchBattle.NO_TARGET or _selected_barracks != null):
 		_select_unit(MatchBattle.NO_TARGET)
 		_select_fortification(MatchBattle.NO_TARGET)
 		get_viewport().set_input_as_handled()
@@ -951,7 +970,8 @@ func _pick_map(pointer: Vector2) -> void:
 	else:
 		_select_unit(MatchBattle.NO_TARGET)
 		var building := _pick_building(pointer)
-		_select_fortification(_fortification_ids.get(building, MatchBattle.NO_TARGET))
+		_select_fortification(_fortification_ids.get(building, MatchBattle.NO_TARGET),
+			_barracks_by_view.get(building))
 		var point: Variant = _ground_point(pointer) if building == null else building.global_position
 		_select_region(region_at_world_position(point) if point != null else &"")
 	_refresh_claim_control()
@@ -1006,6 +1026,8 @@ func _pick_unit(pointer: Vector2) -> int:
 
 
 func _select_unit(id: int) -> void:
+	if id != _selected_unit_id:
+		_stat_sources.button_pressed = false
 	_selected_unit_id = id
 	_update_unit_selection()
 
@@ -1022,19 +1044,28 @@ func _update_unit_selection() -> void:
 	_unit_name.text = "%s combat unit #%d" % [_side_label(unit.side), unit.id]
 	_unit_name.modulate = FACTION_ACCENTS[unit.side].albedo_color.lightened(0.25)
 	var attack := _battle.unit_attack_stat(unit)
-	_unit_stats.text = "HP  %s / %d\nAttack  %s · Speed  %.1f units/s" % [
-		_stat_number(unit.hp), MatchBattle.UNIT_HP, _stat_number(attack.total),
-		MatchBattle.MOVEMENT_SPEED,
+	var health := _battle.unit_health_stat(unit)
+	var speed := _battle.unit_speed_stat(unit)
+	_unit_stats.text = "HP  %s / %s\nAttack  %s · Speed  %s units/s" % [
+		_stat_number(unit.hp), _stat_number(health.total), _stat_number(attack.total),
+		_stat_number(speed.total),
 	]
-	_unit_stats.tooltip_text = _stat_tooltip("Damage per attack", attack) + "\n\n" \
-		+ _stat_tooltip("Damage per second", _battle.unit_dps_stat(unit))
+	_refresh_stat_sources("\n\n".join([
+		_breakdown_text("Damage per second", _battle.unit_dps_stat(unit)),
+		_breakdown_text("Maximum HP", health),
+		_breakdown_text("Damage per attack", attack),
+		_breakdown_text("Movement speed", speed, " units/s"),
+	]))
 	_unit_intent.text = "Target  %s\nState  %s" % [_target_label(unit), _unit_state_label(unit)]
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
 	if not unit.waypoints.is_empty():
 		_draw_unit_route(unit)
 
 
-func _select_fortification(id: int) -> void:
+func _select_fortification(id: int, barracks: PlacedBarracks = null) -> void:
+	if id != _selected_fortification or barracks != _selected_barracks:
+		_stat_sources.button_pressed = false
+	_selected_barracks = barracks
 	_selected_fortification = id
 	_update_fortification_inspection()
 
@@ -1044,7 +1075,10 @@ func _update_fortification_inspection() -> void:
 	if placed == null or not _placement_id.is_empty():
 		if _placement_id.is_empty():
 			_hide_ranges()
-		if placed == null and selected_unit() == null:
+			if _selected_barracks != null:
+				_update_barracks_inspection(_selected_barracks.production)
+				return
+		if selected_unit() == null or not _placement_id.is_empty():
 			_unit_panel.hide()
 		return
 	var fort := placed.defense
@@ -1052,14 +1086,35 @@ func _update_fortification_inspection() -> void:
 	_unit_name.text = "%s %s" % [_side_label(fort.side), fort.profile.label]
 	_unit_name.modulate = FACTION_ACCENTS[fort.side].albedo_color.lightened(0.25)
 	_unit_stats.text = _health_text(fort)
-	_unit_stats.tooltip_text = _stat_tooltip("Maximum HP", fort.health_stat())
+	var details := _breakdown_text("Maximum HP", fort.health_stat())
 	_unit_intent.text = "Active" if fort.active else "Inactive · territory lost"
-	if fort.active and fort.profile.has("income"):
-		_unit_intent.text += "\n" + _income_text(fort.profile.income)
+	for resource_id in fort.profile.get("income", {}):
+		var production := faction_stats.inspect_source(resource_id, fort.source_id)
+		var label: String = MatchEconomy.RESOURCES[resource_id].label
+		_unit_intent.text += "\n%s %s" % [label, _stat_amount(production.total, "/s")]
+		details += "\n\n" + _breakdown_text(label + " production", production, "/s", true)
+	_refresh_stat_sources(details)
 	if fort.profile.get("range", 0.0) > 0.0:
 		_unit_intent.text += "\n" + _range_text(fort.profile).replace(" · ", "\n")
 	_unit_order_hint.hide()
 	_show_ranges(fort.profile, fort.position, true)
+
+
+func _update_barracks_inspection(timer: MatchBattle.ProductionTimer) -> void:
+	var production := economy.production_stat(timer.side, timer.active)
+	_unit_panel.show()
+	_unit_name.text = "%s Barracks" % _side_label(timer.side)
+	_unit_name.modulate = FACTION_ACCENTS[timer.side].albedo_color.lightened(0.25)
+	_unit_stats.text = "Capacity  %s units/s" % _stat_number(production.total)
+	_unit_intent.text = "Active" if timer.active else "Inactive · territory lost"
+	_unit_intent.text += "\n%s per unit" % MatchEconomy.cost_text(MatchEconomy.UNIT_COST)
+	_unit_order_hint.hide()
+	_refresh_stat_sources(_breakdown_text("Production capacity", production, " units/s"))
+
+
+func _refresh_stat_sources(details: String) -> void:
+	_unit_stats.tooltip_text = details
+	_set_breakdown_text(_stat_source_text, _stat_source_scroll, details, 350.0)
 
 
 func _health_text(building: MatchBattle.BuildingHealth) -> String:
@@ -1288,16 +1343,19 @@ func _hide_base(side: MatchRegion.Owner) -> void:
 
 func _create_resource_readouts() -> void:
 	for resource_id in MatchEconomy.RESOURCES:
-		var readout := VBoxContainer.new()
+		var readout := Button.new()
 		readout.name = resource_id
-		readout.custom_minimum_size.x = 100
-		readout.mouse_filter = Control.MOUSE_FILTER_STOP
-		readout.alignment = BoxContainer.ALIGNMENT_CENTER
-		readout.add_theme_constant_override("separation", 0)
+		readout.custom_minimum_size = Vector2(124 if resource_id == MatchEconomy.MATERIALS else 112, 52)
+		readout.toggle_mode = true
+		readout.pressed.connect(func() -> void:
+			_show_income_sources(&"" if _selected_resource == resource_id else resource_id))
 		_resource_readouts.add_child(readout)
 
 		var stockpile := Label.new()
 		stockpile.name = &"Stockpile"
+		stockpile.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		stockpile.anchor_bottom = 0.5
+		stockpile.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 		stockpile.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stockpile.add_theme_font_size_override("font_size", 18)
 		stockpile.add_theme_color_override("font_color", Color(0.99, 0.81, 0.49))
@@ -1305,9 +1363,21 @@ func _create_resource_readouts() -> void:
 
 		var rate := Label.new()
 		rate.name = &"Rate"
+		rate.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		rate.anchor_top = 0.5
 		rate.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		rate.add_theme_color_override("font_color", Color(0.73, 0.84, 0.90))
 		readout.add_child(rate)
+
+
+func _show_income_sources(resource_id: StringName) -> void:
+	_selected_resource = resource_id
+	_income_sources.visible = not resource_id.is_empty()
+	_income_source_scroll.scroll_vertical = 0
+	for readout: Button in _resource_readouts.get_children():
+		readout.set_pressed_no_signal(readout.name == resource_id)
+	if _income_sources.visible:
+		_refresh_resource_readouts()
 
 
 func _refresh_resource_readouts() -> void:
@@ -1319,18 +1389,33 @@ func _refresh_resource_readouts() -> void:
 		stockpile.text = "%s %d" % [resource_label, floori(economy.stockpile(PLAYER, resource_id))]
 		var income := economy.income_stat(PLAYER, resource_id)
 		rate.text = _stat_amount(income.total, "/s")
-		readout.tooltip_text = _stat_tooltip(resource_label + " income", income, "/s")
+		var details := _breakdown_text(resource_label + " income", income, "/s", true)
+		readout.tooltip_text = details
+		if resource_id == _selected_resource:
+			_set_breakdown_text(_income_source_text, _income_source_scroll, details, 235.0)
+
+
+func _set_breakdown_text(label: Label, scroll: ScrollContainer, details: String, height_limit: float) -> void:
+	if label.text == details:
+		return
+	label.text = details
+	var line_height := label.get_line_height() + label.get_theme_constant("line_spacing")
+	scroll.custom_minimum_size.y = minf((details.count("\n") + 1) * line_height + 2, height_limit)
 
 
 func _stat_number(value: float) -> String:
-	var amount := String.num(value, 3)
+	var amount := String.num(value, 6)
 	if amount.contains("."):
 		amount = amount.rstrip("0").rstrip(".")
 	return amount
 
 
 func _stat_amount(value: float, suffix: String) -> String:
-	return "%s%s%s" % ["+" if value >= 0.0 and not suffix.is_empty() else "",
+	return _format_amount(value, suffix, not suffix.is_empty())
+
+
+func _format_amount(value: float, suffix: String, signed: bool) -> String:
+	return "%s%s%s" % ["+" if value >= 0.0 and signed else "",
 		_stat_number(value), suffix]
 
 
@@ -1342,26 +1427,37 @@ func _income_text(income: Dictionary) -> String:
 	return ", ".join(rates)
 
 
-func _stat_tooltip(title: String, result: Dictionary, suffix := "") -> String:
+func _breakdown_text(title: String, result: Dictionary, suffix := "", income := false) -> String:
 	var lines := PackedStringArray([title])
 	for source: Dictionary in result.breakdown:
-		if source.active:
-			lines.append("%s  %s" % [source.source_name, _stat_amount(source.magnitude, suffix)])
-	lines.append("Total  " + _stat_amount(result.total, suffix))
+		var baseline: bool = source.source_type == FactionStats.BASELINE_TYPE
+		var label: String = "Passive trickle" if baseline and income else source.source_name
+		var row := "%s  %s" % [label, _format_amount(source.magnitude, suffix, income or not baseline)]
+		if source.has("region_id"):
+			row += " · " + str(source.region_id).capitalize()
+		if not source.active:
+			row += " · Inactive"
+		lines.append(row)
+	lines.append("Total  " + _format_amount(result.total, suffix, income))
 	return "\n".join(lines)
 
 
-func _legendary_effect(landmark: LegendaryLandmark) -> String:
-	if MatchEconomy.RESOURCES.has(landmark.stat):
-		return _income_text({landmark.stat: landmark.magnitude})
-	var label := str(landmark.stat).capitalize()
-	match landmark.stat:
+func _legendary_effect(stat: StringName, amount: float) -> String:
+	if MatchEconomy.RESOURCES.has(stat):
+		return _income_text({stat: amount})
+	var label := str(stat).capitalize()
+	match stat:
 		FactionStats.UNIT_DPS:
 			label = "Unit DPS"
+		FactionStats.UNIT_MAX_HP:
+			label = "Unit max HP"
+		FactionStats.UNIT_SPEED:
+			label = "unit movement speed (units/s)"
 		FactionStats.BUILDING_MAX_HP:
 			label = "Building max HP"
-	return "%s%s %s" % ["+" if landmark.magnitude >= 0.0 else "",
-		_stat_number(landmark.magnitude), label]
+		FactionStats.BARRACKS_INTERVAL:
+			label = "seconds per barracks cycle"
+	return _format_amount(amount, " " + label, true)
 
 
 func _refresh_legendary_summary() -> void:
@@ -1369,12 +1465,13 @@ func _refresh_legendary_summary() -> void:
 	var counts := {PLAYER: 0, CPU: 0}
 	var entries := PackedStringArray()
 	for landmark in _landmarks.values():
-		var side := get_region(landmark.region_id).region_owner
-		if side == MatchRegion.Owner.NEUTRAL:
+		var contribution := faction_stats.inspect_source(landmark.stat, landmark.source_id)
+		if contribution.breakdown.is_empty() or not contribution.breakdown[0].active:
 			continue
+		var side: MatchRegion.Owner = contribution.breakdown[0].owner
 		counts[side] += 1
 		entries.append("%s · %s (%s) · %s" % [_side_label(side), landmark.display_name,
-			str(landmark.region_id).capitalize(), _legendary_effect(landmark)])
+			str(landmark.region_id).capitalize(), _legendary_effect(landmark.stat, contribution.total)])
 	_legendary_summary.text = "Legendary bonuses · Player %d · CPU %d" % [counts[PLAYER], counts[CPU]]
 	_legendary_summary.tooltip_text = "Claim landmark regions to activate their bonuses." \
 		if entries.is_empty() else "\n".join(entries)
@@ -1383,8 +1480,8 @@ func _refresh_legendary_summary() -> void:
 func _refresh_hud() -> void:
 	_player_hp_label.text = "Player base · %s HP" % _stat_number(_battle.base_hp(PLAYER))
 	_cpu_hp_label.text = "CPU base · %s HP" % _stat_number(_battle.base_hp(CPU))
-	_player_hp_label.tooltip_text = _stat_tooltip("Maximum HP", _battle.base_health_stat(PLAYER))
-	_cpu_hp_label.tooltip_text = _stat_tooltip("Maximum HP", _battle.base_health_stat(CPU))
+	_player_hp_label.tooltip_text = _breakdown_text("Maximum HP", _battle.base_health_stat(PLAYER))
+	_cpu_hp_label.tooltip_text = _breakdown_text("Maximum HP", _battle.base_health_stat(CPU))
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
 	_refresh_resource_readouts()
@@ -1394,6 +1491,8 @@ func _refresh_hud() -> void:
 		_build_options[building_id].disabled = not reason.is_empty()
 		_build_options[building_id].tooltip_text = reason
 	_build_button.disabled = _battle.is_finished()
+	if selected_unit() != null:
+		_update_unit_selection()
 	_update_fortification_inspection()
 	_upgrade_button.disabled = _battle.is_finished() or not economy.can_upgrade(PLAYER)
 	_upgrade_button.text = (
@@ -1416,7 +1515,7 @@ func _refresh_claim_control() -> void:
 		if outpost != null:
 			var health := outpost.health_stat()
 			reason += "\nOutpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(health.total)]
-			tooltip = _stat_tooltip("Maximum HP", health)
+			tooltip = _breakdown_text("Maximum HP", health)
 		_region_label.text = "%s\n%s" % [
 			title, reason,
 		]
@@ -1426,8 +1525,16 @@ func _refresh_claim_control() -> void:
 	var landmark := _landmarks.get(_selected_region_id) as LegendaryLandmark
 	_landmark_panel.visible = landmark != null
 	if landmark != null:
+		var contribution := faction_stats.inspect_source(landmark.stat, landmark.source_id)
 		var side := get_region(landmark.region_id).region_owner
-		var status := "Neutral · Inactive" if side == MatchRegion.Owner.NEUTRAL \
-			else "%s-controlled · Active" % _side_label(side)
-		_landmark_details.text = "%s · %s\n%s\n%s" % [landmark.display_name,
-			str(landmark.region_id).capitalize(), _legendary_effect(landmark), status]
+		var active: bool = not contribution.breakdown.is_empty() and contribution.breakdown[0].active
+		var owner := "Neutral" if side == MatchRegion.Owner.NEUTRAL else "%s-controlled" % _side_label(side)
+		_landmark_details.text = "%s · %s\n%s · %s\n%s" % [landmark.display_name,
+			str(landmark.region_id).capitalize(), owner, "Active" if active else "Inactive",
+			_legendary_effect(landmark.stat, contribution.total)]
+		if not active and not contribution.breakdown.is_empty():
+			_landmark_details.text += "\nOn claim · " + _legendary_effect(landmark.stat,
+				contribution.breakdown[0].configured_magnitude)
+		var is_income := MatchEconomy.RESOURCES.has(landmark.stat)
+		_landmark_details.tooltip_text = _breakdown_text("Landmark contribution", contribution,
+			"/s" if is_income else "", is_income)

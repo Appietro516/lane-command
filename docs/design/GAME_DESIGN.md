@@ -45,7 +45,7 @@ With a player unit selected, right-click reachable ground to issue or replace a 
 
 ## HUD and match reset
 
-Show the player's resource stockpiles and net income rates, barracks count, Build and Upgrade controls, both bases' HP, and Restart. Hover over a resource to see its baseline rate, any additional sources, and the total. CPU activity is visible through buildings and units, with debug labels allowed. Show Victory when the CPU base falls or Defeat when the player's base falls. Restart restores initial ownership and resources, resets CPU and production timers, and clears buildings, units, upgrades, and claims while restoring base HP.
+Show the player's resource stockpiles and net income rates, barracks count, Build and Upgrade controls, both bases' HP, and Restart. Hover over or click a resource to see its passive rate, individual sources, and total. Open Stat sources in the inspector for base values, named modifiers, and effective totals. Producer and barracks output reflects whether the building is active. CPU activity is visible through buildings and units, with debug labels allowed. Show Victory when the CPU base falls or Defeat when the player's base falls. Restart restores initial ownership and resources, resets CPU and production timers, and clears buildings, units, upgrades, and claims while restoring base HP.
 
 Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 

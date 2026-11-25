@@ -357,6 +357,10 @@ func _test_match_scene() -> void:
 		"Losing the target refreshes the panel while preserving the surviving selection.")
 
 	_click_at_world(player_building)
+	_check(scene.selected_unit() == null and panel.visible and unit_name.text == "Player Barracks"
+		and not marker.visible and route.get_surface_count() == 0,
+		"Clicking the barracks replaces unit inspection with its production details.")
+	_click_at_world(Vector3(-10.0, 0.0, -5.9))
 	_check(scene.selected_unit() == null and not panel.visible and not marker.visible
 		and route.get_surface_count() == 0 and scene._selected_region_id == TerritoryLayout.PLAYER_START,
 		"Clicking the map clears inspection and selects the underlying region.")
