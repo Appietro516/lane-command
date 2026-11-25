@@ -1,6 +1,7 @@
 [gd_scene format=3]
 
 [ext_resource type="Script" path="res://match/match.gd" id="3"]
+[ext_resource type="Script" path="res://match/strategy_camera.gd" id="4"]
 
 [sub_resource type="Environment" id="Environment_map"]
 background_mode = 1
@@ -47,11 +48,10 @@ rotation_degrees = Vector3(-55, -35, 0)
 light_energy = 0.8
 
 [node name="Camera" type="Camera3D" parent="."]
-position = Vector3(4.096, 25.216, 19.273)
 rotation_degrees = Vector3(-52, 12, 0)
 projection = 1
 current = true
-size = 24.5
+script = ExtResource("4")
 
 [node name="Regions" type="Node3D" parent="."]
 
@@ -74,6 +74,29 @@ cast_shadow = 0
 
 [node name="HUD" type="CanvasLayer" parent="."]
 
+[node name="CameraPanel" type="PanelContainer" parent="HUD"]
+offset_left = 24.0
+offset_top = 24.0
+mouse_force_pass_scroll_events = false
+theme_override_styles/panel = SubResource("StyleBox_hud")
+
+[node name="Controls" type="HBoxContainer" parent="HUD/CameraPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Overview" type="Button" parent="HUD/CameraPanel/Controls"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Overview"
+tooltip_text = "Center the map and zoom out (Home)"
+
+[node name="CameraControls" type="Label" parent="HUD/CameraPanel/Controls"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
+theme_override_font_sizes/font_size = 14
+text = "WASD / arrows to pan
+Middle drag · scroll zoom"
+
 [node name="MatchPanel" type="PanelContainer" parent="HUD"]
 anchor_left = 0.5
 anchor_right = 0.5
@@ -81,6 +104,7 @@ offset_left = -312.0
 offset_top = 24.0
 offset_right = 312.0
 offset_bottom = 92.0
+mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
 [node name="StatusAndRestart" type="HBoxContainer" parent="HUD/MatchPanel"]
@@ -125,6 +149,7 @@ offset_left = -298.0
 offset_top = 24.0
 offset_right = -24.0
 offset_bottom = 24.0
+mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
 [node name="Readouts" type="VBoxContainer" parent="HUD/UnitInspection"]
@@ -165,6 +190,7 @@ offset_left = -520.0
 offset_top = -92.0
 offset_right = 520.0
 offset_bottom = -24.0
+mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
 [node name="ReadoutsAndControls" type="HBoxContainer" parent="HUD/EconomyPanel"]
@@ -231,6 +257,7 @@ offset_top = -148.0
 offset_right = 110.0
 offset_bottom = -100.0
 grow_vertical = 0
+mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
 [node name="BuildScroll" type="ScrollContainer" parent="HUD/BuildMenu"]
@@ -256,6 +283,7 @@ offset_left = -235.0
 offset_top = -154.0
 offset_right = 235.0
 offset_bottom = -100.0
+mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
 [node name="PlacementControls" type="HBoxContainer" parent="HUD/PlacementPanel"]

@@ -79,7 +79,7 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _upgrade_button: Button = %Upgrade
 @onready var _claim_button: Button = %Claim
 @onready var _region_label: Label = %SelectedRegion
-@onready var _camera: Camera3D = $Camera
+@onready var _camera: StrategyCamera = $Camera
 @onready var _player_hp_label: Label = %PlayerHP
 @onready var _cpu_hp_label: Label = %CPUHP
 @onready var _outcome_label: Label = %Outcome
@@ -109,6 +109,7 @@ func _ready() -> void:
 	_claim_button.text = "Claim · %d" % MatchEconomy.CLAIM_COST
 	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
 	_restart_button.pressed.connect(restart_match)
+	%Overview.pressed.connect(func() -> void: _camera.reset_view())
 	restart_match()
 
 
@@ -142,6 +143,7 @@ func _add_starting_base(region: MatchRegion) -> void:
 
 
 func restart_match() -> void:
+	_camera.reset_view(true)
 	if _battle != null:
 		_battle.unit_produced.disconnect(_spawn_unit)
 		_battle.unit_removed.disconnect(_remove_unit)
@@ -360,7 +362,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _build_menu.visible:
 				_build_menu.hide()
 			elif _preview != null:
-				_pending_pick = event.position
+				# The camera may move before the next physics tick commits the placement.
+				var point: Variant = _ground_point(event.position)
+				_pending_pick = _map_position(point) if point != null else Vector2.INF
 			else:
 				_pick_map(event.position)
 			get_viewport().set_input_as_handled()
@@ -377,12 +381,12 @@ func _physics_process(_delta: float) -> void:
 	_pending_pick = Vector2.INF
 	if _preview != null:
 		if click != Vector2.INF:
-			var point: Variant = _ground_point(click)
-			if point != null and try_place_building(PLAYER, _placement_id, point):
+			var point := _regions.to_global(Vector3(click.x, 0.0, click.y))
+			if try_place_building(PLAYER, _placement_id, point):
 				_cancel_placement()
 				return
 		var pointer := get_viewport().get_mouse_position()
-		if get_viewport().gui_get_hovered_control() != null:
+		if _camera.is_dragging() or get_viewport().gui_get_hovered_control() != null:
 			pointer = Vector2.INF
 		_update_placement_preview(pointer)
 
@@ -395,9 +399,39 @@ func _pick_map(pointer: Vector2) -> void:
 		_select_region(&"")
 	else:
 		_select_unit(MatchBattle.NO_TARGET)
-		var point: Variant = _ground_point(pointer)
-		_select_region(region_at_world_position(point) if point != null else &"")
+		_select_region(_pick_region(pointer))
 	_refresh_claim_control()
+
+
+func _pick_region(pointer: Vector2) -> StringName:
+	var start := _camera.project_ray_origin(pointer)
+	var end := start + _camera.project_ray_normal(pointer) * _camera.far
+	var buildings: Array[Node] = [_bases[PLAYER], _bases[CPU]]
+	buildings.append_array(_buildings[PLAYER].get_children())
+	buildings.append_array(_buildings[CPU].get_children())
+	var nearest: Node3D
+	var depth := INF
+	for building: Node3D in buildings:
+		if not building.is_visible_in_tree():
+			continue
+		for mesh: MeshInstance3D in building.find_children("*", "MeshInstance3D", true, false):
+			var local_start := mesh.to_local(start)
+			var local_end := mesh.to_local(end)
+			if not mesh.is_visible_in_tree() or not mesh.get_aabb().intersects_segment(local_start, local_end):
+				continue
+			var faces := mesh.mesh.get_faces()
+			for i in range(0, faces.size(), 3):
+				var hit: Variant = Geometry3D.segment_intersects_triangle(
+					local_start, local_end, faces[i], faces[i + 1], faces[i + 2])
+				if hit != null:
+					var distance := start.distance_squared_to(mesh.to_global(hit))
+					if distance < depth:
+						nearest = building
+						depth = distance
+	if nearest != null:
+		return region_at_world_position(nearest.global_position)
+	var point: Variant = _map_plane().intersects_segment(start, end)
+	return region_at_world_position(point) if point != null else &""
 
 
 func _pick_unit(pointer: Vector2) -> int:

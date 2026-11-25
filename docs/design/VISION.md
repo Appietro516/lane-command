@@ -2,7 +2,7 @@
 
 ## Single-player RTS prototype
 
-The proposed working title is *Lane Command*. In a fixed isometric-like view, the player earns energy, builds barracks, and commands units that can move and fight autonomously against a CPU rival. Destroying a base ends the match and the player can restart. The proposed match length after tuning is 2–4 minutes.
+The proposed working title is *Lane Command*. In an isometric-like view with pan and zoom, the player earns energy, builds barracks, and commands units that can move and fight autonomously against a CPU rival. Destroying a base ends the match and the player can restart. The proposed match length after tuning is 2–4 minutes.
 
 Sources: Se50c19e91616
 

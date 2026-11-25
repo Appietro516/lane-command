@@ -2,7 +2,7 @@
 
 ## Runtime and presentation
 
-The proposed runtime uses Godot 4.6.3 and GDScript with Compatibility rendering, a fixed orthographic Camera3D, Windows export, and single-threaded Web export. Use built-in primitives for structures and generate polygon geometry for territories. The prototype excludes C#, networking, navigation agents, terrain tooling, and complex third-party frameworks.
+The runtime uses Godot 4.6.3 and GDScript with Compatibility rendering, an orthographic Camera3D, Windows export, and single-threaded Web export. Use built-in primitives for structures and generate polygon geometry for territories. The prototype excludes C#, networking, navigation agents, terrain tooling, and complex third-party frameworks.
 
 Sources: S8f6e375bbe16, Se50c19e91616
 
@@ -13,6 +13,8 @@ Generate the region graph by clipping the map bounds around seeded Voronoi sites
 Sources: S8f6e375bbe16, S95c42ca9286d
 
 Combat consumes elapsed time in fixed 60 Hz steps. Units plan from the same snapshot before movement and damage, and casualties are removed after all attacks for that step. The match scene projects pointer input to the same map plane and renders the battle state. Routes use direct segments or an AStar2D graph of building footprint corners. Adding a building invalidates cached routes. Unit state is available by ID through `MatchBattle.get_unit()` and by current selection through `selected_unit()` on the match scene.
+
+The camera keeps its viewing angle fixed and moves its focus within the map bounds. Its zoom range runs from a close tactical view to an overview fitted to the projected map and HUD. Placement stores the map point at click time so camera movement before the next physics tick cannot move the purchase.
 
 ## Rules interfaces and validation
 
