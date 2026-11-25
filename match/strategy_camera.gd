@@ -7,6 +7,7 @@ const PAN_SPEED := 0.75
 const RESPONSE := 14.0
 const CAMERA_DISTANCE := 32.0
 
+var _map_bounds := Rect2(-TerritoryLayout.DEFAULT_SIZE / 2.0, TerritoryLayout.DEFAULT_SIZE)
 var _focus := Vector2.ZERO
 var _target_focus := Vector2.ZERO
 var _target_size: float
@@ -22,8 +23,14 @@ func _ready() -> void:
 	reset_view(true)
 
 
+func set_map_bounds(bounds: Rect2) -> void:
+	_map_bounds = bounds
+	_update_overview_size()
+	reset_view(true)
+
+
 func reset_view(immediate := false) -> void:
-	_target_focus = TerritoryLayout.BOUNDS.get_center()
+	_target_focus = _map_bounds.get_center()
 	_target_size = _overview_size
 	if immediate:
 		_focus = _target_focus
@@ -39,12 +46,12 @@ func _update_overview_size() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		return
-	var map_size := TerritoryLayout.BOUNDS.size
+	var map_size := _map_bounds.size
 	var width := absf(basis.x.x) * map_size.x + absf(basis.x.z) * map_size.y
 	var height := absf(basis.y.x) * map_size.x + absf(basis.y.z) * map_size.y
 	var was_at_overview := is_equal_approx(_target_size, _overview_size)
 	# Leave room for the HUD above and below the map.
-	_overview_size = maxf(width / (0.92 * viewport_size.aspect()), height / 0.74)
+	_overview_size = maxf(MIN_SIZE, maxf(width / (0.92 * viewport_size.aspect()), height / 0.74))
 	_target_size = _overview_size if was_at_overview else minf(_target_size, _overview_size)
 
 
@@ -59,14 +66,16 @@ func _process(delta: float) -> void:
 
 
 func _update_position() -> void:
-	position = Vector3(_focus.x, 0.0, _focus.y) + basis.z * CAMERA_DISTANCE
+	# At the pan limits even the closest corner must stay in front of the camera.
+	var depth := Vector2(absf(basis.z.x), absf(basis.z.z)).dot(_map_bounds.size)
+	position = Vector3(_focus.x, 0.0, _focus.y) + basis.z * maxf(CAMERA_DISTANCE, depth + 4.0)
 
 
 func _pan(offset: Vector2) -> void:
 	# Project camera right and screen down onto the map plane.
 	var right := Vector2(basis.x.x, basis.x.z)
 	var down := Vector2(-basis.y.x, -basis.y.z) / (basis.z.y * basis.z.y)
-	var bounds := TerritoryLayout.BOUNDS
+	var bounds := _map_bounds
 	_target_focus = (_target_focus + right * offset.x + down * offset.y).clamp(
 		bounds.position, bounds.end)
 

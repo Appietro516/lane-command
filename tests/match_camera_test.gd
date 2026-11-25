@@ -1,6 +1,6 @@
 extends SceneTree
 
-const MATCH_SCENE := preload("res://main.tscn")
+const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const STEP := 1.0 / 60.0
 const PLAYER := MatchRegion.Owner.PLAYER
 
@@ -13,7 +13,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	root.size = Vector2i(1280, 800)
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	root.add_child(scene)
 	scene.set_process(false)
 	scene.set_physics_process(false)
@@ -57,7 +57,7 @@ func _run() -> void:
 	_key(KEY_UP, false)
 	_advance(camera)
 	var top_focus: Vector3 = scene._ground_point(center)
-	_check(is_equal_approx(top_focus.z, TerritoryLayout.BOUNDS.position.y),
+	_check(is_equal_approx(top_focus.z, scene._layout.bounds.position.y),
 		"Arrow-key panning clamps the focus to the map edge.")
 	_check(camera.rotation == angle, "Panning and zoom preserve the strategy angle.")
 

@@ -77,11 +77,22 @@ class PlacedFortification:
 
 var faction_stats: FactionStats
 var economy: MatchEconomy
+@export_group("Map")
 @export var map_seed: int = 17
-@export_range(5, 7) var region_count: int = 6
+@export var map_width := TerritoryLayout.DEFAULT_SIZE.x
+@export var map_height := TerritoryLayout.DEFAULT_SIZE.y
+@export_range(TerritoryLayout.MIN_REGIONS, TerritoryLayout.MAX_REGIONS)
+var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
+@export_range(1, TerritoryLayout.MAX_REGIONS) var player_start_count := 1
+@export_range(1, TerritoryLayout.MAX_REGIONS) var cpu_start_count := 1
+@export_group("")
 @export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
 @export var unit_target_priority := MatchBattle.TargetPriority.NEAREST
 @export_range(1, 80) var outpost_hp := MatchBattle.DEFAULT_OUTPOST_HP
+
+var active_map_seed: int:
+	get:
+		return _layout.active_seed if _layout != null else map_seed
 
 var _battle: MatchBattle
 var _layout: TerritoryLayout
@@ -94,7 +105,6 @@ var _fortification_ids: Dictionary[Node3D, int] = {}
 var _selected_fortification := MatchBattle.NO_TARGET
 var _range_ring: MeshInstance3D
 var _splash_ring: MeshInstance3D
-var _shot_effects := Node3D.new()
 var _tracer_material := StandardMaterial3D.new()
 var _wall_start := Vector2.INF
 var _wall_release_pending := false
@@ -117,6 +127,7 @@ var _build_options: Dictionary[StringName, Button] = {}
 	PLAYER: $Buildings/Player,
 	CPU: $Buildings/CPU,
 }
+@onready var _shot_effects := Node3D.new()
 @onready var _regions: Node3D = $Regions
 @onready var _units: Node3D = $Units
 @onready var _unit_selection: MeshInstance3D = $UnitSelection
@@ -193,22 +204,31 @@ func _ready() -> void:
 	restart_match()
 
 
+func _create_layout() -> TerritoryLayout:
+	return TerritoryLayout.new(map_seed, region_count, Vector2(map_width, map_height),
+		player_start_count, cpu_start_count)
+
+
 func _generate_map() -> void:
-	_layout = TerritoryLayout.new(map_seed, region_count)
+	_layout = _create_layout()
+	_camera.set_map_bounds(_layout.bounds)
+	%Overview.tooltip_text = "Center the map and zoom out (Home)\nMap seed: %d" % active_map_seed
 	for cell in _layout.cells:
 		var region := MatchRegion.new(cell)
 		region.name = cell.id
 		match cell.id:
 			TerritoryLayout.PLAYER_START:
 				region.name = "PlayerStart"
-				region.region_owner = PLAYER
 			TerritoryLayout.CPU_START:
 				region.name = "CPUStart"
-				region.region_owner = CPU
+		if cell.id in _layout.player_start_ids:
+			region.region_owner = PLAYER
+		elif cell.id in _layout.cpu_start_ids:
+			region.region_owner = CPU
 		_regions.add_child(region)
 		_regions_by_id[cell.id] = region
 		_initial_owners[cell.id] = region.region_owner
-		if region.region_owner != MatchRegion.Owner.NEUTRAL:
+		if cell.id == TerritoryLayout.PLAYER_START or cell.id == TerritoryLayout.CPU_START:
 			_add_starting_base(region)
 
 
@@ -216,7 +236,16 @@ func _add_starting_base(region: MatchRegion) -> void:
 	var side := region.region_owner
 	var base := STARTING_BASE.instantiate() as Node3D
 	base.name = "PlayerBase" if side == PLAYER else "CPUBase"
-	base.position = Vector3(0, 0.08, 2)
+	base.position.y = 0.08
+	var offset := Vector2(0.0, 2.0)
+	var site := Vector2(region.position.x, region.position.z)
+	var footprint := Rect2(site + offset - MatchBattle.BASE_FOOTPRINT,
+		MatchBattle.BASE_FOOTPRINT * 2.0)
+	for corner in BattleNavigation.corners_of(footprint):
+		if not Geometry2D.is_point_in_polygon(corner, region.polygon):
+			offset = Vector2.ZERO
+			break
+	base.position.z = offset.y
 	base.get_node("Core").material_override = FACTION_ACCENTS[side]
 	region.add_child(base)
 	_bases[side] = base
@@ -261,7 +290,7 @@ func restart_match() -> void:
 	_cpu_placement_rng.seed = 46
 	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
 		_map_position(_bases[CPU].global_position), unit_aggro_radius,
-		TerritoryLayout.BOUNDS, faction_stats)
+		_layout.bounds, faction_stats)
 	_battle.target_priority = unit_target_priority
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
@@ -408,7 +437,7 @@ func _owned_footprint_regions(side: MatchRegion.Owner,
 	if not _buildings.has(side):
 		return covered
 	for point in polygon:
-		if not TerritoryLayout.BOUNDS.has_point(point):
+		if not _layout.bounds.has_point(point):
 			return []
 	for region_id in _regions_by_id:
 		var region := get_region(region_id)
@@ -421,8 +450,8 @@ func _owned_footprint_regions(side: MatchRegion.Owner,
 
 func _wall_plan(side: MatchRegion.Owner, start: Vector2, end: Vector2) -> Dictionary:
 	var plan := {"reason": "", "length": 0.0, "cost": {}, "angle": 0.0, "segments": []}
-	if not start.is_finite() or not end.is_finite() or not TerritoryLayout.BOUNDS.has_point(start) \
-			or not TerritoryLayout.BOUNDS.has_point(end):
+	if not start.is_finite() or not end.is_finite() or not _layout.bounds.has_point(start) \
+			or not _layout.bounds.has_point(end):
 		plan.reason = "Keep both endpoints on the map"
 		return plan
 	var count := Fortifications.wall_count(start.distance_to(end))

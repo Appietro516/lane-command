@@ -1,6 +1,6 @@
 extends SceneTree
 
-const MATCH_SCENE := preload("res://main.tscn")
+const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const NEUTRAL := MatchRegion.Owner.NEUTRAL
@@ -18,7 +18,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_test_interior_points()
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	scene.outpost_hp = 2 * MatchBattle.ATTACK_DAMAGE
 	root.add_child(scene)
 	scene.set_process(false)
@@ -31,7 +31,7 @@ func _run() -> void:
 
 
 func _test_interior_points() -> void:
-	for region_count in range(TerritoryLayout.MIN_REGIONS, TerritoryLayout.MAX_REGIONS + 1):
+	for region_count in [2, 6, TerritoryLayout.DEFAULT_REGION_COUNT, 42]:
 		for map_seed in [0, 17, 71, -1]:
 			var layout := TerritoryLayout.new(map_seed, region_count)
 			for cell in layout.cells:
@@ -176,7 +176,7 @@ func _test_lifecycle(scene: Node) -> void:
 
 
 func _test_obstructed_site() -> void:
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	scene.map_seed = 1
 	scene.region_count = 7
 	root.add_child(scene)

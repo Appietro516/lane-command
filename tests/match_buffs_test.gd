@@ -1,6 +1,6 @@
 extends SceneTree
 
-const MATCH_SCENE := preload("res://main.tscn")
+const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const NEUTRAL := MatchRegion.Owner.NEUTRAL
@@ -66,7 +66,7 @@ func _test_combat_and_health(attacker: MatchRegion.Owner, defender: MatchRegion.
 	var stats := FactionStats.new()
 	var economy := MatchEconomy.new(stats)
 	var battle := MatchBattle.new(Vector2(-10, 2), Vector2(10, 2),
-		MatchBattle.DEFAULT_AGGRO_RADIUS, TerritoryLayout.BOUNDS, stats)
+		MatchBattle.DEFAULT_AGGRO_RADIUS, MatchBattle.DEFAULT_BOUNDS, stats)
 	var direction := 1.0 if attacker == PLAYER else -1.0
 	battle.add_barracks(attacker, Vector2(-8 * direction, -3))
 	battle.advance(MatchEconomy.PRODUCTION_INTERVAL, economy)
@@ -105,7 +105,7 @@ func _test_combat_and_health(attacker: MatchRegion.Owner, defender: MatchRegion.
 
 
 func _test_match_lifecycle() -> void:
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	root.add_child(scene)
 	scene.set_process(false)
 	var economy: MatchEconomy = scene.economy

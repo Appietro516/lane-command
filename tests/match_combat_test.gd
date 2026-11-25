@@ -1,6 +1,6 @@
 extends SceneTree
 
-const MATCH_SCENE := preload("res://main.tscn")
+const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const PLAYER_BASE := Vector2(-10.2, 2.0)
@@ -259,7 +259,7 @@ func _test_routes() -> void:
 
 func _test_match_scene() -> void:
 	root.size = Vector2i(1280, 800)
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	root.add_child(scene)
 	scene.set_process(false)
 	await process_frame
@@ -391,7 +391,7 @@ func _test_match_scene() -> void:
 
 func _test_match_end_and_restart() -> void:
 	root.size = Vector2i(1280, 800)
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	root.add_child(scene)
 	scene.set_process(false)
 	await process_frame

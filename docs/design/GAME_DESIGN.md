@@ -2,9 +2,13 @@
 
 ## Map and starting territories
 
-Generate 5–7 irregular territories across the playable map and frame all regions and both bases together. The human and CPU each own one starting region at opposite ends of the map. The remaining regions start neutral. The map seed and region count are configurable on the Match scene. Units navigate the open map around active building footprints and cross regions freely.
+Generate 24 seeded Voronoi territories by default in a 60 × 36 world. The human and CPU each own one starting territory by default, with their bases near opposite ends. Additional starting territories form contiguous groups around each faction’s base. The remaining regions start neutral. Units navigate the open map around active building footprints and cross regions freely.
 
-Sources: S95c42ca9286d, Se50c19e91616, [generated territory map ticket](https://trello.com/c/gV8QZqOh/9-generate-a-2d-voronoi-style-territory-map)
+Open `main.tscn` and select the Match root to configure **Map** in the Inspector. Set the width, height, region count, seed, and starting region count for each faction before launching the match. Hover over **Overview** in game to see the active seed. **Restart** restores the same map and its initial owners.
+
+Each map dimension accepts 18–192 world units. A nonpositive or nonfinite dimension uses its default, and other out-of-range values clamp to the supported bounds. The generator fits 2–128 regions subject to the map’s capacity at a minimum five-unit site grid pitch. Each side starts with at least one region. If the requested starting territories exceed the effective region count, each side receives one.
+
+Sources: S95c42ca9286d, Se50c19e91616, [generated territory map ticket](https://trello.com/c/gV8QZqOh/9-generate-a-2d-voronoi-style-territory-map), [configurable territory map ticket](https://trello.com/c/HfqeIWVg/20-scale-up-seeded-voronoi-maps-with-configurable-region-counts-and-starting-territory)
 
 Pan with WASD, the arrow keys, or middle-mouse drag. Scroll to zoom and use Home or the Overview button to frame the whole map. Left-click a structure to select its region.
 

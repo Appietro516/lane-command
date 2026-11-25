@@ -1,6 +1,6 @@
 extends SceneTree
 
-const MATCH_SCENE := preload("res://main.tscn")
+const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const NEUTRAL := MatchRegion.Owner.NEUTRAL
@@ -20,7 +20,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	root.size = Vector2i(1280, 800)
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	scene.map_seed = 17
 	scene.region_count = 6
 	root.add_child(scene)
@@ -84,7 +84,7 @@ func _test_claim_controls(scene: Node) -> void:
 	_check(claim.disabled and selection.text.contains("Not adjacent"),
 		"Selecting a distant neutral tile keeps Claim disabled.")
 	# The default seed puts this cell's north rim along the map perimeter.
-	var rim_z := TerritoryLayout.BOUNDS.position.y + MatchRegion.EDGE_GAP + MatchRegion.BORDER_WIDTH * 0.5
+	var rim_z: float = scene._layout.bounds.position.y + MatchRegion.EDGE_GAP + MatchRegion.BORDER_WIDTH * 0.5
 	await _click_map(camera, Vector3(first_region.position.x, 0.0, rim_z))
 	_check(not claim.disabled and selection.text.begins_with("Region 1")
 		and border.albedo_color == MatchRegion.SELECTED_BORDER_COLOR

@@ -1,6 +1,6 @@
 extends SceneTree
 
-const MATCH_SCENE := preload("res://main.tscn")
+const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const Rules := preload("res://match/fortification_rules.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -18,7 +18,7 @@ func _run() -> void:
 	_test_overlapping_fire()
 	_test_wall_navigation()
 	root.size = Vector2i(1280, 800)
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	scene.map_seed = 17
 	scene.unit_aggro_radius = 0.9
 	root.add_child(scene)

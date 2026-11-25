@@ -1,0 +1,10 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://main.tscn" id="1"]
+[ext_resource type="Script" path="res://tests/prototype_match_fixture.gd" id="2"]
+
+[node name="PrototypeMatchFixture" instance=ExtResource("1")]
+script = ExtResource("2")
+map_width = 30.0
+map_height = 18.0
+region_count = 6

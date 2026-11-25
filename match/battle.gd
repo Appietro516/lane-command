@@ -23,6 +23,7 @@ const ATTACK_COOLDOWN := 1.0
 const MOVEMENT_SPEED := 2.4
 const UNIT_ATTACK_RANGE := 0.9
 const BASE_ATTACK_RANGE := 1.8
+const DEFAULT_BOUNDS := Rect2(-15.0, -9.0, 30.0, 18.0)
 const DEFAULT_AGGRO_RADIUS := 4.0
 const BASE_FOOTPRINT := Vector2(1.5, 1.5)
 const BARRACKS_FOOTPRINT := Vector2(1.41, 0.91)
@@ -139,7 +140,7 @@ var _outcome := Outcome.IN_PROGRESS
 
 
 func _init(player_base: Vector2, cpu_base: Vector2, detection_radius := DEFAULT_AGGRO_RADIUS,
-		bounds := TerritoryLayout.BOUNDS, faction_stats: FactionStats = null) -> void:
+		bounds := DEFAULT_BOUNDS, faction_stats: FactionStats = null) -> void:
 	stats = faction_stats if faction_stats != null else FactionStats.new()
 	aggro_radius = detection_radius
 	navigation = BattleNavigation.new(bounds)

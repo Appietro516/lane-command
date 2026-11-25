@@ -1,6 +1,6 @@
 extends SceneTree
 
-const MATCH_SCENE := preload("res://main.tscn")
+const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const ENERGY := MatchEconomy.ENERGY
@@ -118,7 +118,7 @@ func _test_income_sources() -> void:
 
 func _test_match_controls() -> void:
 	root.size = Vector2i(1280, 800)
-	var match_scene := MATCH_SCENE.instantiate()
+	var match_scene := MATCH_FIXTURE.instantiate()
 	root.add_child(match_scene)
 	match_scene.set_process(false)
 	# Let the nested containers finish layout before sending viewport clicks.
@@ -222,7 +222,7 @@ func _test_match_controls() -> void:
 
 
 func _test_claimed_placement() -> void:
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	root.add_child(scene)
 	scene.set_process(false)
 	await process_frame
@@ -260,7 +260,7 @@ func _test_claimed_placement() -> void:
 
 
 func _test_producers() -> void:
-	var scene := MATCH_SCENE.instantiate()
+	var scene := MATCH_FIXTURE.instantiate()
 	root.add_child(scene)
 	scene.set_process(false)
 	await process_frame
@@ -421,7 +421,7 @@ func _click_at(position: Vector2) -> void:
 
 
 func _test_cpu_purchases() -> void:
-	var match_scene := MATCH_SCENE.instantiate()
+	var match_scene := MATCH_FIXTURE.instantiate()
 	root.add_child(match_scene)
 	match_scene.set_process(false)
 	var cpu_buildings := match_scene.get_node("Buildings/CPU")
@@ -452,7 +452,7 @@ func _test_cpu_purchases() -> void:
 	match_scene.free()
 
 	# Keep both bases defended while checking the CPU's later economy decisions.
-	match_scene = MATCH_SCENE.instantiate()
+	match_scene = MATCH_FIXTURE.instantiate()
 	root.add_child(match_scene)
 	match_scene.set_process(false)
 	match_scene._process(2.0)
@@ -485,7 +485,7 @@ func _test_cpu_purchases() -> void:
 
 
 func _test_symmetric_production() -> void:
-	var match_scene := MATCH_SCENE.instantiate()
+	var match_scene := MATCH_FIXTURE.instantiate()
 	root.add_child(match_scene)
 	match_scene.set_process(false)
 	var units := match_scene.get_node("Units")
