@@ -129,6 +129,7 @@ var _barracks_by_region: Dictionary[StringName, Array] = {}
 var _barracks_by_view: Dictionary[Node3D, PlacedBarracks] = {}
 var _selected_barracks: PlacedBarracks
 var _selected_resource: StringName
+var _income_details: Dictionary[StringName, String] = {}
 var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
@@ -383,7 +384,11 @@ func restart_match() -> void:
 		_regions_by_id[region_id].region_owner = _initial_owners[region_id]
 	_select_region(&"")
 
+	if faction_stats != null:
+		faction_stats.stat_changed.disconnect(_invalidate_income_details)
 	faction_stats = FactionStats.new()
+	_income_details.clear()
+	faction_stats.stat_changed.connect(_invalidate_income_details)
 	for landmark in _landmarks.values():
 		faction_stats.set_modifier(landmark.source_id, _initial_owners[landmark.region_id],
 			landmark.stat, landmark.magnitude, &"legendary", landmark.display_name,
@@ -1387,12 +1392,18 @@ func _refresh_resource_readouts() -> void:
 		var stockpile := readout.get_node(^"Stockpile") as Label
 		var rate := readout.get_node(^"Rate") as Label
 		stockpile.text = "%s %d" % [resource_label, floori(economy.stockpile(PLAYER, resource_id))]
-		var income := economy.income_stat(PLAYER, resource_id)
-		rate.text = _stat_amount(income.total, "/s")
-		var details := _breakdown_text(resource_label + " income", income, "/s", true)
-		readout.tooltip_text = details
+		if not _income_details.has(resource_id):
+			var income := economy.income_stat(PLAYER, resource_id)
+			rate.text = _stat_amount(income.total, "/s")
+			_income_details[resource_id] = _breakdown_text(resource_label + " income", income, "/s", true)
+			readout.tooltip_text = _income_details[resource_id]
 		if resource_id == _selected_resource:
-			_set_breakdown_text(_income_source_text, _income_source_scroll, details, 235.0)
+			_set_breakdown_text(_income_source_text, _income_source_scroll,
+				_income_details[resource_id], 235.0)
+
+
+func _invalidate_income_details(stat: StringName) -> void:
+	_income_details.erase(stat)
 
 
 func _set_breakdown_text(label: Label, scroll: ScrollContainer, details: String, height_limit: float) -> void:

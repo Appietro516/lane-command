@@ -18,6 +18,7 @@ func _run() -> void:
 	_test_duel_and_cleanup()
 	_test_target_priority(PLAYER, CPU)
 	_test_target_priority(CPU, PLAYER)
+	_test_targeting_across_combat_cells()
 	_test_base_destruction(PLAYER, CPU)
 	_test_base_destruction(CPU, PLAYER)
 	_test_orders_and_defense()
@@ -133,6 +134,33 @@ func _test_target_priority(attacker_side: MatchRegion.Owner, defender_side: Matc
 		"Reducing detection below the enemy distance restores strategic advance.")
 
 
+func _test_targeting_across_combat_cells() -> void:
+	var economy := MatchEconomy.new()
+	var battle := _with_barracks([PLAYER, CPU, CPU])
+	battle.advance(3.5, economy)
+	var units := battle.active_units()
+	if units.size() != 3:
+		_check(false, "Three units must spawn for the combat cell check.")
+		return
+	var attacker := units[0]
+	var earlier := units[1]
+	var later := units[2]
+	attacker.position = Vector2(-4.0, -1.0)
+	earlier.position = Vector2(0.0, -1.0)
+	later.position = Vector2(-8.0, -1.0)
+	# A larger snapshot uses the grid. The later ID is in the first cell queried.
+	for id in range(4, 24):
+		battle._units[id] = MatchBattle.Unit.new(id, PLAYER, Vector2(-10.0, 6.0))
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == earlier.id,
+		"At equal distance on the detection boundary, the first spawn wins regardless of cell.")
+	earlier.position = Vector2(8.0, -1.0)
+	attacker.position = Vector2(-4.0, -1.0)
+	later.position = Vector2(-8.0, -1.0)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == later.id, "Each step indexes the units' current positions.")
+
+
 func _test_base_destruction(attacker_side: MatchRegion.Owner, defender_side: MatchRegion.Owner) -> void:
 	var economy := MatchEconomy.new()
 	var battle := _with_barracks([attacker_side])
@@ -242,7 +270,8 @@ func _test_routes() -> void:
 
 	unit.position = Vector2(-4.0, -5.0)
 	_check(battle.issue_move(unit.id, destination), "The detour remains available before the wall.")
-	battle.navigation.add_obstacle(Rect2(1.5, -9.0, 1.0, 18.0))
+	var detour := unit.waypoints.duplicate()
+	var blocker := battle.navigation.add_obstacle(Rect2(1.5, -9.0, 1.0, 18.0))
 	battle.advance(MatchBattle.STEP, economy)
 	_check(unit.order == MatchBattle.Order.MOVE and unit.waypoints.is_empty()
 		and not battle.issue_move(unit.id, destination),
@@ -250,6 +279,9 @@ func _test_routes() -> void:
 	var previous := unit.position
 	battle.advance(0.25, economy)
 	_check(unit.position == previous, "A unit with no route waits without crossing the blocker.")
+	battle.navigation.remove_obstacle(blocker)
+	_check(battle.navigation.path(previous, destination) == detour,
+		"Removing the blocker restores the same detour between previously queried endpoints.")
 	var replacement := Vector2(-5.0, -5.0)
 	_check(battle.issue_move(unit.id, replacement), "A reachable order replaces a stalled route.")
 	battle.advance(1.0, economy)

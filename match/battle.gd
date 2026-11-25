@@ -25,6 +25,7 @@ const UNIT_ATTACK_RANGE := 0.9
 const BASE_ATTACK_RANGE := 1.8
 const DEFAULT_BOUNDS := Rect2(-15.0, -9.0, 30.0, 18.0)
 const DEFAULT_AGGRO_RADIUS := 4.0
+const COMBAT_CELL_SIZE := 4.0
 const BASE_FOOTPRINT := Vector2(1.5, 1.5)
 const BARRACKS_FOOTPRINT := Vector2(1.41, 0.91)
 const BARRACKS_SPAWN_CLEARANCE := BARRACKS_FOOTPRINT + Vector2.ONE * 0.24
@@ -430,14 +431,21 @@ func _spawn_position(building: Vector2, direction: Vector2) -> Vector2:
 func _step_combat() -> void:
 	# Plan against the same positions before either side moves or takes damage.
 	var units := active_units()
+	var cells: Dictionary[Vector3i, Array] = {}
+	for unit in units:
+		var cell := Vector2i((unit.position / COMBAT_CELL_SIZE).floor())
+		var occupants: Array = cells.get_or_add(Vector3i(cell.x, cell.y, unit.side), [])
+		occupants.append(unit)
+
 	var attacks: Array[Unit] = []
 	for unit in units:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
-		unit.can_attack_target = _plan_turn(unit, units)
+		var nearby := _nearby_enemies(units, cells, unit.position, unit.side, absf(aggro_radius))
+		unit.can_attack_target = _plan_turn(unit, nearby)
 		if unit.can_attack_target and unit.cooldown <= TIME_EPSILON:
 			attacks.append(unit)
 
-	_fire_fortifications(units)
+	_fire_fortifications(units, cells)
 	for unit in units:
 		_move(unit)
 
@@ -500,7 +508,27 @@ func _step_combat() -> void:
 		base_destroyed.emit(CPU)
 
 
-func _fire_fortifications(units: Array[Unit]) -> void:
+func _nearby_enemies(units: Array[Unit], cells: Dictionary[Vector3i, Array], position: Vector2,
+		side: MatchRegion.Owner, radius: float) -> Array[Unit]:
+	# For small forces or very wide queries, scanning the snapshot is cheaper.
+	var cells_per_axis := 2.0 * radius / COMBAT_CELL_SIZE + 1.0
+	if (not is_finite(radius) or side == MatchRegion.Owner.NEUTRAL
+			or cells_per_axis * cells_per_axis >= units.size()):
+		return units
+	var reach := Vector2.ONE * radius
+	var low := Vector2i(((position - reach) / COMBAT_CELL_SIZE).floor())
+	var high := Vector2i(((position + reach) / COMBAT_CELL_SIZE).floor())
+	var enemy := _opponent(side)
+	var nearby: Array[Unit] = []
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var cell := Vector3i(x, y, enemy)
+			if cells.has(cell):
+				nearby.append_array(cells[cell])
+	return nearby
+
+
+func _fire_fortifications(units: Array[Unit], cells: Dictionary[Vector3i, Array]) -> void:
 	for fort: Fortification in _fortifications.values():
 		if not fort.active or fort.profile.get("range", 0.0) <= 0.0:
 			continue
@@ -511,7 +539,8 @@ func _fire_fortifications(units: Array[Unit]) -> void:
 		var target: Unit
 		var range_squared := float(fort.profile.range) ** 2
 		var nearest := range_squared
-		for unit in units:
+		var nearby := _nearby_enemies(units, cells, fort.position, fort.side, fort.profile.range)
+		for unit in nearby:
 			var distance := fort.position.distance_squared_to(unit.position)
 			if unit.side == fort.side or unit.hp <= 0.0 or distance > nearest:
 				continue
@@ -528,7 +557,7 @@ func _fire_fortifications(units: Array[Unit]) -> void:
 		target.hp -= fort.profile.damage
 		if fort.profile.splash > 0.0:
 			var radius_squared := float(fort.profile.splash) ** 2
-			for unit in units:
+			for unit in nearby:
 				if unit != target and unit.side != fort.side and unit.hp > 0.0 \
 						and fort.position.distance_squared_to(unit.position) <= range_squared \
 						and target.position.distance_squared_to(unit.position) <= radius_squared:
@@ -621,7 +650,8 @@ func _plan_local_engagement(unit: Unit, units: Array[Unit]) -> bool:
 		var distance := unit.position.distance_squared_to(opponent.position)
 		var priority := opponent.hp if target_priority == TargetPriority.LOWEST_HP else 0.0
 		if distance > detection_squared or priority > best_priority \
-				or (priority == best_priority and distance >= nearest_distance):
+				or (priority == best_priority and (distance > nearest_distance \
+					or (distance == nearest_distance and nearest != null and opponent.id > nearest.id))):
 			continue
 		if unit.order == Order.HOLD \
 				and opponent.position.distance_squared_to(unit.ordered_destination) > detection_squared:
