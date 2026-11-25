@@ -1,0 +1,42 @@
+[gd_scene format=3]
+
+[sub_resource type="BoxMesh" id="Chassis"]
+size = Vector3(0.58, 0.26, 0.82)
+
+[sub_resource type="StandardMaterial3D" id="TrackMaterial"]
+albedo_color = Color(0.09, 0.12, 0.14, 1)
+
+[sub_resource type="BoxMesh" id="Track"]
+material = SubResource("TrackMaterial")
+size = Vector3(0.20, 0.23, 0.94)
+
+[sub_resource type="StandardMaterial3D" id="SensorMaterial"]
+albedo_color = Color(0.94, 0.84, 0.58, 1)
+
+[sub_resource type="SphereMesh" id="Sensor"]
+material = SubResource("SensorMaterial")
+radius = 0.18
+height = 0.32
+
+[sub_resource type="BoxMesh" id="OutlineMesh"]
+material = SubResource("TrackMaterial")
+size = Vector3(0.77, 0.08, 0.94)
+
+[node name="Scout" type="MeshInstance3D"]
+mesh = SubResource("Chassis")
+
+[node name="LeftTrack" type="MeshInstance3D" parent="."]
+position = Vector3(-0.29, -0.01, 0)
+mesh = SubResource("Track")
+
+[node name="RightTrack" type="MeshInstance3D" parent="."]
+position = Vector3(0.29, -0.01, 0)
+mesh = SubResource("Track")
+
+[node name="Sensor" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.20, 0.09)
+mesh = SubResource("Sensor")
+
+[node name="Outline" type="MeshInstance3D" parent="."]
+position = Vector3(0, -0.11, 0)
+mesh = SubResource("OutlineMesh")

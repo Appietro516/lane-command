@@ -18,7 +18,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_test_deployment_and_buffs()
-	for type_id: StringName in Catalog.DEFINITIONS:
+	for type_id: StringName in Catalog.COMBAT_TYPES:
 		_test_attack_range_and_cooldown(type_id)
 		_test_structures(type_id)
 		_test_orders_and_wall(type_id)
@@ -55,7 +55,7 @@ func _test_deployment_and_buffs() -> void:
 			and battle.spawn_unit(side, Vector2.ZERO, &"unknown", economy) == null
 			and economy.stockpile(side, MatchEconomy.FOOD) == stock,
 			"Invalid site and type leave Food untouched for side %d." % side)
-		for type_id: StringName in Catalog.DEFINITIONS:
+		for type_id: StringName in Catalog.COMBAT_TYPES:
 			var profile: Dictionary = Catalog.DEFINITIONS[type_id]
 			var unit := battle.spawn_unit(side, Vector2.ZERO, type_id, economy)
 			stock -= profile.food
@@ -196,7 +196,7 @@ func _test_delta_partition() -> void:
 	var split := MatchBattle.new(PLAYER_BASE, CPU_BASE)
 	for battle in [whole, split]:
 		var lane := -5.0
-		for type_id: StringName in Catalog.DEFINITIONS:
+		for type_id: StringName in Catalog.COMBAT_TYPES:
 			battle.spawn_unit(PLAYER, Vector2(-4.0, lane), type_id)
 			battle.spawn_unit(CPU, Vector2(4.0, lane), type_id)
 			lane += 5.0
@@ -224,7 +224,7 @@ func _test_selection_and_restart() -> void:
 	var camera := root.get_camera_3d()
 	var battle: MatchBattle = scene._battle
 	var x := -4.0
-	for type_id: StringName in Catalog.DEFINITIONS:
+	for type_id: StringName in Catalog.COMBAT_TYPES:
 		var profile: Dictionary = Catalog.DEFINITIONS[type_id]
 		var unit := battle.spawn_unit(PLAYER, Vector2(x, -1.0), type_id)
 		var view := scene.get_node("Units").get_child(-1) as MeshInstance3D
@@ -242,11 +242,11 @@ func _test_selection_and_restart() -> void:
 		x += 3.0
 	scene.restart_match()
 	scene.set_process(false)
-	_check(scene.selected_unit() == null and scene.get_node("Units").get_child_count() == 0
-		and not scene.get_node("%UnitInspection").visible and scene._battle.active_units().is_empty(),
+	_check(scene.selected_unit() == null and scene.get_node("Units").get_child_count() == 4
+		and not scene.get_node("%UnitInspection").visible and scene._expeditions.available(PLAYER).size() == 2 and scene._expeditions.available(CPU).size() == 2,
 		"Restart clears typed units, views and inspection.")
 	var first: MatchBattle.Unit = scene._battle.spawn_unit(CPU, Vector2.ZERO, Catalog.HEAVY)
-	_check(first != null and first.id == 1 and first.hp == first.definition.hp,
+	_check(first != null and first.id == 5 and first.hp == first.definition.hp,
 		"Restart resets deployment IDs and HP.")
 	scene.free()
 

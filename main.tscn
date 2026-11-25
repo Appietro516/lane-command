@@ -97,6 +97,35 @@ theme_override_font_sizes/font_size = 14
 text = "WASD / arrows to pan
 Middle drag · scroll zoom"
 
+[node name="ClaimMarkers" type="Control" parent="HUD"]
+unique_name_in_owner = true
+mouse_filter = 2
+
+[node name="ScoutRoster" type="PanelContainer" parent="HUD"]
+offset_left = 24.0
+offset_top = 98.0
+offset_right = 265.0
+offset_bottom = 98.0
+theme_override_styles/panel = SubResource("StyleBox_hud")
+
+[node name="Readouts" type="VBoxContainer" parent="HUD/ScoutRoster"]
+layout_mode = 2
+
+[node name="ScoutCount" type="Label" parent="HUD/ScoutRoster/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ScoutSlots" type="HBoxContainer" parent="HUD/ScoutRoster/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ScoutNotice" type="Label" parent="HUD/ScoutRoster/Readouts"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+autowrap_mode = 3
+
 [node name="MatchPanel" type="PanelContainer" parent="HUD"]
 anchor_left = 0.5
 anchor_right = 0.5
@@ -198,6 +227,20 @@ theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
 theme_override_font_sizes/font_size = 14
 text = "Right-click ground to move"
 
+[node name="UnitClaimProgress" type="ProgressBar" parent="HUD/UnitInspection/Readouts"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+show_percentage = false
+custom_minimum_size = Vector2(0, 8)
+
+[node name="Recall" type="Button" parent="HUD/UnitInspection/Readouts"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+text = "Recall Scout"
+tooltip_text = "The expedition ends and its Energy remains spent."
+
 [node name="StatSources" type="Button" parent="HUD/UnitInspection/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -262,11 +305,22 @@ theme_override_font_sizes/font_size = 18
 [node name="RegionDivider" type="VSeparator" parent="HUD/EconomyPanel/ReadoutsAndControls"]
 layout_mode = 2
 
-[node name="SelectedRegion" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+[node name="RegionReadouts" type="VBoxContainer" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+layout_mode = 2
+size_flags_vertical = 4
+
+[node name="SelectedRegion" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(152, 0)
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
+
+[node name="RegionClaimProgress" type="ProgressBar" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+show_percentage = false
+custom_minimum_size = Vector2(0, 8)
 
 [node name="Claim" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls"]
 unique_name_in_owner = true

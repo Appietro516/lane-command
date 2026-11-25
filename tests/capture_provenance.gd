@@ -1,6 +1,8 @@
 extends RefCounted
 ## Map seed 22 puts an Energy landmark on the player's frontier.
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const PLAYER := MatchRegion.Owner.PLAYER
 const ENERGY := FactionStats.ENERGY
 
@@ -19,7 +21,7 @@ static func prepare(scene: Node) -> Dictionary:
 	scene.economy.advance(55.0)
 	var landmark: LegendaryLandmark
 	for candidate: LegendaryLandmark in scene._landmarks.values():
-		if candidate.stat == ENERGY and scene.try_claim(PLAYER, candidate.region_id):
+		if candidate.stat == ENERGY and ScoutFixture.claim(scene, PLAYER, candidate.region_id):
 			landmark = candidate
 			break
 	if landmark == null:
@@ -40,7 +42,7 @@ static func prepare(scene: Node) -> Dictionary:
 	scene.faction_stats.set_modifier(&"veteran", PLAYER, FactionStats.BUILDING_MAX_HP, 5.0,
 		&"upgrade", "Veteran Training")
 	scene._battle.advance(scene.economy.production_interval(PLAYER), scene.economy)
-	return {"unit": scene._battle.get_unit(1), "landmark": landmark, "frontier": frontier}
+	return {"unit": ScoutFixture.combat_units(scene._battle).front(), "landmark": landmark, "frontier": frontier}
 
 
 static func _place(scene: Node, region: MatchRegion, kind: StringName) -> bool:

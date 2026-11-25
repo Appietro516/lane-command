@@ -1,5 +1,7 @@
 extends RefCounted
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 
 func setup(scene: Node) -> void:
 	scene.set_process(false)
@@ -10,8 +12,8 @@ func setup(scene: Node) -> void:
 
 	var viewport := scene.get_viewport()
 	var camera := viewport.get_camera_3d()
-	var units := scene.get_node("Units")
-	var player_unit := units.get_child(3) as Node3D
+	var combat_units := ScoutFixture.combat_units(scene._battle)
+	var player_unit := scene._unit_views[combat_units.back().id] as Node3D
 	_click(viewport, camera.unproject_position(player_unit.global_position), MOUSE_BUTTON_LEFT)
 	_click(viewport, camera.unproject_position(Vector3(-5.0, 0, -5.0)), MOUSE_BUTTON_RIGHT)
 	assert(scene.selected_unit() != null)

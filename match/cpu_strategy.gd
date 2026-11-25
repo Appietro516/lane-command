@@ -2,6 +2,7 @@ extends RefCounted
 ## One construction, claim, or upgrade per decision. All mutations go through match APIs.
 
 const Rules := preload("res://match/fortification_rules.gd")
+const ScoutExpeditions := preload("res://match/scout_expeditions.gd")
 const CPU := MatchRegion.Owner.CPU
 const NEUTRAL := MatchRegion.Owner.NEUTRAL
 const ENERGY := MatchEconomy.ENERGY
@@ -99,6 +100,8 @@ func decide(scene: Node3D) -> void:
 	var enemies := {}
 	var army := 0
 	for unit in units:
+		if unit.type_id == UnitCatalog.SCOUT:
+			continue
 		var counts := allies if unit.side == CPU else enemies
 		counts[unit.type_id] = counts.get(unit.type_id, 0) + 1
 		if unit.side == CPU:
@@ -107,6 +110,10 @@ func decide(scene: Node3D) -> void:
 	var under_pressure := front != null and front.score > 0.0
 
 	var claims: int = owned.size() - scene._layout.cpu_start_ids.size()
+	var expeditions: ScoutExpeditions = scene._expeditions
+	for expedition in expeditions.assignments.values():
+		if expedition.side == CPU:
+			claims += 1
 	var dormant := _dormant_buildings(scene, frontiers)
 	var claim_targets := _claim_targets(scene, frontiers, units, base, enemy_base, dormant)
 	# Recover dormant investments even if the ordinary expansion budget has been reached.
@@ -155,6 +162,11 @@ func decide(scene: Node3D) -> void:
 		production_goal += 1
 	var can_expand_production: bool = production.total < mini(production_goal, scene.cpu_production_limit)
 
+	if not claim_targets.is_empty():
+		for index in ScoutExpeditions.CAPACITY:
+			if expeditions.replace(CPU, index):
+				return
+
 	var allow_claim: bool = claims < scene.cpu_expansion_limit and (army > 0 or production.active == 0)
 	var next_cost: Dictionary = {}
 	if not options.is_empty():
@@ -162,7 +174,7 @@ func decide(scene: Node3D) -> void:
 	var projected := {}
 	for resource: StringName in [ENERGY, MATERIALS]:
 		var defenses: int = Rules.PROFILES[Rules.NEST].cost[resource] + Rules.PROFILES[Rules.MORTAR].cost[resource]
-		var expansion: int = MatchEconomy.CLAIM_COST.get(resource, 0) if allow_claim else 0
+		var expansion: int = expeditions.claim_cost.get(resource, 0) if allow_claim else 0
 		projected[resource] = next_cost.get(resource, 0) + maxi(defenses, expansion)
 
 	# Invest when income is below the construction budget and savings cannot carry it.
@@ -348,6 +360,8 @@ func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle
 			continue
 		var nearest_distance := INF
 		for unit in units:
+			if unit.type_id == UnitCatalog.SCOUT:
+				continue
 			var distance := hub.hub.distance_squared_to(unit.position)
 			if distance > radius_squared:
 				continue
@@ -505,11 +519,16 @@ func _want_claim(scene: Node3D, region_id: StringName, now: float) -> bool:
 	var key := "claim/%s" % region_id
 	if now < _retry_at.get(key, 0.0):
 		return false
-	if not scene.economy.cost_block_reason(CPU, MatchEconomy.CLAIM_COST).is_empty():
+	var expeditions: ScoutExpeditions = scene._expeditions
+	var scouts := expeditions.available(CPU)
+	if scouts.is_empty() or expeditions.assignments.has(region_id):
+		return false
+	if not scene.economy.cost_block_reason(CPU, expeditions.claim_cost).is_empty():
 		return true
-	if scene.try_claim(CPU, region_id):
-		_next_claim = now + CLAIM_COOLDOWN
-		return true
+	for scout in scouts:
+		if scene.dispatch_scout(CPU, scout.unit_id, region_id):
+			_next_claim = now + CLAIM_COOLDOWN
+			return true
 	_retry_at[key] = now + scene.cpu_placement_retry
 	return false
 

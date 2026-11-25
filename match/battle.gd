@@ -3,6 +3,7 @@ extends RefCounted
 
 signal unit_produced(unit: Unit)
 signal unit_removed(unit_id: int)
+signal step_finished
 signal base_destroyed(side: MatchRegion.Owner)
 signal outpost_destroyed(outpost: Outpost)
 signal fortification_destroyed(fortification: Fortification)
@@ -69,6 +70,7 @@ class Unit:
 	var hp: float
 	var target := NO_TARGET
 	var can_attack_target := false
+	var scout_committed := false
 	var cooldown := 0.0
 	var attack_interval: float
 
@@ -329,6 +331,13 @@ func outpost_site_clear(position: Vector2) -> bool:
 ## Invalid spawns leave Food and unit IDs untouched.
 func spawn_unit(side: MatchRegion.Owner, position: Vector2,
 		type_id := UnitCatalog.INFANTRY, economy: MatchEconomy = null) -> Unit:
+	if type_id == UnitCatalog.SCOUT:
+		return null
+	return _spawn_unit(side, position, type_id, economy)
+
+
+func _spawn_unit(side: MatchRegion.Owner, position: Vector2, type_id: StringName,
+		economy: MatchEconomy = null) -> Unit:
 	var definition: Dictionary = UnitCatalog.DEFINITIONS.get(type_id, {})
 	if is_finished() or not _bases.has(side) or definition.is_empty():
 		return null
@@ -351,19 +360,23 @@ func get_unit(id: int) -> Unit:
 
 func issue_move(id: int, destination: Vector2) -> bool:
 	var unit := get_unit(id)
-	if is_finished() or unit == null or unit.side != PLAYER:
+	if is_finished() or unit == null or unit.side != PLAYER or unit.scout_committed:
 		return false
 	var routes := _unit_navigation(unit)
 	var route := routes.path(unit.position, destination)
-	if route.is_empty() and (not routes.is_passable(destination)
+	if route.is_empty() and (unit.type_id == UnitCatalog.SCOUT or not routes.is_passable(destination)
 			or _find_wall_approach(unit).is_empty()):
 		return false
+	_order_move(unit, destination, route)
+	return true
+
+
+func _order_move(unit: Unit, destination: Vector2, route: PackedVector2Array) -> void:
 	unit.order = Order.MOVE
 	unit.ordered_destination = destination
 	unit.target = NO_TARGET
 	unit.can_attack_target = false
 	_set_route(unit, destination, route)
-	return true
 
 
 func active_units() -> Array[Unit]:
@@ -455,6 +468,7 @@ func advance(delta: float, economy: MatchEconomy, accrue_income := false) -> voi
 		_step_combat()
 		if not is_finished():
 			_advance_production(STEP, economy)
+		step_finished.emit()
 
 
 func _advance_production(delta: float, economy: MatchEconomy) -> void:
@@ -503,6 +517,10 @@ func _step_combat() -> void:
 	var attacks: Array[Unit] = []
 	for unit in units:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
+		if unit.type_id == UnitCatalog.SCOUT:
+			if unit.order == Order.MOVE:
+				_route_to(unit, unit.ordered_destination)
+			continue
 		var nearby := _nearby_enemies(units, cells, unit.position, unit.side, absf(aggro_radius))
 		unit.can_attack_target = _plan_turn(unit, nearby)
 		if unit.can_attack_target and unit.cooldown <= TIME_EPSILON:

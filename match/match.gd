@@ -65,6 +65,9 @@ const INACTIVE_ACCENT := preload("res://match/inactive_accent.tres")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const CpuStrategy := preload("res://match/cpu_strategy.gd")
+const ScoutExpeditions := preload("res://match/scout_expeditions.gd")
+
+signal claim_completed(faction: MatchRegion.Owner, region: StringName, scout_id: int)
 const ROUTE_HEIGHT := 0.12
 const ROUTE_HALF_WIDTH := 0.045
 const ROUTE_TIP_RADIUS := 0.18
@@ -121,6 +124,11 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 @export_range(0.0, 5.0, 0.1) var cpu_diversity_weight := 0.8
 @export_range(0.0, 5.0, 0.1) var cpu_counter_weight := 2.8
 @export_range(0.0, 1.0, 0.05) var cpu_counter_gap := 0.15
+@export_group("Scout Expeditions")
+@export_range(1, 500) var claim_energy: int = MatchEconomy.CLAIM_COST[MatchEconomy.ENERGY]
+@export_range(0.1, 120.0, 0.1) var claim_duration := 20.0
+@export_range(1, 500) var scout_replacement_energy := 35
+@export_range(1.0, 120.0, 0.5) var scout_replacement_delay := 15.0
 @export_group("")
 @export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
 @export var unit_target_priority := MatchBattle.TargetPriority.NEAREST
@@ -131,6 +139,9 @@ var active_map_seed: int:
 		return _layout.active_seed if _layout != null else map_seed
 
 var _battle: MatchBattle
+var _expeditions: ScoutExpeditions
+var _claim_markers: Dictionary[StringName, PanelContainer] = {}
+var _scout_buttons: Array[Button] = []
 var _layout: TerritoryLayout
 var _regions_by_id: Dictionary[StringName, MatchRegion] = {}
 var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
@@ -191,6 +202,11 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _placement_label: Label = %PlacementStatus
 @onready var _upgrade_button: Button = %Upgrade
 @onready var _claim_button: Button = %Claim
+@onready var _scout_count: Label = %ScoutCount
+@onready var _scout_notice: Label = %ScoutNotice
+@onready var _recall_button: Button = %Recall
+@onready var _unit_claim_progress: ProgressBar = %UnitClaimProgress
+@onready var _region_claim_progress: ProgressBar = %RegionClaimProgress
 @onready var _region_label: Label = %SelectedRegion
 @onready var _landmark_panel: PanelContainer = %LandmarkInspection
 @onready var _landmark_details: Label = %LandmarkDetails
@@ -246,8 +262,16 @@ func _ready() -> void:
 	_tracer_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tracer_material.albedo_color = Color("#fff0b8")
 	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
-	_claim_button.text = "Claim\n%s" % MatchEconomy.cost_text(MatchEconomy.CLAIM_COST)
-	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
+	_claim_button.pressed.connect(_dispatch_selected_scout)
+	_recall_button.pressed.connect(func() -> void:
+		if _expeditions.recall(PLAYER, _selected_unit_id):
+			_refresh_hud())
+	for index in ScoutExpeditions.CAPACITY:
+		var button := Button.new()
+		button.pressed.connect(_use_scout_slot.bind(index))
+		%ScoutSlots.add_child(button)
+		_scout_buttons.append(button)
+	$HUD.move_child(%ClaimMarkers, 0)
 	_restart_button.pressed.connect(restart_match)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
 	restart_match()
@@ -366,6 +390,7 @@ func _add_starting_base(region: MatchRegion) -> void:
 func restart_match() -> void:
 	_camera.reset_view(true)
 	if _battle != null:
+		_battle.step_finished.disconnect(_expeditions._step)
 		_battle.unit_produced.disconnect(_spawn_unit)
 		_battle.unit_removed.disconnect(_remove_unit)
 		_battle.base_destroyed.disconnect(_hide_base)
@@ -420,6 +445,16 @@ func restart_match() -> void:
 	_battle.outpost_destroyed.connect(_lose_region)
 	_battle.fortification_destroyed.connect(_remove_fortification)
 	_battle.fortification_fired.connect(_show_fortification_shot)
+	_expeditions = ScoutExpeditions.new(_battle, economy, _regions_by_id, {
+		"claim_energy": claim_energy,
+		"duration": claim_duration,
+		"replacement_energy": scout_replacement_energy,
+		"replacement_delay": scout_replacement_delay,
+	})
+	_expeditions.expedition_completed.connect(_complete_claim)
+	_expeditions.expedition_failed.connect(_show_expedition_notice)
+	_claim_button.text = "Claim\n%s" % MatchEconomy.cost_text(_expeditions.claim_cost)
+	_scout_notice.hide()
 	_refresh_legendary_summary()
 	_refresh_hud()
 	%BuildScroll.custom_minimum_size.y = minf(_build_list.get_combined_minimum_size().y, 550.0)
@@ -769,24 +804,32 @@ func try_upgrade(side: MatchRegion.Owner) -> bool:
 	return true
 
 
-func try_claim(side: MatchRegion.Owner, region_id: StringName) -> bool:
-	if not _claim_block_reason(region_id, side).is_empty():
-		return false
-	var region := get_region(region_id)
-	var point := region.interior_point(_battle.outpost_site_clear)
-	if not economy.try_spend(side, MatchEconomy.CLAIM_COST):
-		return false
+func dispatch_scout(side: MatchRegion.Owner, scout_id: int, region_id: StringName) -> bool:
+	return _expeditions.dispatch(side, scout_id, region_id).is_empty()
 
-	_set_region_owner(region_id, side)
+
+func _dispatch_selected_scout() -> void:
+	var reason := _expeditions.dispatch(PLAYER, _selected_unit_id, _selected_region_id)
+	if not reason.is_empty():
+		_show_expedition_notice(PLAYER, reason)
+	else:
+		_scout_notice.hide()
+	_refresh_hud()
+
+
+func _complete_claim(side: MatchRegion.Owner, region_id: StringName, scout_id: int,
+		point: Vector2) -> void:
 	var outpost := _battle.add_outpost(region_id, side, point, maxi(1, outpost_hp))
 	_outposts_by_region[region_id] = outpost
 	var view := OUTPOST.instantiate() as Node3D
 	view.get_node("Beacon").material_override = FACTION_ACCENTS[side]
-	region.add_child(view)
+	get_region(region_id).add_child(view)
 	view.global_position = _regions.to_global(Vector3(point.x, 0.0, point.y))
 	_outpost_views[region_id] = view
+	_set_region_owner(region_id, side)
+	outpost.hp = outpost.max_hp
 	_refresh_claim_control()
-	return true
+	claim_completed.emit(side, region_id, scout_id)
 
 
 func _lose_region(outpost: MatchBattle.Outpost) -> void:
@@ -854,29 +897,6 @@ func selected_unit() -> MatchBattle.Unit:
 func _map_position(world_position: Vector3) -> Vector2:
 	var local := _regions.to_local(world_position)
 	return Vector2(local.x, local.z)
-
-
-func _claim_block_reason(region_id: StringName, side := PLAYER) -> String:
-	var region := get_region(region_id)
-	if region == null:
-		return "Select a region"
-	if region.region_owner == PLAYER:
-		return "Player-owned"
-	if region.region_owner == CPU:
-		return "CPU-owned"
-	if _battle.is_finished():
-		return "Match ended"
-	if not _buildings.has(side):
-		return "Claim unavailable"
-	for neighbor_id in region.neighbor_ids:
-		if owns_region(side, neighbor_id):
-			var reason := economy.cost_block_reason(side, MatchEconomy.CLAIM_COST)
-			if not reason.is_empty():
-				return reason
-			if not region.interior_point(_battle.outpost_site_clear).is_finite():
-				return "No room for an outpost"
-			return ""
-	return "Not adjacent"
 
 
 func _input(event: InputEvent) -> void:
@@ -969,13 +989,19 @@ func _pick_map(pointer: Vector2) -> void:
 	if unit != null and not _battle.is_finished():
 		_select_fortification(MatchBattle.NO_TARGET)
 		_select_unit(id)
-		_select_region(&"")
+		if unit.type_id != UnitCatalog.SCOUT:
+			_select_region(&"")
 	else:
-		_select_unit(MatchBattle.NO_TARGET)
 		var building := _pick_building(pointer)
-		_select_fortification(_fortification_ids.get(building, MatchBattle.NO_TARGET))
 		var point: Variant = _ground_point(pointer) if building == null else building.global_position
-		_select_region(region_at_world_position(point) if point != null else &"")
+		var region_id := region_at_world_position(point) if point != null else &""
+		var scout := _expeditions.scout_for(_selected_unit_id)
+		var fort_id: int = _fortification_ids.get(building, MatchBattle.NO_TARGET)
+		if scout == null or scout.side != PLAYER or fort_id != MatchBattle.NO_TARGET \
+				or not owns_region(MatchRegion.Owner.NEUTRAL, region_id):
+			_select_unit(MatchBattle.NO_TARGET)
+		_select_fortification(fort_id)
+		_select_region(region_id)
 	_refresh_claim_control()
 
 
@@ -1039,6 +1065,8 @@ func _update_unit_selection() -> void:
 	_unit_selection.visible = unit != null
 	_unit_panel.visible = unit != null
 	_route_mesh.clear_surfaces()
+	_recall_button.hide()
+	_unit_claim_progress.hide()
 	if unit == null:
 		return
 
@@ -1046,6 +1074,12 @@ func _update_unit_selection() -> void:
 	_unit_selection.scale = Vector3.ONE * float(unit.definition.selection_scale)
 	_unit_name.text = "%s %s #%d" % [_side_label(unit.side), unit.definition.label, unit.id]
 	_unit_name.modulate = FACTION_ACCENTS[unit.side].albedo_color.lightened(0.25)
+	var scout := _expeditions.scout_for(unit.id)
+	_stat_sources.visible = scout == null
+	if scout != null:
+		_update_scout_inspection(unit, scout)
+		return
+	_unit_order_hint.text = "Right-click ground to move"
 	var attack := _battle.unit_attack_stat(unit)
 	var health := _battle.unit_health_stat(unit)
 	var speed := _battle.unit_speed_stat(unit)
@@ -1089,6 +1123,7 @@ func _update_fortification_inspection() -> void:
 		return
 	var fort := placed.defense
 	_unit_panel.show()
+	_stat_sources.show()
 	_unit_name.text = "%s %s" % [_side_label(fort.side), fort.profile.label]
 	_unit_name.modulate = FACTION_ACCENTS[fort.side].albedo_color.lightened(0.25)
 	_unit_stats.text = _health_text(fort)
@@ -1184,7 +1219,7 @@ func _hide_ranges() -> void:
 
 func _selected_unit_can_receive_orders() -> bool:
 	var unit := selected_unit()
-	return unit != null and unit.side == PLAYER and not _battle.is_finished()
+	return unit != null and unit.side == PLAYER and not unit.scout_committed and not _battle.is_finished()
 
 
 func _target_label(unit: MatchBattle.Unit) -> String:
@@ -1485,11 +1520,18 @@ func _refresh_hud() -> void:
 		else "Upgrade\n%s" % MatchEconomy.cost_text(MatchEconomy.UPGRADE_COST)
 	)
 	_refresh_claim_control()
+	_refresh_scout_roster()
+	_refresh_claim_markers()
 
 
 func _refresh_claim_control() -> void:
-	var reason := _claim_block_reason(_selected_region_id)
+	var reason := _expeditions.block_reason(PLAYER, _selected_unit_id, _selected_region_id)
 	_claim_button.disabled = not reason.is_empty()
+	_claim_button.tooltip_text = reason
+	var expedition := _expeditions.assignments.get(_selected_region_id) as ScoutExpeditions.Scout
+	_update_claim_progress(_region_claim_progress, expedition)
+	if expedition != null:
+		reason = _expedition_text(expedition)
 	var tooltip := ""
 	if _regions_by_id.has(_selected_region_id):
 		var region := get_region(_selected_region_id)
@@ -1523,3 +1565,117 @@ func _refresh_claim_control() -> void:
 		var is_income := MatchEconomy.RESOURCES.has(landmark.stat)
 		_landmark_details.tooltip_text = _breakdown_text("Landmark contribution", contribution,
 			"/s" if is_income else "", is_income)
+
+
+
+func _use_scout_slot(index: int) -> void:
+	var scout: ScoutExpeditions.Scout = _expeditions.slots[PLAYER][index]
+	if scout.state == ScoutExpeditions.State.DEAD:
+		if not _expeditions.replace(PLAYER, index):
+			_show_expedition_notice(PLAYER, "No clear Scout deployment site")
+			return
+		_scout_notice.hide()
+	_select_fortification(MatchBattle.NO_TARGET)
+	_select_unit(scout.unit_id)
+	if scout.assigned():
+		_select_region(scout.region_id)
+	_refresh_hud()
+
+
+func _show_expedition_notice(side: MatchRegion.Owner, message: String) -> void:
+	if side == PLAYER:
+		_scout_notice.text = message
+		_scout_notice.show()
+
+
+func _refresh_scout_roster() -> void:
+	_scout_count.text = "Scouts %d/%d available" % [
+		_expeditions.available(PLAYER).size(), ScoutExpeditions.CAPACITY]
+	for index in _scout_buttons.size():
+		var scout: ScoutExpeditions.Scout = _expeditions.slots[PLAYER][index]
+		var button := _scout_buttons[index]
+		var state: String = ScoutExpeditions.State.keys()[scout.state].capitalize()
+		button.disabled = _battle.is_finished()
+		button.tooltip_text = "Select Scout"
+		if scout.state == ScoutExpeditions.State.DEAD:
+			var reason := _expeditions.replacement_block_reason(scout)
+			var price := MatchEconomy.cost_text(_expeditions.replacement_cost)
+			var wait := ceili(_expeditions.replacement_wait(scout))
+			state = "Dead · %ds" % wait if wait > 0 else "Dead · %s" % price
+			button.disabled = not reason.is_empty()
+			button.tooltip_text = "Replace Scout · %s" % price if reason.is_empty() else reason
+		button.text = "%d · %s" % [index + 1, state]
+
+
+func _update_scout_inspection(unit: MatchBattle.Unit, scout: ScoutExpeditions.Scout) -> void:
+	var health := _battle.unit_health_stat(unit)
+	_unit_stats.text = "HP  %s / %s · Noncombat\nSpeed  %s units/s" % [
+		_stat_number(unit.hp), _stat_number(health.total), _stat_number(_battle.unit_speed_stat(unit).total)]
+	_unit_intent.text = _expedition_text(scout) + " · " + str(scout.region_id).capitalize() \
+		if scout.assigned() else ScoutExpeditions.State.keys()[scout.state].capitalize()
+	_recall_button.visible = scout.side == PLAYER and scout.assigned() and not _battle.is_finished()
+	_unit_order_hint.visible = _selected_unit_can_receive_orders()
+	_unit_order_hint.text = "Select a neutral region to claim\nRight-click ground to move"
+	_update_claim_progress(_unit_claim_progress, scout)
+	if not unit.waypoints.is_empty():
+		_draw_unit_route(unit)
+
+
+func _expedition_text(scout: ScoutExpeditions.Scout) -> String:
+	return "◆ %s · %ds" % [ScoutExpeditions.State.keys()[scout.state].capitalize(),
+		ceili(_expeditions.eta(scout) - MatchBattle.TIME_EPSILON)]
+
+
+func _update_claim_progress(bar: ProgressBar, scout: ScoutExpeditions.Scout) -> void:
+	bar.visible = scout != null and scout.assigned()
+	if bar.visible:
+		bar.value = 100.0 * (1.0 - scout.remaining / _expeditions.duration)
+
+
+func _refresh_claim_markers() -> void:
+	for region_id in _claim_markers.keys():
+		if not _expeditions.assignments.has(region_id):
+			var old_marker := _claim_markers[region_id]
+			old_marker.hide()
+			old_marker.queue_free()
+			_claim_markers.erase(region_id)
+	for region_id in _expeditions.assignments:
+		var scout := _expeditions.assignments[region_id]
+		if not _claim_markers.has(region_id):
+			_claim_markers[region_id] = _create_claim_marker()
+		var marker := _claim_markers[region_id]
+		var label := marker.get_node("Readouts/Status") as Label
+		label.modulate = FACTION_ACCENTS[scout.side].albedo_color.lightened(0.35)
+		label.text = _expedition_text(scout)
+		_update_claim_progress(marker.get_node("Readouts/Progress"), scout)
+		var point := _world_position(scout.site) + Vector3.UP * 0.35
+		var view := _unit_views.get(scout.unit_id) as MeshInstance3D
+		marker.visible = view != null and not _camera.is_position_behind(point)
+		if marker.visible:
+			marker.position = _camera.unproject_position(point) - Vector2(marker.size.x * 0.5, marker.size.y)
+			var scout_screen := _camera.unproject_position(view.global_position)
+			if marker.get_rect().grow(16.0).has_point(scout_screen):
+				marker.position.y = scout_screen.y + 16.0
+
+
+func _create_claim_marker() -> PanelContainer:
+	var marker := PanelContainer.new()
+	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	marker.add_theme_stylebox_override("panel", _unit_panel.get_theme_stylebox("panel"))
+	var readouts := VBoxContainer.new()
+	readouts.name = "Readouts"
+	readouts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var label := Label.new()
+	label.name = "Status"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 14)
+	var bar := ProgressBar.new()
+	bar.name = "Progress"
+	bar.show_percentage = false
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.custom_minimum_size = Vector2(112.0, 8.0)
+	marker.add_child(readouts)
+	readouts.add_child(label)
+	readouts.add_child(bar)
+	%ClaimMarkers.add_child(marker)
+	return marker

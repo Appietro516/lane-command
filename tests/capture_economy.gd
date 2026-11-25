@@ -1,11 +1,13 @@
 extends RefCounted
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 
 func setup(scene: Node) -> void:
 	scene.set_process(false)
 	var player := MatchRegion.Owner.PLAYER
 	scene.economy.advance(40.0)
-	assert(scene.try_claim(player, &"region_1"))
+	assert(ScoutFixture.claim(scene, player, &"region_1"))
 	assert(scene.try_place_building(player, &"barracks", Vector3(-10.2, 0, -1.2)))
 	assert(scene.try_place_building(player, &"generator", Vector3(-11.5, 0, -4.9)))
 	assert(scene.try_place_building(player, &"farm", Vector3(-12.7, 0, 4.5)))

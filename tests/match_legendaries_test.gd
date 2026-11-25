@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_SCENE := preload("res://main.tscn")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -112,7 +114,7 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	_check(scene._selected_region_id == region_id and details.text.contains("Test Shrine · Region 1")
 		and details.text.contains("Neutral · Inactive"),
 		"Selecting the landmark shows its name, region, and inactive status.")
-	if not scene.try_claim(PLAYER, region_id):
+	if not ScoutFixture.claim(scene, PLAYER, region_id):
 		_check(false, "The player can claim the landmark region.")
 		scene.free()
 		return
@@ -169,13 +171,14 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	enemy.position = _attack_position(battle, outpost.position, outpost.obstacle, MatchBattle.OUTPOST_ATTACK_RANGE)
 	_check(battle.unit_attack_stat(enemy).total == MatchBattle.ATTACK_DAMAGE,
 		"The opposing unit does not inherit the player's damage bonus.")
-	battle.advance(4.0, economy)
+	battle.advance(9.0, economy)
 	_check(battle.get_outpost(outpost.id) == null and scene.owns_region(NEUTRAL, region_id)
 		and scene._landmarks[region_id] == landmark and landmark.is_visible_in_tree()
 		and barracks.is_inside_tree(), "Destroying the outpost preserves both the landmark and the barracks.")
 	_check(stats.value(PLAYER, stat, 80.0) == 80.0 and summary.text.contains("Player 0 · CPU 0")
 		and details.text.contains("Neutral · Inactive"), "Outpost loss immediately revokes the source.")
-	_check(scene.try_claim(CPU, region_id) and stats.value(CPU, stat, 80.0) == 80.0 + amount
+	enemy.hp = 0.0
+	_check(ScoutFixture.claim(scene, CPU, region_id) and stats.value(CPU, stat, 80.0) == 80.0 + amount
 		and stats.value(PLAYER, stat, 80.0) == 80.0 and details.text.contains("CPU-controlled · Active"),
 		"The CPU reclaims the same source without a stale player modifier.")
 	scene.restart_match()
@@ -191,12 +194,12 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 func _test_stacking() -> void:
 	var scene := _match(10, 6, 17, 1.0, [LegendaryBuff.new("Twin Vault", ENERGY)])
 	var first := &"region_1"
-	_check(scene.try_claim(PLAYER, first), "The first stack source can be claimed normally.")
+	_check(ScoutFixture.claim(scene, PLAYER, first), "The first stack source can be claimed normally.")
 	scene.economy.advance(50.0)
 	var claimed: Array[StringName] = [first]
 	for claim_number in range(2):
 		for id in scene._landmarks:
-			if scene.try_claim(PLAYER, id):
+			if ScoutFixture.claim(scene, PLAYER, id):
 				claimed.append(id)
 				break
 	var inspected: Dictionary = scene.economy.income_stat(PLAYER, ENERGY)
@@ -260,7 +263,7 @@ func _spawn(battle: MatchBattle, economy: MatchEconomy, side: MatchRegion.Owner)
 	timer.elapsed = economy.production_interval(side)
 	battle.advance(0.0, economy)
 	battle.set_barracks_active(timer, false)
-	for unit in battle.active_units():
+	for unit in ScoutFixture.combat_units(battle):
 		if unit.side == side:
 			return unit
 	return null

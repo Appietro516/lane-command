@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -320,18 +322,18 @@ func _test_match_scene() -> void:
 	await process_frame
 	await process_frame
 
-	var units := scene.get_node("Units") as Node3D
 	var player_building := Vector3(-10.2, 0.0, -1.2)
 	scene._process(2.0)
 	_check(scene.try_place_building(PLAYER, &"barracks", player_building),
 		"Build a player barracks alongside the autonomous CPU purchase.")
 	scene._process(3.5)
-	if units.get_child_count() != 2:
+	var deployed := ScoutFixture.combat_units(scene._battle)
+	if deployed.size() != 2:
 		_check(false, "Both barracks must deploy a unit.")
 		scene.free()
 		return
-	var cpu_view := units.get_child(0) as MeshInstance3D
-	var player_view := units.get_child(1) as MeshInstance3D
+	var cpu_view := scene._unit_views[deployed[0].id] as MeshInstance3D
+	var player_view := scene._unit_views[deployed[1].id] as MeshInstance3D
 	var cpu_building := scene.get_node("Buildings/CPU").get_child(0) as Node3D
 	_check(cpu_view.position.distance_to(cpu_building.position) < 2.0
 		and player_view.position.distance_to(player_building) < 2.0
@@ -519,19 +521,19 @@ func _test_match_end_and_restart() -> void:
 		and scene.economy.barracks_count(PLAYER) == 1 and scene.economy.energy(PLAYER) == 16.0,
 		"The player can place a barracks in the replay.")
 	scene._process(3.25)
-	_check(units.get_child_count() == 0, "Replay production does not inherit old timers.")
+	_check(units.get_child_count() == 4, "Replay production does not inherit old timers.")
 	scene._process(0.25)
 	var replay_battle: MatchBattle = scene._battle
-	var replay_units := replay_battle.active_units()
-	_check(units.get_child_count() == 2 and replay_units.size() == 2
-		and replay_units[0].id == 1 and is_equal_approx(replay_battle.elapsed_time(), 5.5),
+	var replay_units := ScoutFixture.combat_units(replay_battle)
+	_check(units.get_child_count() == 6 and replay_units.size() == 2
+		and replay_units[0].id == 5 and is_equal_approx(replay_battle.elapsed_time(), 5.5),
 		"Both first barracks deploy on schedule with fresh unit IDs and match time.")
 
 	_click(restart)
 	scene.set_process(false)
 	_check_full_reset(scene, initial_owners)
 	scene._process(8.0)
-	for step in range(600):
+	for step in range(1800):
 		if scene._battle.base_hp(PLAYER) < MatchBattle.BASE_HP:
 			break
 		scene._process(MatchBattle.STEP)
@@ -573,7 +575,7 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 	_check(scene.get_node("Buildings/Player").get_child_count() == 0
 		and scene.get_node("Buildings/CPU").get_child_count() == 0,
 		"Restart removes all placed buildings.")
-	_check(battle.active_units().is_empty() and scene.get_node("Units").get_child_count() == 0
+	_check(ScoutFixture.combat_units(battle).is_empty() and scene.get_node("Units").get_child_count() == 4
 		and battle.elapsed_time() == 0.0 and battle.outcome() == MatchBattle.Outcome.IN_PROGRESS,
 		"Restart clears units, match time and the recorded outcome.")
 	_check(scene.get_node("%PlayerHP").text == "Player base · 80 HP"

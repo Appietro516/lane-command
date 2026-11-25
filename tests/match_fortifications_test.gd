@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const Rules := preload("res://match/fortification_rules.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
@@ -238,7 +240,7 @@ func _test_claim_and_restart(scene: Node) -> void:
 		and _stock(scene.economy) == before, "Friendly endpoints cannot authorize a crossing through neutral territory.")
 	scene._set_region_owner(TerritoryLayout.CPU_START, CPU)
 	scene.outpost_hp = MatchBattle.ATTACK_DAMAGE
-	_check(scene.try_claim(PLAYER, contested), "The player can claim the test region.")
+	_check(ScoutFixture.claim(scene, PLAYER, contested), "The player can claim the test region.")
 	scene.economy.advance(40.0)
 	_check(scene.try_place_building(PLAYER, Rules.NEST, point)
 		and scene.try_place_wall(PLAYER, start, end), "A claimed region accepts guns and walls.")
@@ -265,8 +267,13 @@ func _test_claim_and_restart(scene: Node) -> void:
 	scene._process(STEP)
 	_check(raider.hp == raider_hp and nest.hp < nest.max_hp,
 		"The inactive nest holds fire but stays targetable by the enemy.")
-	_check(scene.try_claim(PLAYER, contested) and nest.active and defenses[1].active and defenses[2].active,
+	var attack_position := raider.position
+	raider.position = Vector2(12.0, -6.0)
+	raider.ordered_destination = raider.position
+	_check(ScoutFixture.claim(scene, PLAYER, contested) and nest.active and defenses[1].active and defenses[2].active,
 		"The original owner's reclaim reactivates retained defenses.")
+	raider.position = attack_position
+	raider.ordered_destination = attack_position
 	scene._process(STEP)
 	_check(raider.hp == raider_hp - nest.profile.damage and scene._shot_effects.get_child_count() == 1,
 		"The reclaimed gun resumes firing with a single shot.")

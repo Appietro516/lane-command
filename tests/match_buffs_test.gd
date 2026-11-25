@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -112,7 +114,7 @@ func _test_match_lifecycle() -> void:
 	var battle: MatchBattle = scene._battle
 	var stats: FactionStats = scene.faction_stats
 	var region := &"region_1"
-	_check(scene.try_claim(PLAYER, region), "The region can be claimed through the match.")
+	_check(ScoutFixture.claim(scene, PLAYER, region), "The region can be claimed through the match.")
 	scene.set_region_modifier(region, ENERGY, 1.0, "Reactor")
 	scene.set_region_modifier(region, MATERIALS, 1.0, "Reactor")
 	stats.set_modifier(&"trade", PLAYER, ENERGY, 1.0, &"upgrade", "Trade")
@@ -150,7 +152,7 @@ func _test_match_lifecycle() -> void:
 	stats.set_modifier(&"training", PLAYER, DPS, 1.5, &"upgrade", "Training")
 	economy.advance(4.0)
 	battle.advance(MatchEconomy.PRODUCTION_INTERVAL, economy)
-	scene._select_unit(1)
+	scene._select_unit(ScoutFixture.combat_units(battle)[0].id)
 	scene._refresh_hud()
 	var unit_stats := scene.get_node("%UnitStats") as Label
 	var cpu_health := scene.get_node("%CPUHP") as Label

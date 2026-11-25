@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const Fixture := preload("res://tests/prototype_match_fixture.gd")
 const Catalog := preload("res://match/unit_catalog.gd")
 const Rules := preload("res://match/fortification_rules.gd")
@@ -111,7 +113,7 @@ func _test_lifecycle(scene: Node) -> void:
 	var economy: MatchEconomy = scene.economy
 	var frontier := &"region_1"
 	economy.advance(100.0)
-	_check(scene.try_claim(PLAYER, frontier), "Claim the factory region through the shared API.")
+	_check(ScoutFixture.claim(scene, PLAYER, frontier), "Claim the factory region through the shared API.")
 	var region: MatchRegion = scene.get_region(frontier)
 	var point := region.interior_point(func(candidate: Vector2) -> bool:
 		return scene._placement_block_reason(PLAYER, &"heavy_factory", scene._world_position(candidate)).is_empty())
@@ -128,7 +130,7 @@ func _test_lifecycle(scene: Node) -> void:
 	scene._select_fortification(factory.id)
 	_check(scene.get_node("%UnitIntent").text.contains("Inactive")
 		and scene.get_node("%UnitIntent").text.contains("Capacity  0 units/s"), "Paused production shows zero capacity.")
-	_check(scene.try_claim(PLAYER, frontier) and factory.active, "Reclaiming reactivates the original factory.")
+	_check(ScoutFixture.claim(scene, PLAYER, frontier) and factory.active, "Reclaiming reactivates the original factory.")
 	_check(economy.try_spend(PLAYER, {FOOD: int(economy.stockpile(PLAYER, FOOD))}), "Drain Food.")
 	battle.advance(16.0, economy)
 	_check(is_equal_approx(factory.elapsed, factory.interval(economy)) and deployments.is_empty(),
@@ -152,7 +154,7 @@ func _test_lifecycle(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	_check(scene._battle._timers.is_empty() and scene._fortifications.is_empty()
-		and scene._battle.active_units().is_empty() and not scene.economy.has_upgrade(PLAYER)
+		and ScoutFixture.combat_units(scene._battle).is_empty() and not scene.economy.has_upgrade(PLAYER)
 		and scene.economy.stockpile(PLAYER, FOOD) == 20.0, "Restart restores starting production state.")
 
 

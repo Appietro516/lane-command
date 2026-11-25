@@ -51,9 +51,11 @@ Show the player's resource stockpiles and net income rates, barracks count, Buil
 
 Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 
-## Optional region claiming
+## Scout expeditions
 
-The player can select a neutral region adjacent to existing territory and use Claim to spend 50 Energy and acquire it. A successful claim changes the map color, opens building placement, and adds one outpost with 24 HP by default. Select its region to inspect its health. Both factions use the same claim rules. The CPU prefers adjacent regions near its forces, regions with landmarks, and regions where reclaiming territory can reactivate its buildings. It limits expansion while defending threatened holdings.
+Both factions begin with two noncombat Scouts. Select a Scout on the map or in the Scout roster, select a neutral region adjacent to friendly territory, and use Claim. A reachable dispatch reserves the region and costs 50 Energy by default. The Scout travels to an interior site and stays there for 20 seconds by default. The map and inspector show the Scout’s progress and estimated completion time. Only completion changes the region color, allows building, and establishes a destructible outpost with 24 HP by default.
+
+A Scout can return from a recalled expedition, and a defeated or blocked expedition releases its reservation. Energy spent on dispatch stays spent. A lost Scout can be replaced near its base after 15 seconds for 35 Energy by default. Each faction has two Scout slots. The CPU uses the same expedition and replacement rules and considers landmarks, dormant buildings, and threats when expanding.
 
 Destroying an outpost returns its region to neutral, so it no longer supports building placement or further claims for the former owner. Existing producers stay visible. Barracks still appear in their faction's barracks count. Military production pauses until their original faction pays to reclaim the region, then resumes from the existing timer. Only the starting bases determine victory and defeat. Restart clears expansion outposts.
 

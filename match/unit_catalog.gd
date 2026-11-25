@@ -4,8 +4,18 @@ extends RefCounted
 const INFANTRY := &"infantry"
 const RANGED := &"ranged"
 const HEAVY := &"heavy"
+const SCOUT := &"scout"
+const COMBAT_TYPES := [INFANTRY, RANGED, HEAVY]
 
 const DEFINITIONS := {
+	SCOUT: {
+		"label": "Scout",
+		"hp": 10.0, "damage": 0.0, "cooldown": 1.0, "range": 0.0, "speed": 2.6,
+		"clearance": 0.22, "food": 0, "structure_damage_multiplier": 1.0,
+		"prefer_ready_shot": false,
+		"scene": preload("res://match/scout.tscn"), "tint": Color.WHITE, "tint_weight": 0.0,
+		"selection_scale": 1.0,
+	},
 	INFANTRY: {
 		"label": "Infantry",
 		"hp": 12.0, "damage": 3.0, "cooldown": 1.0, "range": 0.9, "speed": 1.8,

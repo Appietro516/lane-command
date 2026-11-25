@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH := preload("res://tests/provenance_match_fixture.tscn")
 const FIXTURE := preload("res://tests/capture_provenance.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
@@ -117,16 +119,17 @@ func _run() -> void:
 		and landmark_text.contains("On claim · +1/s Energy"),
 		"Landmark inspection distinguishes current and potential contributions.")
 
-	_check(scene.try_claim(PLAYER, region_id) and producer.active
+	_check(ScoutFixture.claim(scene, PLAYER, region_id) and producer.active
 		and economy.income_stat(PLAYER, ENERGY) == income
 		and _matches(battle.unit_health_stat(unit), 19.0) and unit.hp == 15.0
 		and _matches(battle.unit_dps_stat(unit), 5.5),
 		"Reclaiming restores each source once and restores the HP cap without healing.")
 	var camera := scene.get_node("Camera") as Camera3D
 	var roof := barracks.get_node("RoofMarking") as MeshInstance3D
+	scene._use_scout_slot(0)
 	scene._pick_map(camera.unproject_position(roof.global_position))
-	_check(scene.get_node("%UnitName").text == "Player Barracks"
-		and stat_text.text.contains("Base  0.285714 units/s"), "Clicking the barracks exposes baseline capacity.")
+	_check(scene.get_node("%UnitName").text == "Player Barracks" and sources.visible
+		and stat_text.text.contains("Base  0.285714 units/s"), "Clicking the barracks after a Scout exposes baseline capacity.")
 	_check(scene.try_upgrade(PLAYER), "The real production upgrade is affordable.")
 	var production := economy.production_stat(PLAYER, true)
 	_check(_matches(production, 1.0 / economy.production_interval(PLAYER))

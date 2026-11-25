@@ -1,15 +1,17 @@
 extends RefCounted
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 
 func setup(scene: Node) -> void:
 	scene.set_process(false)
 	var player := MatchRegion.Owner.PLAYER
 	var cpu := MatchRegion.Owner.CPU
 	scene.outpost_hp = MatchBattle.ATTACK_DAMAGE
-	scene.try_claim(player, &"region_1")
+	ScoutFixture.claim(scene, player, &"region_1")
 	scene.outpost_hp = MatchBattle.DEFAULT_OUTPOST_HP
 	scene.economy.advance(35.0)
-	scene.try_claim(player, &"region_3")
+	ScoutFixture.claim(scene, player, &"region_3")
 
 	var contested: MatchRegion = scene.get_region(&"region_1")
 	scene.try_place_building(player, &"barracks", contested.global_position + Vector3(-2.6, 0, 0))

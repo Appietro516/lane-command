@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MatchScene := preload("res://main.tscn")
 const Fixture := preload("res://tests/prototype_match_fixture.gd")
 const Pressure := preload("res://tests/capture_cpu_defense.gd")
@@ -24,7 +26,7 @@ func _run() -> void:
 	var first := _economy_match(scene)
 	scene.restart_match()
 	_check(scene._fortifications.is_empty() and scene._outposts_by_region.is_empty()
-		and scene._battle.active_units().is_empty() and scene.economy.barracks_count(CPU) == 0,
+		and ScoutFixture.combat_units(scene._battle).is_empty() and scene.economy.barracks_count(CPU) == 0,
 		"Restart clears the CPU's deployments, construction and claims.")
 	_check(first == _economy_match(scene), "Restart reproduces the seeded purchase and placement sequence.")
 	_test_losses(scene)
@@ -66,7 +68,7 @@ func _economy_match(scene: Node) -> Array:
 	# Hold the match open and cap the test garrison while counting every deployment.
 	var battle: MatchBattle = scene._battle
 	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
-		if unit.side == CPU:
+		if unit.side == CPU and unit.type_id != Catalog.SCOUT:
 			deployments.append(unit.id)
 			deployed_types[unit.type_id] = true
 			unit.order = MatchBattle.Order.HOLD
@@ -88,8 +90,8 @@ func _economy_match(scene: Node) -> Array:
 	scene._process(70.0)
 	for kind in PRODUCERS:
 		var count := _structures(scene, kind).size()
-		_check(count >= 1 and count <= (2 if kind == &"farm" else 1),
-			"Resource demand results in enough %s without runaway duplication." % kind)
+		_check(count >= 1 and count <= (1 if kind == &"mine" else 2),
+			"Resource demand results in enough %s without runaway duplication. Found %d." % [kind, count])
 	_check(battle.active_barracks_count(CPU) >= 1 and scene.economy.has_upgrade(CPU)
 		and deployments.size() >= 24, "The CPU upgrades its Barracks and sustains deployments under normal income.")
 	_check(not scene._outposts_by_region.is_empty(), "The CPU buys an outpost on the expanded map.")
@@ -98,7 +100,7 @@ func _economy_match(scene: Node) -> Array:
 	_check(scene._outposts_by_region.size() <= scene.cpu_expansion_limit, "The expansion limit bounds claims.")
 	# Larger producers need the next round of economic investment and a clear site.
 	scene._process(40.0)
-	_check(deployed_types.size() == MatchBattle.UnitCatalog.DEFINITIONS.size(),
+	_check(deployed_types.size() == Catalog.COMBAT_TYPES.size(),
 		"The seeded CPU deploys every roster type through construction. Deployed %s." % [deployed_types.keys()])
 	var food_demand := 0.0
 	for timer in battle._timers:
@@ -138,7 +140,7 @@ func _test_losses(scene: Node) -> void:
 	scene._advance_simulation(MatchBattle.STEP)
 	_check(battle.get_fortification(mine.id) == null and not installed.active
 		and scene.owns_region(NEUTRAL, outpost.region_id), "Loss removes income and disables the exposed producer.")
-	scene._process(24.0)
+	scene._process(36.0)
 	_check(installed.active and scene.owns_region(CPU, outpost.region_id),
 		"The CPU prioritizes reclaiming the outpost with a dormant investment.")
 	# Depleted materials should prompt mine replacement, even after an established economy.

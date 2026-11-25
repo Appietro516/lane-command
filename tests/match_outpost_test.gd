@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -55,6 +57,8 @@ func _test_interior_points() -> void:
 
 func _test_lifecycle(scene: Node) -> void:
 	var battle: MatchBattle = scene._battle
+	# Keep this fixture focused on structure targeting when Scouts are nearby.
+	battle.aggro_radius = 0.1
 	var economy: MatchEconomy = scene.economy
 	var region: MatchRegion = scene.get_region(CONTESTED)
 	var selection := scene.get_node("%SelectedRegion") as Label
@@ -64,9 +68,10 @@ func _test_lifecycle(scene: Node) -> void:
 	var backup: MatchRegion = scene.get_region(BACKUP)
 	var build_point := region.global_position + Vector3(-2.6, 0, 0)
 	scene._select_region(CONTESTED)
-	_check(battle._outposts.is_empty() and not scene.try_claim(PLAYER, BEYOND),
+	scene._use_scout_slot(1)
+	_check(battle._outposts.is_empty() and not ScoutFixture.claim(scene, PLAYER, BEYOND),
 		"Starting bases and invalid claims create no optional outposts.")
-	_check(scene.try_claim(PLAYER, CONTESTED), "An adjacent neutral region can be claimed.")
+	_check(ScoutFixture.claim(scene, PLAYER, CONTESTED), "An adjacent neutral region can be claimed.")
 	var hub := scene._outposts_by_region.get(CONTESTED) as MatchBattle.Outpost
 	if hub == null:
 		_check(false, "The claim creates its outpost.")
@@ -83,10 +88,10 @@ func _test_lifecycle(scene: Node) -> void:
 
 	economy.advance(50.0)
 	var energy := economy.energy(PLAYER)
-	_check(not scene.try_claim(PLAYER, CONTESTED) and not scene.try_claim(CPU, CONTESTED)
+	_check(not ScoutFixture.claim(scene, PLAYER, CONTESTED) and not ScoutFixture.claim(scene, CPU, CONTESTED)
 		and economy.energy(PLAYER) == energy and battle._outposts.size() == 1,
 		"Repeated and enemy claims leave the original outpost and energy intact.")
-	_check(scene.try_claim(CPU, BACKUP), "A second territory can host its own outpost.")
+	_check(ScoutFixture.claim(scene, CPU, BACKUP), "A second territory can host its own outpost.")
 	var backup_hub := scene._outposts_by_region.get(BACKUP) as MatchBattle.Outpost
 	_check(not scene.try_place_building(PLAYER, BARRACKS, view.global_position),
 		"Building placement keeps the outpost footprint clear.")
@@ -95,7 +100,7 @@ func _test_lifecycle(scene: Node) -> void:
 		return
 	var building := player_buildings.get_child(0) as Node3D
 	var timer := battle._timers[0]
-	_check(scene._claim_block_reason(BEYOND).is_empty(),
+	_check(scene._expeditions.eligibility(PLAYER, BEYOND).is_empty(),
 		"The contested region currently anchors a further claim.")
 
 	var cpu_unit := _deploy_attacker(battle, economy, CPU, hub.position + Vector2(2.2, 0))
@@ -120,7 +125,7 @@ func _test_lifecycle(scene: Node) -> void:
 	_check(scene.owns_region(NEUTRAL, CONTESTED) and tile.albedo_color == MatchRegion.OWNER_COLORS[NEUTRAL]
 		and selection.text.contains("Neutral") and not selection.text.contains("Outpost")
 		and not claim_button.disabled, "Loss immediately updates the selected tile and claim control.")
-	_check(scene._claim_block_reason(BEYOND) == "Not adjacent"
+	_check(scene._expeditions.eligibility(PLAYER, BEYOND) == "Not adjacent"
 		and not scene.try_place_building(PLAYER, BARRACKS, build_point),
 		"Lost territory provides neither claim adjacency nor building-placement access.")
 	_check(backup_hub != null and backup_hub.hp == backup_hub.max_hp
@@ -133,12 +138,12 @@ func _test_lifecycle(scene: Node) -> void:
 	cpu_unit.hp = 0
 	_check(scene.try_upgrade(PLAYER), "The faction can upgrade while its barracks is inactive.")
 	battle.advance(economy.production_interval(PLAYER) + MatchBattle.STEP, economy)
-	_check(is_equal_approx(timer.elapsed, paused_progress) and battle.active_units().is_empty(),
+	_check(is_equal_approx(timer.elapsed, paused_progress) and ScoutFixture.combat_units(battle).is_empty(),
 		"A lost-region barracks does not progress or deploy units.")
 
-	_check(scene.try_claim(CPU, BEYOND), "The CPU can establish valid adjacency by paying for a claim.")
+	_check(ScoutFixture.claim(scene, CPU, BEYOND), "The CPU can establish valid adjacency by paying for a claim.")
 	economy.advance(40.0)
-	_check(scene.try_claim(CPU, CONTESTED) and not timer.active and building.get_parent() == player_buildings,
+	_check(ScoutFixture.claim(scene, CPU, CONTESTED) and not timer.active and building.get_parent() == player_buildings,
 		"A different faction's valid claim leaves the existing barracks inactive and with its owner.")
 	var cpu_hub := scene._outposts_by_region.get(CONTESTED) as MatchBattle.Outpost
 	if cpu_hub == null:
@@ -152,14 +157,16 @@ func _test_lifecycle(scene: Node) -> void:
 	_check(cpu_hub.hp == 0 and scene.owns_region(NEUTRAL, CONTESTED) and not timer.active,
 		"The same attacks destroy a CPU outpost and leave the region neutral.")
 
+	player_unit.order = MatchBattle.Order.HOLD
+	player_unit.ordered_destination = player_unit.position
 	energy = economy.energy(PLAYER)
-	_check(scene.try_claim(PLAYER, CONTESTED) and timer.active
+	_check(ScoutFixture.claim(scene, PLAYER, CONTESTED) and timer.active
 		and player_buildings.get_child_count() == 1 and player_buildings.get_child(0) == building
 		and economy.barracks_count(PLAYER) == 1
 		and economy.energy(PLAYER) == energy - MatchEconomy.CLAIM_COST[MatchEconomy.ENERGY],
 		"The original owner pays only the claim cost and reactivates the same barracks.")
 	battle.advance(economy.production_interval(PLAYER) - paused_progress + MatchBattle.STEP, economy)
-	_check(battle.active_units().size() == 2, "Production resumes from the existing timer.")
+	_check(ScoutFixture.combat_units(battle).size() == 2, "Production resumes from the existing timer.")
 
 	scene.restart_match()
 	scene.set_process(false)
@@ -181,12 +188,13 @@ func _test_obstructed_site() -> void:
 	scene.region_count = 7
 	root.add_child(scene)
 	scene.set_process(false)
-	scene.economy.advance(50.0)
+	var economy: MatchEconomy = scene.economy
+	economy.advance(50.0)
 	var region: MatchRegion = scene.get_region(&"region_3")
 	var neighbor: MatchRegion = scene.get_region(&"region_5")
 	var battle: MatchBattle = scene._battle
 	var site := region.interior_point()
-	_check(scene.try_claim(CPU, &"region_2") and scene.try_claim(CPU, neighbor.region_id),
+	_check(ScoutFixture.claim(scene, CPU, &"region_2") and ScoutFixture.claim(scene, CPU, neighbor.region_id),
 		"CPU claims the regions across the border from the outpost site.")
 	var barracks_point := Vector2.INF
 	for offset in [Vector2(1.6, -0.1), Vector2(2.0, -0.25), Vector2(2.0, 0.25),
@@ -197,13 +205,17 @@ func _test_obstructed_site() -> void:
 			break
 	_check(barracks_point.is_finite() and scene.try_place_building(CPU, BARRACKS, scene._world_position(barracks_point)),
 		"Fixture places a barracks across the border from the new outpost site.")
+	var enemy_timer: MatchBattle.ProductionTimer = battle._timers.back()
+	economy.try_spend(CPU, {MatchEconomy.FOOD: int(economy.stockpile(CPU, MatchEconomy.FOOD))})
 	_check(not battle.outpost_site_clear(site), "The barracks occupies the default site.")
-	_check(scene.try_claim(PLAYER, region.region_id), "A claim can use an alternate clear site.")
+	_check(ScoutFixture.claim(scene, PLAYER, region.region_id), "A claim can use an alternate clear site.")
 	var hub := scene._outposts_by_region.get(region.region_id) as MatchBattle.Outpost
 	if hub != null:
 		var view: Node3D = scene._outpost_views[region.region_id]
 		_check(hub.position != site and scene.region_at_world_position(view.global_position) == region.region_id,
 			"The alternate site is inside the same region.")
+		economy.advance(9.0)
+		enemy_timer.elapsed = economy.production_interval(CPU)
 		battle.advance(9.0, scene.economy)
 		_check(hub.hp < hub.max_hp, "The nearby barracks cannot shield the alternate site from attacks.")
 	scene.free()
@@ -216,7 +228,7 @@ func _deploy_attacker(battle: MatchBattle, economy: MatchEconomy, side: MatchReg
 	timer.elapsed = economy.production_interval(side)
 	battle.advance(0.0, economy)
 	battle.set_barracks_active(timer, false)
-	for unit in battle.active_units():
+	for unit in ScoutFixture.combat_units(battle):
 		if unit.side == side:
 			unit.position = position
 			return unit

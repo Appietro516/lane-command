@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const STEP := 1.0 / 60.0
 const PLAYER := MatchRegion.Owner.PLAYER
@@ -138,11 +140,11 @@ func _test_unit_orders(scene: Node, camera: StrategyCamera, center: Vector2, bar
 	_check(scene._selected_region_id == TerritoryLayout.PLAYER_START,
 		"Clicking a barracks after camera movement selects its region.")
 	scene._process(3.75)
-	var units := scene.get_node("Units")
-	_check(units.get_child_count() == 1, "A player unit is available for picking.")
-	if units.get_child_count() != 1:
+	var units := ScoutFixture.combat_units(scene._battle)
+	_check(units.size() == 1, "A player unit is available for picking.")
+	if units.size() != 1:
 		return
-	var view := units.get_child(0) as Node3D
+	var view := scene._unit_views[units[0].id] as Node3D
 	var pointer := camera.unproject_position(view.global_position)
 	_mouse(pointer, MOUSE_BUTTON_MIDDLE)
 	_click(pointer)

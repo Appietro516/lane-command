@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_SCENE := preload("res://main.tscn")
 const EPSILON := 0.001
 
@@ -215,7 +217,7 @@ func _test_scene() -> void:
 				break
 		if claim_id != &"":
 			break
-	_check(scene.try_claim(MatchRegion.Owner.PLAYER, claim_id)
+	_check(ScoutFixture.claim(scene, MatchRegion.Owner.PLAYER, claim_id)
 		and scene.owns_region(MatchRegion.Owner.PLAYER, claim_id),
 		"Claims use the custom region count and the configured starting frontier.")
 
@@ -281,7 +283,7 @@ func _test_expanded_gameplay() -> void:
 	await physics_frame
 	await physics_frame
 	_check(scene._selected_region_id == target.region_id, "A screen click selects the generated region.")
-	_check(scene.try_claim(PLAYER, target.region_id) and scene.owns_region(PLAYER, target.region_id),
+	_check(ScoutFixture.claim(scene, PLAYER, target.region_id) and scene.owns_region(PLAYER, target.region_id),
 		"The generated adjacency permits a claim beyond the old bounds.")
 	scene.economy.advance(14.0)
 	var site := target.interior_point(func(point: Vector2) -> bool:
@@ -289,7 +291,7 @@ func _test_expanded_gameplay() -> void:
 	_check(site.is_finite() and scene.try_place_building(PLAYER, &"barracks", scene._world_position(site)),
 		"A barracks can be placed in the new territory.")
 	scene._process(15.0)
-	var units: Array[MatchBattle.Unit] = scene._battle.active_units()
+	var units := ScoutFixture.combat_units(scene._battle)
 	_check(units.any(func(unit: MatchBattle.Unit) -> bool: return unit.side == PLAYER)
 		and units.any(func(unit: MatchBattle.Unit) -> bool: return unit.side == CPU),
 		"Both sides buy or operate barracks and produce units on the expanded map.")
@@ -305,7 +307,7 @@ func _test_expanded_gameplay() -> void:
 		and scene.get_region(target.region_id) == target and scene.owns_region(NEUTRAL, target.region_id)
 		and scene.owns_region(PLAYER, TerritoryLayout.PLAYER_START)
 		and scene.owns_region(CPU, TerritoryLayout.CPU_START)
-		and scene._battle.active_units().is_empty() and scene.economy.barracks_count(PLAYER) == 0,
+		and ScoutFixture.combat_units(scene._battle).is_empty() and scene.economy.barracks_count(PLAYER) == 0,
 		"Restart preserves the active layout and seed and resets ownership, buildings and combat.")
 	scene.free()
 
@@ -318,6 +320,8 @@ func _test_expanded_wall_approach() -> void:
 	root.add_child(scene)
 	scene.set_process(false)
 	var battle: MatchBattle = scene._battle
+	# Measure the approach to the base without detours to fight its Scouts.
+	battle.aggro_radius = 0.1
 	var origin: Vector2 = battle._bases[PLAYER]
 	var enemy_base: Vector2 = battle._bases[CPU]
 	var forward := origin.direction_to(enemy_base)

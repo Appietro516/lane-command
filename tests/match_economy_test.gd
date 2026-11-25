@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
+
 const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -252,9 +254,10 @@ func _test_claimed_placement() -> void:
 	var start: MatchRegion = scene.get_region(TerritoryLayout.PLAYER_START)
 	# This point is on the claimed side of the bisector, inside the visual gap.
 	var claimed_position := start.global_position.lerp(region.global_position, 0.505)
+	scene._use_scout_slot(0)
 	await _click_world(claimed_position)
 	_click(scene.get_node("%Claim"))
-	_check(scene.owns_region(PLAYER, region.region_id), "Claim transfers the clicked region.")
+	_check(ScoutFixture.finish_claim(scene, PLAYER, region.region_id), "A successful expedition transfers the clicked region.")
 	scene.economy.advance(27.0)
 	scene._process(0.0)
 	var build := scene.get_node("%Build") as Button
@@ -294,7 +297,7 @@ func _test_producers() -> void:
 	var stock := _stockpiles(economy, PLAYER)
 	_check(not scene.try_place_building(PLAYER, &"mine", enemy.global_position)
 		and _stockpiles(economy, PLAYER) == stock, "Enemy territory rejects a producer without spending.")
-	_check(scene.try_claim(PLAYER, expansion), "Claim adjacent territory for producer placement.")
+	_check(ScoutFixture.claim(scene, PLAYER, expansion), "Claim adjacent territory for producer placement.")
 	var mine_site := _clear_producer_point(scene, expansion, &"mine")
 	stock = _stockpiles(economy, PLAYER)
 	_check(not scene.try_place_building(PLAYER, &"mine", mine_site)
@@ -362,7 +365,7 @@ func _test_producers() -> void:
 		and not economy.income_stat(PLAYER, FOOD).breakdown.filter(
 			func(entry: Dictionary) -> bool: return entry.source_id == expansion_farm)[0].active,
 		"Losing the outpost immediately disables the local source.")
-	_check(scene.try_claim(PLAYER, expansion), "The original owner can reclaim the region.")
+	_check(ScoutFixture.claim(scene, PLAYER, expansion), "The original owner can reclaim the region.")
 	scene._set_region_owner(expansion, PLAYER)
 	_check(economy.income_rate(PLAYER, FOOD) == 7.0
 		and economy.income_sources(PLAYER, FOOD).size() == 3,
@@ -461,12 +464,20 @@ func _test_cpu_purchases() -> void:
 		"The CPU spends Materials from its own stockpile.")
 
 	match_scene._process(7.75)
-	_check(match_scene.get_node("Units").get_child_count() == 2,
+	_check(ScoutFixture.combat_units(match_scene._battle).size() == 2,
 		"The first CPU barracks spawns at 5.5 and 9 seconds without player input.")
 	match_scene._process(0.25)
 
 	_check_state(match_scene.economy, PLAYER, [80.0, 0, 3.5], "Idle player")
-	match_scene._process(20.0)
+	# Let the opening army garrison the base while the economy and expeditions develop.
+	var battle: MatchBattle = match_scene._battle
+	for unit in ScoutFixture.combat_units(battle):
+		unit.order = MatchBattle.Order.HOLD
+		unit.ordered_destination = unit.position
+	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
+		unit.order = MatchBattle.Order.HOLD
+		unit.ordered_destination = unit.position)
+	match_scene._process(65.0)
 	_check(match_scene._battle._timers.size() >= 2, "The CPU adds more production after its opening.")
 	for building in cpu_buildings.get_children():
 		_check(match_scene.owns_region(CPU, match_scene.region_at_world_position(building.global_position)),
@@ -486,12 +497,12 @@ func _test_symmetric_production() -> void:
 	match_scene._process(2.0)
 	_check(match_scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2)), "The player can buy at the same time as the CPU.")
 	match_scene._process(3.25)
-	_check(units.get_child_count() == 0, "Neither barracks spawns early.")
+	_check(units.get_child_count() == 4, "Neither barracks spawns early.")
 	match_scene._process(0.25)
-	_check(units.get_child_count() == 2, "Both sides spawn at 3.5 seconds after construction.")
-	if units.get_child_count() == 2:
-		var cpu_unit := units.get_child(0) as MeshInstance3D
-		var player_unit := units.get_child(1) as MeshInstance3D
+	_check(units.get_child_count() == 6, "Both sides spawn at 3.5 seconds after construction.")
+	if units.get_child_count() == 6:
+		var cpu_unit := units.get_child(4) as MeshInstance3D
+		var player_unit := units.get_child(5) as MeshInstance3D
 		var token := player_unit.mesh as PrismMesh
 		_check(cpu_unit.mesh == token and token != null,
 			"Both sides spawn the same triangular token mesh.")
@@ -543,7 +554,7 @@ func _test_expanded_production() -> void:
 	var battle: MatchBattle = scene._battle
 	economy.advance(120.0)
 	var claimed := &"region_1"
-	_check(scene.try_claim(PLAYER, claimed), "Claim a second region for barracks production.")
+	_check(ScoutFixture.claim(scene, PLAYER, claimed), "Claim a second region for barracks production.")
 	for point in [Vector3(-10.2, 0, -1.2), Vector3(-12.73, 0, 5.0),
 			Vector3(-12.0, 0, -3.65), _clear_producer_point(scene, claimed, &"barracks")]:
 		var before := _stockpiles(economy, PLAYER)
@@ -602,7 +613,7 @@ func _test_expanded_production() -> void:
 			and _stockpiles(scene.economy, side) == {ENERGY: 50.0, MATERIALS: 30.0, FOOD: 20.0}
 			and scene._buildings[side].get_child_count() == 0,
 			"Restart clears expanded production and restores the starting economy for both factions.")
-	_check(scene._battle.active_units().is_empty()
+	_check(ScoutFixture.combat_units(scene._battle).is_empty()
 		and scene.get_node("%BarracksCount").text == "Barracks 0", "Restart clears units and the HUD count.")
 	scene.free()
 
