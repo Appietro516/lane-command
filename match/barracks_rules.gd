@@ -7,8 +7,7 @@ static func block_reason(economy: MatchEconomy, side: MatchRegion.Owner,
 
 
 static func purchase(economy: MatchEconomy, battle: MatchBattle,
-		side: MatchRegion.Owner, position: Vector2, cost: Dictionary) -> bool:
+		side: MatchRegion.Owner, position: Vector2, cost: Dictionary) -> MatchBattle.ProductionTimer:
 	if not economy.try_build(side, cost):
-		return false
-	battle.add_barracks(side, position)
-	return true
+		return null
+	return battle.add_barracks(side, position)

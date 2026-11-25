@@ -36,7 +36,7 @@ func _run() -> void:
 func _test_claim_rules(scene: Node) -> void:
 	_check_rejected(scene, PLAYER, NEXT_CLAIM, NEUTRAL, "Nonadjacent target")
 	_check_rejected(scene, PLAYER, TerritoryLayout.PLAYER_START, PLAYER, "Player territory")
-	_check_rejected(scene, CPU, NEXT_CLAIM, NEUTRAL, "CPU expansion")
+	_check_rejected(scene, CPU, FIRST_CLAIM, NEUTRAL, "Nonadjacent CPU claim")
 	_check(not scene.try_claim(PLAYER, &"missing")
 		and scene.economy.energy(PLAYER) == MatchEconomy.STARTING_ENERGY, "Unknown region ID")
 

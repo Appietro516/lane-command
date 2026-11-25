@@ -13,6 +13,8 @@ const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
 const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
 const UNIT := preload("res://match/unit.tscn")
 const STARTING_BASE := preload("res://match/starting_base.tscn")
+const OUTPOST := preload("res://match/outpost.tscn")
+const INACTIVE_ACCENT := preload("res://match/inactive_accent.tres")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const CPU_DECISION_INTERVAL := 2.0
@@ -31,16 +33,25 @@ const OUTCOME_LABELS := {
 	MatchBattle.Outcome.DEFEAT: "Defeat",
 }
 
+class PlacedBarracks:
+	var production: MatchBattle.ProductionTimer
+	var accent: MeshInstance3D
+
+
 var economy: MatchEconomy
 @export var map_seed: int = 17
 @export_range(5, 7) var region_count: int = 6
 @export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
 @export var unit_target_priority := MatchBattle.TargetPriority.NEAREST
+@export_range(1, 80) var outpost_hp := MatchBattle.DEFAULT_OUTPOST_HP
 
 var _battle: MatchBattle
 var _layout: TerritoryLayout
 var _regions_by_id: Dictionary[StringName, MatchRegion] = {}
 var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
+var _outposts_by_region: Dictionary[StringName, MatchBattle.Outpost] = {}
+var _outpost_views: Dictionary[StringName, Node3D] = {}
+var _barracks_by_region: Dictionary[StringName, Array] = {}
 var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
@@ -147,6 +158,13 @@ func restart_match() -> void:
 		_battle.unit_produced.disconnect(_spawn_unit)
 		_battle.unit_removed.disconnect(_remove_unit)
 		_battle.base_destroyed.disconnect(_hide_base)
+		_battle.outpost_destroyed.disconnect(_lose_region)
+	for view in _outpost_views.values():
+		view.get_parent().remove_child(view)
+		view.queue_free()
+	_outpost_views.clear()
+	_outposts_by_region.clear()
+	_barracks_by_region.clear()
 	for unit_id in _unit_views.keys():
 		_remove_unit(unit_id)
 	_cancel_placement()
@@ -168,6 +186,7 @@ func restart_match() -> void:
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
 	_battle.base_destroyed.connect(_hide_base)
+	_battle.outpost_destroyed.connect(_lose_region)
 	_refresh_hud()
 	set_process(true)
 
@@ -205,14 +224,22 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 
 	var definition: Dictionary = BUILDINGS[building_id]
 	var ground := _map_plane().project(world_position)
-	if not definition.rules.purchase(economy, _battle, side, _map_position(ground), definition.cost):
+	var production: MatchBattle.ProductionTimer = definition.rules.purchase(
+		economy, _battle, side, _map_position(ground), definition.cost)
+	if production == null:
 		return false
 
 	var building := definition.scene.instantiate() as Node3D
-	if definition.has("accent_node"):
-		building.get_node(definition.accent_node).material_override = FACTION_ACCENTS[side]
+	var barracks := PlacedBarracks.new()
+	barracks.production = production
+	barracks.accent = building.get_node(definition.accent_node)
+	barracks.accent.material_override = FACTION_ACCENTS[side]
 	building.position = _buildings[side].to_local(ground)
 	_buildings[side].add_child(building)
+	var region_id := region_at_world_position(ground)
+	if not _barracks_by_region.has(region_id):
+		_barracks_by_region[region_id] = []
+	_barracks_by_region[region_id].append(barracks)
 	_refresh_hud()
 	return true
 
@@ -221,6 +248,12 @@ func _placement_block_reason(side: MatchRegion.Owner, building_id: StringName,
 		world_position: Vector3) -> String:
 	if not owns_region(side, region_at_world_position(world_position)):
 		return "Choose a spot in your territory"
+	var position := _map_position(world_position)
+	var clearance := MatchBattle.BARRACKS_FOOTPRINT + MatchBattle.OUTPOST_CLEARANCE
+	for outpost: MatchBattle.Outpost in _outposts_by_region.values():
+		var offset := (outpost.position - position).abs()
+		if offset.x < clearance.x and offset.y < clearance.y:
+			return "Keep the outpost clear"
 	return _purchase_block_reason(side, building_id)
 
 
@@ -299,14 +332,44 @@ func try_upgrade(side: MatchRegion.Owner) -> bool:
 
 
 func try_claim(side: MatchRegion.Owner, region_id: StringName) -> bool:
-	if side != PLAYER or not _claim_block_reason(region_id).is_empty():
+	if not _claim_block_reason(region_id, side).is_empty():
 		return false
+	var region := get_region(region_id)
+	var point := region.interior_point(_battle.outpost_site_clear)
 	if not economy.try_spend(side, MatchEconomy.CLAIM_COST):
 		return false
 
-	_regions_by_id[region_id].region_owner = side
-	_refresh_hud()
+	var outpost := _battle.add_outpost(region_id, side, point, maxi(1, outpost_hp))
+	_outposts_by_region[region_id] = outpost
+	var view := OUTPOST.instantiate() as Node3D
+	view.get_node("Beacon").material_override = FACTION_ACCENTS[side]
+	region.add_child(view)
+	view.global_position = _regions.to_global(Vector3(point.x, 0.0, point.y))
+	_outpost_views[region_id] = view
+	_set_region_owner(region_id, side)
 	return true
+
+
+func _lose_region(outpost: MatchBattle.Outpost) -> void:
+	var region_id := outpost.region_id
+	var view := _outpost_views[region_id]
+	view.get_parent().remove_child(view)
+	view.queue_free()
+	_outpost_views.erase(region_id)
+	_outposts_by_region.erase(region_id)
+	_set_region_owner(region_id, MatchRegion.Owner.NEUTRAL)
+	_update_unit_selection()
+
+
+func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
+	get_region(region_id).region_owner = side
+	for barracks: PlacedBarracks in _barracks_by_region.get(region_id, []):
+		var active := barracks.production.side == side
+		_battle.set_barracks_active(barracks.production, active)
+		barracks.accent.material_override = FACTION_ACCENTS[side] if active else INACTIVE_ACCENT
+	_refresh_hud()
+	if _preview != null:
+		_refresh_placement_preview()
 
 
 func owns_region(side: MatchRegion.Owner, region_id: StringName) -> bool:
@@ -331,7 +394,7 @@ func _map_position(world_position: Vector3) -> Vector2:
 	return Vector2(local.x, local.z)
 
 
-func _claim_block_reason(region_id: StringName) -> String:
+func _claim_block_reason(region_id: StringName, side := PLAYER) -> String:
 	var region := get_region(region_id)
 	if region == null:
 		return "Select a region"
@@ -341,9 +404,16 @@ func _claim_block_reason(region_id: StringName) -> String:
 		return "CPU-owned"
 	if _battle.is_finished():
 		return "Match ended"
+	if not _buildings.has(side):
+		return "Claim unavailable"
 	for neighbor_id in region.neighbor_ids:
-		if owns_region(PLAYER, neighbor_id):
-			return economy.cost_block_reason(PLAYER, MatchEconomy.CLAIM_COST)
+		if owns_region(side, neighbor_id):
+			var reason := economy.cost_block_reason(side, MatchEconomy.CLAIM_COST)
+			if not reason.is_empty():
+				return reason
+			if not region.interior_point(_battle.outpost_site_clear).is_finite():
+				return "No room for an outpost"
+			return ""
 	return "Not adjacent"
 
 
@@ -384,10 +454,14 @@ func _physics_process(_delta: float) -> void:
 			if try_place_building(PLAYER, _placement_id, point):
 				_cancel_placement()
 				return
-		var pointer := get_viewport().get_mouse_position()
-		if _camera.is_dragging() or get_viewport().gui_get_hovered_control() != null:
-			pointer = Vector2.INF
-		_update_placement_preview(pointer)
+		_refresh_placement_preview()
+
+
+func _refresh_placement_preview() -> void:
+	var pointer := get_viewport().get_mouse_position()
+	if _camera.is_dragging() or get_viewport().gui_get_hovered_control() != null:
+		pointer = Vector2.INF
+	_update_placement_preview(pointer)
 
 
 func _pick_map(pointer: Vector2) -> void:
@@ -408,6 +482,7 @@ func _pick_region(pointer: Vector2) -> StringName:
 	var buildings: Array[Node] = [_bases[PLAYER], _bases[CPU]]
 	buildings.append_array(_buildings[PLAYER].get_children())
 	buildings.append_array(_buildings[CPU].get_children())
+	buildings.append_array(_outpost_views.values())
 	var nearest: Node3D
 	var depth := INF
 	for building: Node3D in buildings:
@@ -487,6 +562,9 @@ func _target_label(unit: MatchBattle.Unit) -> String:
 	var target := _battle.get_unit(unit.target)
 	if target != null:
 		return "%s unit #%d" % [_side_label(target.side), target.id]
+	var outpost := _battle.get_outpost(unit.target)
+	if outpost != null:
+		return "%s outpost · %d/%d HP" % [_side_label(outpost.side), outpost.hp, outpost.max_hp]
 	return "None"
 
 
@@ -494,7 +572,7 @@ func _unit_state_label(unit: MatchBattle.Unit) -> String:
 	if unit.can_attack_target:
 		return "Engaging"
 	if not unit.waypoints.is_empty():
-		if unit.target > MatchBattle.NO_TARGET:
+		if unit.target > MatchBattle.NO_TARGET or unit.target < MatchBattle.BASE_TARGET:
 			return "Pursuing"
 		match unit.order:
 			MatchBattle.Order.MOVE: return "Moving to order"
@@ -676,8 +754,15 @@ func _refresh_claim_control() -> void:
 	var reason := _claim_block_reason(_selected_region_id)
 	_claim_button.disabled = not reason.is_empty()
 	if _regions_by_id.has(_selected_region_id):
+		var region := get_region(_selected_region_id)
+		var title := str(_selected_region_id).capitalize()
+		if region.region_owner == MatchRegion.Owner.NEUTRAL:
+			title += " · Neutral"
+		var outpost := _outposts_by_region.get(_selected_region_id) as MatchBattle.Outpost
+		if outpost != null:
+			reason += "\nOutpost · %d/%d HP" % [outpost.hp, outpost.max_hp]
 		_region_label.text = "%s\n%s" % [
-			str(_selected_region_id).capitalize(), "Neutral" if reason.is_empty() else reason,
+			title, reason,
 		]
 	else:
 		_region_label.text = reason

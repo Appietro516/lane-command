@@ -4,6 +4,7 @@ extends RefCounted
 signal unit_produced(unit: Unit)
 signal unit_removed(unit_id: int)
 signal base_destroyed(side: MatchRegion.Owner)
+signal outpost_destroyed(outpost: Outpost)
 
 enum Outcome { IN_PROGRESS, VICTORY, DEFEAT }
 enum Order { AUTONOMOUS, MOVE, HOLD }
@@ -21,6 +22,10 @@ const BASE_ATTACK_RANGE := 1.8
 const DEFAULT_AGGRO_RADIUS := 4.0
 const BASE_FOOTPRINT := Vector2(1.5, 1.5)
 const BARRACKS_FOOTPRINT := Vector2(1.41, 0.91)
+const OUTPOST_FOOTPRINT := Vector2(0.52, 0.52)
+const OUTPOST_CLEARANCE := OUTPOST_FOOTPRINT + Vector2(0.08, 0.08)
+const OUTPOST_ATTACK_RANGE := 1.25
+const DEFAULT_OUTPOST_HP := 24
 const STRATEGIC_SAMPLE_COUNT := 16
 const STEP := 1.0 / 60.0
 const TIME_EPSILON := 1e-9
@@ -39,6 +44,7 @@ class Unit:
 	var waypoints := PackedVector2Array()
 	var route_revision := -1
 	var strategic_destination := Vector2.INF
+	var strategic_target := BASE_TARGET
 	var strategic_revision := -1
 	var hp := UNIT_HP
 	var target := NO_TARGET
@@ -55,10 +61,22 @@ class ProductionTimer:
 	var side: MatchRegion.Owner
 	var position: Vector2
 	var elapsed := 0.0
+	var active := true
+	var obstacle: int
 
 	func _init(owner: MatchRegion.Owner, building_position: Vector2) -> void:
 		side = owner
 		position = building_position
+
+
+class Outpost:
+	var id: int
+	var region_id: StringName
+	var side: MatchRegion.Owner
+	var position: Vector2
+	var hp: int
+	var max_hp: int
+	var obstacle: int
 
 
 var aggro_radius: float
@@ -69,6 +87,8 @@ var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
 var _base_hp: Dictionary[MatchRegion.Owner, int] = {PLAYER: BASE_HP, CPU: BASE_HP}
 var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
+var _outposts: Dictionary[int, Outpost] = {}
+var _next_outpost_id := BASE_TARGET - 1
 var _next_unit_id := 1
 var _pending_time := 0.0
 var _elapsed_time := 0.0
@@ -84,9 +104,55 @@ func _init(player_base: Vector2, cpu_base: Vector2, detection_radius := DEFAULT_
 		_base_obstacles[side] = _add_footprint(_bases[side], BASE_FOOTPRINT)
 
 
-func add_barracks(side: MatchRegion.Owner, position: Vector2) -> void:
-	_add_footprint(position, BARRACKS_FOOTPRINT)
-	_timers.append(ProductionTimer.new(side, position))
+func add_barracks(side: MatchRegion.Owner, position: Vector2) -> ProductionTimer:
+	var timer := ProductionTimer.new(side, position)
+	timer.obstacle = _add_footprint(position, BARRACKS_FOOTPRINT)
+	_timers.append(timer)
+	return timer
+
+
+func set_barracks_active(timer: ProductionTimer, active: bool) -> void:
+	if timer.active == active:
+		return
+	timer.active = active
+	if active:
+		timer.obstacle = _add_footprint(timer.position, BARRACKS_FOOTPRINT)
+	else:
+		navigation.remove_obstacle(timer.obstacle)
+
+
+func add_outpost(region_id: StringName, side: MatchRegion.Owner, position: Vector2,
+		max_hp: int) -> Outpost:
+	var outpost := Outpost.new()
+	outpost.id = _next_outpost_id
+	_next_outpost_id -= 1
+	outpost.region_id = region_id
+	outpost.side = side
+	outpost.position = position
+	outpost.max_hp = max_hp
+	outpost.hp = max_hp
+	outpost.obstacle = _add_footprint(position, OUTPOST_FOOTPRINT)
+	_outposts[outpost.id] = outpost
+	return outpost
+
+
+func get_outpost(id: int) -> Outpost:
+	return _outposts.get(id)
+
+
+func outpost_site_clear(position: Vector2) -> bool:
+	var footprint := _footprint(position, OUTPOST_CLEARANCE)
+	for center in _bases.values():
+		if footprint.intersects(_footprint(center, BASE_FOOTPRINT)):
+			return false
+	for timer in _timers:
+		# A dormant barracks can regain its footprint when its owner reclaims the region.
+		if footprint.intersects(_footprint(timer.position, BARRACKS_FOOTPRINT)):
+			return false
+	for outpost: Outpost in _outposts.values():
+		if footprint.intersects(_footprint(outpost.position, OUTPOST_FOOTPRINT)):
+			return false
+	return true
 
 
 func get_unit(id: int) -> Unit:
@@ -145,6 +211,8 @@ func advance(delta: float, economy: MatchEconomy) -> void:
 
 func _advance_production(delta: float, economy: MatchEconomy) -> void:
 	for timer in _timers:
+		if not timer.active:
+			continue
 		# Upgrades shorten the current cycle while keeping elapsed production time.
 		var interval := economy.production_interval(timer.side)
 		timer.elapsed += delta
@@ -192,6 +260,9 @@ func _step_combat() -> void:
 		if unit.target == BASE_TARGET:
 			var side := _opponent(unit.side)
 			_base_hp[side] = maxi(0, base_hp(side) - ATTACK_DAMAGE)
+		elif unit.target < BASE_TARGET:
+			var outpost := _outposts[unit.target]
+			outpost.hp = maxi(0, outpost.hp - ATTACK_DAMAGE)
 		else:
 			_units[unit.target].hp -= ATTACK_DAMAGE
 		unit.cooldown = ATTACK_COOLDOWN
@@ -201,11 +272,22 @@ func _step_combat() -> void:
 			_units.erase(unit.id)
 			unit_removed.emit(unit.id)
 
+	var destroyed_outposts: Array[Outpost] = []
+	for outpost in _outposts.values():
+		if outpost.hp == 0:
+			_outposts.erase(outpost.id)
+			navigation.remove_obstacle(outpost.obstacle)
+			destroyed_outposts.append(outpost)
+
 	for unit in _units.values():
-		if unit.target > NO_TARGET and not _units.has(unit.target):
+		if (unit.target > NO_TARGET and not _units.has(unit.target)) \
+				or (unit.target < BASE_TARGET and not _outposts.has(unit.target)):
 			unit.target = NO_TARGET
 			unit.can_attack_target = false
 			_clear_route(unit)
+
+	for outpost in destroyed_outposts:
+		outpost_destroyed.emit(outpost)
 
 	if base_hp(PLAYER) == 0:
 		_outcome = Outcome.DEFEAT
@@ -226,17 +308,24 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 	var side := _opponent(unit.side)
 	var base := _bases[side]
 	var at_hold_point := unit.order == Order.HOLD and unit.position == unit.ordered_destination
-	if (unit.order == Order.AUTONOMOUS or at_hold_point) and _can_attack_base(unit.position, side):
-		unit.target = BASE_TARGET
-		unit.heading = unit.position.direction_to(base)
-		_clear_route(unit)
-		return true
+	if unit.order == Order.AUTONOMOUS or at_hold_point:
+		if _can_attack_structure(unit.position, base, _base_obstacles[side], BASE_ATTACK_RANGE):
+			unit.target = BASE_TARGET
+			unit.heading = unit.position.direction_to(base)
+			_clear_route(unit)
+			return true
+		for outpost in _outposts.values():
+			if outpost.side != unit.side and _can_attack_structure(unit.position, outpost.position,
+					outpost.obstacle, OUTPOST_ATTACK_RANGE):
+				unit.target = outpost.id
+				unit.heading = unit.position.direction_to(outpost.position)
+				_clear_route(unit)
+				return true
 
 	if unit.order == Order.AUTONOMOUS:
-		unit.target = BASE_TARGET
 		if unit.strategic_revision != navigation.revision:
-			unit.strategic_destination = _find_base_approach(unit.position, side)
-			unit.strategic_revision = navigation.revision
+			_plan_strategic_approach(unit, side)
+		unit.target = unit.strategic_target
 		_route_to(unit, unit.strategic_destination)
 	else:
 		_route_to(unit, unit.ordered_destination)
@@ -289,22 +378,42 @@ func _within_hold_area(unit: Unit, route: PackedVector2Array) -> bool:
 	return true
 
 
-func _can_attack_base(position: Vector2, side: MatchRegion.Owner) -> bool:
-	return position.distance_squared_to(_bases[side]) <= pow(BASE_ATTACK_RANGE + 0.00001, 2) \
+func _plan_strategic_approach(unit: Unit, opponent: MatchRegion.Owner) -> void:
+	unit.strategic_revision = navigation.revision
+	unit.strategic_target = BASE_TARGET
+	var nearest := INF
+	for outpost in _outposts.values():
+		var distance := unit.position.distance_squared_to(outpost.position)
+		if outpost.side == unit.side or distance >= nearest:
+			continue
+		var destination := _find_structure_approach(unit.position, outpost.position,
+			outpost.obstacle, OUTPOST_ATTACK_RANGE)
+		if destination.is_finite():
+			nearest = distance
+			unit.strategic_target = outpost.id
+			unit.strategic_destination = destination
+	if unit.strategic_target == BASE_TARGET:
+		unit.strategic_destination = _find_structure_approach(unit.position, _bases[opponent],
+			_base_obstacles[opponent], BASE_ATTACK_RANGE)
+
+
+func _can_attack_structure(position: Vector2, center: Vector2, obstacle: int,
+		attack_range: float) -> bool:
+	return position.distance_squared_to(center) <= pow(attack_range + 0.00001, 2) \
 		and navigation.is_passable(position) \
-		and navigation.line_clear(position, _bases[side], _base_obstacles[side])
+		and navigation.line_clear(position, center, obstacle)
 
 
-func _find_base_approach(position: Vector2, side: MatchRegion.Owner) -> Vector2:
-	var base := _bases[side]
-	var outward := base.direction_to(position)
+func _find_structure_approach(position: Vector2, center: Vector2, obstacle: int,
+		attack_range: float) -> Vector2:
+	var outward := center.direction_to(position)
 	if outward.is_zero_approx():
 		outward = Vector2.RIGHT
 	var best := Vector2.INF
 	var best_length := INF
 	for i in range(STRATEGIC_SAMPLE_COUNT):
-		var candidate := base + outward.rotated(TAU * i / STRATEGIC_SAMPLE_COUNT) * BASE_ATTACK_RANGE
-		if not _can_attack_base(candidate, side):
+		var candidate := center + outward.rotated(TAU * i / STRATEGIC_SAMPLE_COUNT) * attack_range
+		if not _can_attack_structure(candidate, center, obstacle, attack_range):
 			continue
 		var route := navigation.path(position, candidate)
 		if route.is_empty():
@@ -354,7 +463,11 @@ func _move(unit: Unit) -> void:
 
 
 func _add_footprint(center: Vector2, half_size: Vector2) -> int:
-	return navigation.add_obstacle(Rect2(center - half_size, half_size * 2.0))
+	return navigation.add_obstacle(_footprint(center, half_size))
+
+
+static func _footprint(center: Vector2, half_size: Vector2) -> Rect2:
+	return Rect2(center - half_size, half_size * 2.0)
 
 
 static func _opponent(side: MatchRegion.Owner) -> MatchRegion.Owner:

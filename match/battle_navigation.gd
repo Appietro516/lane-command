@@ -6,7 +6,8 @@ const CORNER_CLEARANCE := 0.025
 
 var revision := 0
 var _bounds: Rect2
-var _obstacles: Array[Rect2] = []
+var _obstacles: Dictionary[int, Rect2] = {}
+var _next_obstacle_id := 0
 var _graph := AStar2D.new()
 var _graph_revision := -1
 
@@ -16,15 +17,22 @@ func _init(bounds: Rect2) -> void:
 
 
 func add_obstacle(footprint: Rect2) -> int:
-	_obstacles.append(footprint)
+	var id := _next_obstacle_id
+	_next_obstacle_id += 1
+	_obstacles[id] = footprint
 	revision += 1
-	return _obstacles.size() - 1
+	return id
+
+
+func remove_obstacle(id: int) -> void:
+	if _obstacles.erase(id):
+		revision += 1
 
 
 func is_passable(point: Vector2) -> bool:
 	if not point.is_finite() or not _bounds.has_point(point):
 		return false
-	for obstacle in _obstacles:
+	for obstacle in _obstacles.values():
 		if obstacle.has_point(point):
 			return false
 	return true
@@ -34,10 +42,10 @@ func line_clear(start: Vector2, end: Vector2, ignored_obstacle := -1,
 		allow_exit := false) -> bool:
 	var low := start.min(end)
 	var high := start.max(end)
-	for i in range(_obstacles.size()):
-		if i == ignored_obstacle:
+	for id in _obstacles:
+		if id == ignored_obstacle:
 			continue
-		var obstacle := _obstacles[i]
+		var obstacle := _obstacles[id]
 		if high.x < obstacle.position.x or low.x > obstacle.end.x \
 				or high.y < obstacle.position.y or low.y > obstacle.end.y:
 			continue
@@ -83,7 +91,7 @@ func path(start: Vector2, end: Vector2) -> PackedVector2Array:
 
 func _rebuild_graph() -> void:
 	_graph.clear()
-	for obstacle in _obstacles:
+	for obstacle in _obstacles.values():
 		for corner in _corners(obstacle.grow(CORNER_CLEARANCE)):
 			if not is_passable(corner):
 				continue

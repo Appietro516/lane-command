@@ -12,6 +12,7 @@ const BORDER_COLOR := Color("#728487")
 const SELECTED_BORDER_COLOR := Color("#ffe5a5")
 const EDGE_GAP := 0.10
 const BORDER_WIDTH := 0.075
+const INTERIOR_SAMPLE_SPACING := 0.5
 
 var region_id: StringName
 var region_owner: Owner = Owner.NEUTRAL:
@@ -52,6 +53,60 @@ func _ready() -> void:
 
 func set_selected(selected: bool) -> void:
 	_border_material.albedo_color = SELECTED_BORDER_COLOR if selected else BORDER_COLOR
+
+
+func interior_point(is_clear: Callable = Callable()) -> Vector2:
+	var preferred := _preferred_interior_point()
+	if not preferred.is_finite() or not is_clear.is_valid() or is_clear.call(preferred):
+		return preferred
+
+	var bounds := Rect2(polygon[0], Vector2.ZERO)
+	for point in polygon:
+		bounds = bounds.expand(point)
+	var columns := ceili(bounds.size.x / INTERIOR_SAMPLE_SPACING)
+	var rows := ceili(bounds.size.y / INTERIOR_SAMPLE_SPACING)
+	var best := Vector2.INF
+	var best_distance := INF
+	for y in range(rows):
+		for x in range(columns):
+			var fraction := Vector2((x + 0.5) / columns, (y + 0.5) / rows)
+			var candidate := bounds.position + fraction * bounds.size
+			var distance := preferred.distance_squared_to(candidate)
+			if distance < best_distance and is_clear.call(candidate) and _contains_interior(candidate):
+				best = candidate
+				best_distance = distance
+	return best
+
+
+func _contains_interior(point: Vector2) -> bool:
+	if not Geometry2D.is_point_in_polygon(point, polygon):
+		return false
+	for i in range(polygon.size()):
+		var nearest := Geometry2D.get_closest_point_to_segment(
+			point, polygon[i], polygon[(i + 1) % polygon.size()])
+		if point.is_equal_approx(nearest):
+			return false
+	return true
+
+
+func _preferred_interior_point() -> Vector2:
+	var site := Vector2(position.x, position.z)
+	if _contains_interior(site):
+		return site
+
+	# A triangle centroid stays inside even when the authored polygon is concave.
+	var triangles := Geometry2D.triangulate_polygon(polygon)
+	var best := Vector2.INF
+	var largest_area := 0.0
+	for i in range(0, triangles.size(), 3):
+		var a := polygon[triangles[i]]
+		var b := polygon[triangles[i + 1]]
+		var c := polygon[triangles[i + 2]]
+		var area := absf((b - a).cross(c - a))
+		if area > largest_area:
+			largest_area = area
+			best = (a + b + c) / 3.0
+	return best
 
 
 func _add_surface(surface_name: String, polygon: PackedVector2Array,

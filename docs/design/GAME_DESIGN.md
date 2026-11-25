@@ -2,7 +2,7 @@
 
 ## Map and starting territories
 
-Generate 5–7 irregular territories across the playable map and frame all regions and both bases together. The human and CPU each own one starting region at opposite ends of the map. The remaining regions start neutral. The map seed and region count are configurable on the Match scene. Units navigate the open map around building footprints. Units cross regions without capturing them, and ownership has no effect on movement or combat.
+Generate 5–7 irregular territories across the playable map and frame all regions and both bases together. The human and CPU each own one starting region at opposite ends of the map. The remaining regions start neutral. The map seed and region count are configurable on the Match scene. Units navigate the open map around active building footprints and cross regions freely.
 
 Sources: S95c42ca9286d, Se50c19e91616, [generated territory map ticket](https://trello.com/c/gV8QZqOh/9-generate-a-2d-voronoi-style-territory-map)
 
@@ -14,14 +14,14 @@ This treatment favors a tactical board over a natural landscape. Terrain detail 
 
 ## Shared economy and production
 
-Provisional defaults give each side 50 Energy at +3/s, 30 Materials at +2/s, and 20 Food at +1/s. A barracks costs 40 Energy and 20 Materials, with a capacity of two barracks per side. The Build menu lists building types and their prices. Choose a building and click any point inside owned territory to place it. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 Energy and 15 Food and shortens the automatic spawn interval from 3.5 seconds to 2.5 seconds. Both sides use the same costs, capacity checks, and production rules. Purchases require sufficient stock in every listed resource and deduct the full price together.
+Provisional defaults give each side 50 Energy at +3/s, 30 Materials at +2/s, and 20 Food at +1/s. A barracks costs 40 Energy and 20 Materials, with a capacity of two barracks per side. The Build menu lists building types and their prices. Choose a building and click inside owned territory to place it, keeping outpost footprints clear. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 Energy and 15 Food and shortens the automatic spawn interval from 3.5 seconds to 2.5 seconds. Both sides use the same costs, capacity checks, and production rules. Purchases require sufficient stock in every listed resource and deduct the full price together.
 
 Sources: S95c42ca9286d
 [Three-resource economy ticket](https://trello.com/c/SesjHC9Y/15-expand-the-economy-to-three-resources)
 
 ## CPU opponent and automatic combat
 
-The CPU must visibly spend resources and build a barracks without player input in the first playable build. Its proposed deterministic priority is first barracks, second barracks, then the production upgrade, with a periodic check such as every 2 seconds. Both sides use the same single unit type and combat rules. Units deploy from their producing barracks and pursue the nearest reachable opponent within their detection radius by default. When no local enemy unit is available, autonomous units advance toward the opposing base and attack at close range. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
+The CPU must visibly spend resources and build a barracks without player input in the first playable build. Its proposed deterministic priority is first barracks, second barracks, then the production upgrade, with a periodic check such as every 2 seconds. Both sides use the same single unit type and combat rules. Units deploy from their producing barracks and pursue the nearest reachable opponent within their detection radius by default. When no local enemy unit is available, autonomous units attack reachable enemy outposts or advance toward the opposing base. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
 
 Sources: S95c42ca9286d, S1389629da9a3
 
@@ -41,6 +41,8 @@ Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 
 ## Optional region claiming
 
-The player can select a region on the map and use Claim to acquire a neutral region adjacent to any player-owned region. The initial prototype charges 50 energy per claim, a provisional balance value. A successful claim updates ownership and map color and deducts the cost once. Reject enemy-owned, nonadjacent, already claimed, and unaffordable targets. Claimed regions immediately become available for building placement. Claims have no direct effect on income, production, routing, or combat. CPU expansion is deferred.
+The player can select a neutral region adjacent to existing territory and use Claim to spend 50 Energy and acquire it. A successful claim changes the map color, opens building placement, and adds one outpost with 24 HP by default. Select its region to inspect its health. Both factions use the same claim rules. Automated CPU expansion is deferred.
+
+Destroying an outpost returns its region to neutral, so it no longer supports building placement or further claims for the former owner. Existing barracks remain visible and count toward their faction's capacity. Production pauses until their original faction pays to reclaim the region, then resumes from the existing timer. Only the starting bases determine victory and defeat. Restart clears expansion outposts.
 
 Sources: S95c42ca9286d, S1389629da9a3, Se50c19e91616
