@@ -16,6 +16,10 @@ This treatment favors a tactical board over a natural landscape. Terrain detail 
 
 Provisional defaults give each side 50 Energy at +3/s, 30 Materials at +2/s, and 20 Food at +1/s. A barracks costs 40 Energy and 20 Materials, with a capacity of two barracks per side. The Build menu lists building types and their prices. Choose a building and click inside owned territory to place it, keeping outpost footprints clear. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 Energy and 15 Food and shortens the automatic spawn interval from 3.5 seconds to 2.5 seconds. Both sides use the same costs, capacity checks, and production rules. Purchases require sufficient stock in every listed resource and deduct the full price together.
 
+Build stays available during play so players can inspect prices. Unaffordable options stay visible and re-enable as resources recover. Machine gun nests fire rapid single-target shots with line of sight. Mortars fire more slowly, reach farther, and damage enemy units around the impact point. Gun previews and inspection show attack range and the mortar splash radius.
+
+Drag to draw a straight wall in owned territory. The preview rounds length down to whole units and shows the total price before release. A valid drag buys one independently destructible segment per unit of length. Each segment must fit entirely in owned territory and leave existing structures and production exits clear. Units can route around active walls or attack hostile segments when a wall cuts off their route. Fortifications stay in place and remain destructible if the faction loses a region they occupy. They resume firing or blocking passage when their faction reclaims the entire footprint.
+
 Sources: S95c42ca9286d
 [Three-resource economy ticket](https://trello.com/c/SesjHC9Y/15-expand-the-economy-to-three-resources)
 

@@ -5,6 +5,9 @@ signal unit_produced(unit: Unit)
 signal unit_removed(unit_id: int)
 signal base_destroyed(side: MatchRegion.Owner)
 signal outpost_destroyed(outpost: Outpost)
+signal fortification_destroyed(fortification: Fortification)
+
+const Fortifications := preload("res://match/fortification_rules.gd")
 
 enum Outcome { IN_PROGRESS, VICTORY, DEFEAT }
 enum Order { AUTONOMOUS, MOVE, HOLD }
@@ -22,6 +25,7 @@ const BASE_ATTACK_RANGE := 1.8
 const DEFAULT_AGGRO_RADIUS := 4.0
 const BASE_FOOTPRINT := Vector2(1.5, 1.5)
 const BARRACKS_FOOTPRINT := Vector2(1.41, 0.91)
+const BARRACKS_SPAWN_CLEARANCE := BARRACKS_FOOTPRINT + Vector2.ONE * 0.24
 const OUTPOST_FOOTPRINT := Vector2(0.52, 0.52)
 const OUTPOST_CLEARANCE := OUTPOST_FOOTPRINT + Vector2(0.08, 0.08)
 const OUTPOST_ATTACK_RANGE := 1.25
@@ -46,6 +50,9 @@ class Unit:
 	var strategic_destination := Vector2.INF
 	var strategic_target := BASE_TARGET
 	var strategic_revision := -1
+	var blocked_revision := -1
+	var blocked_objective := Vector2.INF
+	var wall_approach: Dictionary
 	var hp := float(UNIT_HP)
 	var target := NO_TARGET
 	var can_attack_target := false
@@ -98,6 +105,20 @@ class Outpost extends BuildingHealth:
 	var obstacle: int
 
 
+class Fortification extends BuildingHealth:
+	var id: int
+	var kind: StringName
+	var position: Vector2
+	var angle: float
+	var obstacle := -1
+	var active := false
+	var cooldown := 0.0
+	var profile: Dictionary
+	var attack_range: float:
+		get:
+			return profile.size.length() * 0.5 + UNIT_ATTACK_RANGE * 0.65
+
+
 var stats: FactionStats
 var aggro_radius: float
 var target_priority := TargetPriority.NEAREST
@@ -108,7 +129,8 @@ var _base_health: Dictionary[MatchRegion.Owner, BuildingHealth] = {}
 var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
 var _outposts: Dictionary[int, Outpost] = {}
-var _next_outpost_id := BASE_TARGET - 1
+var _fortifications: Dictionary[int, Fortification] = {}
+var _next_structure_id := BASE_TARGET - 1
 var _next_unit_id := 1
 var _pending_time := 0.0
 var _elapsed_time := 0.0
@@ -151,8 +173,8 @@ func set_barracks_active(timer: ProductionTimer, active: bool) -> void:
 func add_outpost(region_id: StringName, side: MatchRegion.Owner, position: Vector2,
 		max_hp: int) -> Outpost:
 	var outpost := Outpost.new(stats, side, max_hp)
-	outpost.id = _next_outpost_id
-	_next_outpost_id -= 1
+	outpost.id = _next_structure_id
+	_next_structure_id -= 1
 	outpost.region_id = region_id
 	outpost.source_id = StringName("outpost/%d" % outpost.id)
 	outpost.position = position
@@ -165,19 +187,73 @@ func get_outpost(id: int) -> Outpost:
 	return _outposts.get(id)
 
 
+func add_fortification(kind: StringName, side: MatchRegion.Owner, position: Vector2,
+		angle := 0.0) -> Fortification:
+	var profile: Dictionary = Fortifications.PROFILES[kind]
+	var fort := Fortification.new(stats, side, profile.hp)
+	fort.id = _next_structure_id
+	_next_structure_id -= 1
+	fort.kind = kind
+	fort.profile = profile
+	fort.position = position
+	fort.angle = angle
+	fort.source_id = StringName("fortification/%d" % fort.id)
+	_fortifications[fort.id] = fort
+	set_fortification_active(fort, true)
+	return fort
+
+
+func get_fortification(id: int) -> Fortification:
+	return _fortifications.get(id)
+
+
+func set_fortification_active(fort: Fortification, active: bool) -> void:
+	if fort.active == active:
+		return
+	fort.active = active
+	if active:
+		fort.obstacle = navigation.add_obstacle(_footprint(fort.position, fort.profile.size * 0.5), fort.angle)
+	else:
+		navigation.remove_obstacle(fort.obstacle)
+		fort.obstacle = -1
+	stats.set_source_active(fort.source_id, active)
+
+
+func fortification_site_clear(polygon: PackedVector2Array, fortifications_only := false) -> bool:
+	if not fortifications_only:
+		for center in _bases.values():
+			if _footprints_overlap(polygon, center, BASE_FOOTPRINT * 2.0):
+				return false
+		for timer in _timers:
+			if _footprints_overlap(polygon, timer.position, BARRACKS_SPAWN_CLEARANCE * 2.0):
+				return false
+		for outpost in _outposts.values():
+			if _footprints_overlap(polygon, outpost.position, OUTPOST_CLEARANCE * 2.0):
+				return false
+	for fort: Fortification in _fortifications.values():
+		if _footprints_overlap(polygon, fort.position, fort.profile.size, fort.angle):
+			return false
+	return true
+
+
+static func _footprints_overlap(polygon: PackedVector2Array, center: Vector2,
+		size: Vector2, angle := 0.0) -> bool:
+	return not Geometry2D.intersect_polygons(polygon,
+		Fortifications.footprint(center, size, angle)).is_empty()
+
+
 func outpost_site_clear(position: Vector2) -> bool:
 	var footprint := _footprint(position, OUTPOST_CLEARANCE)
 	for center in _bases.values():
 		if footprint.intersects(_footprint(center, BASE_FOOTPRINT)):
 			return false
 	for timer in _timers:
-		# A dormant barracks can regain its footprint when its owner reclaims the region.
 		if footprint.intersects(_footprint(timer.position, BARRACKS_FOOTPRINT)):
 			return false
-	for outpost: Outpost in _outposts.values():
+	for outpost in _outposts.values():
 		if footprint.intersects(_footprint(outpost.position, OUTPOST_FOOTPRINT)):
 			return false
-	return true
+	return fortification_site_clear(BattleNavigation.corners_of(footprint), true)
 
 
 func get_unit(id: int) -> Unit:
@@ -189,7 +265,8 @@ func issue_move(id: int, destination: Vector2) -> bool:
 	if is_finished() or unit == null or unit.side != PLAYER:
 		return false
 	var route := navigation.path(unit.position, destination)
-	if route.is_empty():
+	if route.is_empty() and (not navigation.is_passable(destination)
+			or _find_wall_approach(unit).is_empty()):
 		return false
 	unit.order = Order.MOVE
 	unit.ordered_destination = destination
@@ -238,6 +315,8 @@ func _on_stat_changed(stat: StringName) -> void:
 		building.hp = minf(building.hp, building.max_hp)
 	for outpost in _outposts.values():
 		outpost.hp = minf(outpost.hp, outpost.max_hp)
+	for fort: Fortification in _fortifications.values():
+		fort.hp = minf(fort.hp, fort.max_hp)
 
 
 func is_finished() -> bool:
@@ -310,6 +389,7 @@ func _step_combat() -> void:
 		if unit.can_attack_target and unit.cooldown <= TIME_EPSILON:
 			attacks.append(unit)
 
+	_fire_fortifications(units)
 	for unit in units:
 		_move(unit)
 
@@ -321,8 +401,10 @@ func _step_combat() -> void:
 			var side := _opponent(unit.side)
 			_base_health[side].hp = maxf(0.0, base_hp(side) - damage)
 		elif unit.target < BASE_TARGET:
-			var outpost := _outposts[unit.target]
-			outpost.hp = maxf(0.0, outpost.hp - damage)
+			var building: BuildingHealth = _outposts.get(unit.target)
+			if building == null:
+				building = _fortifications[unit.target]
+			building.hp = maxf(0.0, building.hp - damage)
 		else:
 			_units[unit.target].hp -= damage
 		unit.cooldown = unit.attack_interval
@@ -340,9 +422,17 @@ func _step_combat() -> void:
 			stats.remove_source(outpost.source_id)
 			destroyed_outposts.append(outpost)
 
+	for fort: Fortification in _fortifications.values():
+		if fort.hp == 0:
+			_fortifications.erase(fort.id)
+			navigation.remove_obstacle(fort.obstacle)
+			stats.remove_source(fort.source_id)
+			fortification_destroyed.emit(fort)
+
 	for unit in _units.values():
 		if (unit.target > NO_TARGET and not _units.has(unit.target)) \
-				or (unit.target < BASE_TARGET and not _outposts.has(unit.target)):
+				or (unit.target < BASE_TARGET and not _outposts.has(unit.target)
+					and not _fortifications.has(unit.target)):
 			unit.target = NO_TARGET
 			unit.can_attack_target = false
 			_clear_route(unit)
@@ -361,6 +451,38 @@ func _step_combat() -> void:
 	if base_hp(CPU) == 0:
 		stats.remove_source(base_source_id(CPU))
 		base_destroyed.emit(CPU)
+
+
+func _fire_fortifications(units: Array[Unit]) -> void:
+	for fort: Fortification in _fortifications.values():
+		if not fort.active or fort.profile.range <= 0.0:
+			continue
+		fort.cooldown = maxf(0.0, fort.cooldown - STEP)
+		if fort.cooldown > TIME_EPSILON:
+			continue
+
+		var target: Unit
+		var nearest := float(fort.profile.range) ** 2
+		for unit in units:
+			var distance := fort.position.distance_squared_to(unit.position)
+			if unit.side == fort.side or distance > nearest:
+				continue
+			if fort.profile.splash == 0.0 and not navigation.line_clear(
+					fort.position, unit.position, fort.obstacle):
+				continue
+			target = unit
+			nearest = distance
+		if target == null:
+			continue
+
+		target.hp -= fort.profile.damage
+		if fort.profile.splash > 0.0:
+			var radius_squared := float(fort.profile.splash) ** 2
+			for unit in units:
+				if unit != target and unit.side != fort.side \
+						and target.position.distance_squared_to(unit.position) <= radius_squared:
+					unit.hp -= fort.profile.damage
+		fort.cooldown = fort.profile.interval
 
 
 func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
@@ -385,6 +507,14 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 				_clear_route(unit)
 				return true
 
+		for fort: Fortification in _fortifications.values():
+			if fort.side != unit.side and _can_attack_structure(unit.position, fort.position,
+					fort.obstacle, fort.attack_range):
+				unit.target = fort.id
+				unit.heading = unit.position.direction_to(fort.position)
+				_clear_route(unit)
+				return true
+
 	if unit.order == Order.AUTONOMOUS:
 		if unit.strategic_revision != navigation.revision:
 			_plan_strategic_approach(unit, side)
@@ -392,7 +522,39 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 		_route_to(unit, unit.strategic_destination)
 	else:
 		_route_to(unit, unit.ordered_destination)
+	if unit.waypoints.is_empty():
+		var objective := _bases[side] if unit.order == Order.AUTONOMOUS else unit.ordered_destination
+		if unit.position.is_equal_approx(objective):
+			return false
+		if unit.blocked_revision != navigation.revision or unit.blocked_objective != objective:
+			unit.blocked_revision = navigation.revision
+			unit.blocked_objective = objective
+			unit.wall_approach = _find_wall_approach(unit)
+		if not unit.wall_approach.is_empty():
+			var wall := get_fortification(unit.wall_approach.id)
+			unit.target = wall.id
+			if _can_attack_structure(unit.position, wall.position, wall.obstacle, wall.attack_range):
+				unit.heading = unit.position.direction_to(wall.position)
+				_clear_route(unit)
+				return true
+			_route_to(unit, unit.wall_approach.point)
 	return false
+
+
+func _find_wall_approach(unit: Unit) -> Dictionary:
+	var result := {}
+	var nearest := INF
+	for fort: Fortification in _fortifications.values():
+		if fort.side == unit.side or fort.kind != Fortifications.WALL or not fort.active:
+			continue
+		var distance := unit.position.distance_squared_to(fort.position)
+		if distance >= nearest:
+			continue
+		var point := _find_structure_approach(unit.position, fort.position, fort.obstacle, fort.attack_range)
+		if point.is_finite():
+			nearest = distance
+			result = {"id": fort.id, "point": point}
+	return result
 
 
 func _plan_local_engagement(unit: Unit, units: Array[Unit]) -> bool:

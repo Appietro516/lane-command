@@ -371,13 +371,14 @@ func _test_match_scene() -> void:
 	_click(scene.get_node("%Build"))
 	await process_frame
 	_click(scene.get_node("%BuildList").get_child(0))
-	_check(scene._preview != null and scene.selected_unit() == null and not panel.visible,
-		"Entering placement clears inspection.")
+	_check(scene._preview != null and scene.selected_unit() == player and not panel.visible,
+		"Entering placement hides inspection and retains the previous selection.")
 	_click_at_world(player_view.global_position)
-	_check(scene._pending_pick != Vector2.INF and scene.selected_unit() == null,
+	_check(scene._pending_pick != Vector2.INF and scene.selected_unit() == player,
 		"Clicks over a unit go to building placement while it is active.")
 	_press_escape()
-	_check(scene._preview == null, "Escape still cancels placement.")
+	_check(scene._preview == null and scene.selected_unit() == player and panel.visible,
+		"Escape cancels placement and restores inspection.")
 
 	_click_at_world(player_view.global_position)
 	player.hp = 0

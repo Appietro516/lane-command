@@ -190,7 +190,8 @@ func _test_match_controls() -> void:
 		"The barracks appears at the unsnapped cursor position.")
 	_check(energy_label.text == "Energy 10" and barracks_label.text == "Barracks 1/2"
 		and materials_label.text == "Materials 10" and income_label.text == "+3/s"
-		and build.disabled and upgrade.disabled and not placement_panel.visible,
+		and not build.disabled and match_scene._build_options[&"barracks"].disabled
+		and upgrade.disabled and not placement_panel.visible,
 		"Placement updates the HUD immediately and exits placement mode.")
 
 	match_scene._process(17.0)
@@ -210,9 +211,9 @@ func _test_match_controls() -> void:
 	var second_position := Vector3(-12.73, 0.0, 0.41)
 	await _click_world(second_position)
 	_check_state(match_scene.economy, PLAYER, [0.0, 2, 2.5], "Second placed barracks")
-	match_scene._process(20.0)
 	_check(_building_at(player_buildings, second_position)
-		and barracks_label.text == "Barracks 2/2" and build.disabled and upgrade.disabled,
+		and barracks_label.text == "Barracks 2/2" and not build.disabled
+		and match_scene._build_options[&"barracks"].disabled and upgrade.disabled,
 		"The second arbitrary position works and the capacity remains enforced.")
 
 	match_scene.free()
@@ -263,7 +264,7 @@ func _choose_barracks(build: Button) -> void:
 	var option := list.get_child(0) as Button
 	await process_frame
 	await process_frame
-	_check(list.is_visible_in_tree() and list.get_child_count() == 1
+	_check(list.is_visible_in_tree() and list.get_child_count() == 4
 		and option.text == "Barracks · 40 Energy + 20 Materials",
 		"Build opens the catalog menu with the configured price.")
 	_click(option)

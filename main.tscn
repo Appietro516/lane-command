@@ -277,6 +277,7 @@ offset_left = -235.0
 offset_top = -160.0
 offset_right = 235.0
 offset_bottom = -106.0
+grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 

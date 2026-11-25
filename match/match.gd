@@ -1,5 +1,6 @@
 extends Node3D
 
+const Fortifications := preload("res://match/fortification_rules.gd")
 const BUILDINGS := {
 	&"barracks": {
 		"label": "Barracks",
@@ -7,6 +8,18 @@ const BUILDINGS := {
 		"scene": preload("res://match/barracks.tscn"),
 		"rules": preload("res://match/barracks_rules.gd"),
 		"accent_node": ^"RoofMarking",
+	},
+	Fortifications.NEST: {
+		"scene": preload("res://match/fortifications/machine_gun_nest.tscn"),
+		"icon": preload("res://match/fortifications/machine_gun_nest.svg"),
+	},
+	Fortifications.MORTAR: {
+		"scene": preload("res://match/fortifications/mortar.tscn"),
+		"icon": preload("res://match/fortifications/mortar.svg"),
+	},
+	Fortifications.WALL: {
+		"scene": preload("res://match/fortifications/wall.tscn"),
+		"icon": preload("res://match/fortifications/wall.svg"),
 	},
 }
 const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
@@ -38,6 +51,12 @@ class PlacedBarracks:
 	var accent: MeshInstance3D
 
 
+class PlacedFortification:
+	var defense: MatchBattle.Fortification
+	var view: Node3D
+	var regions: Array[StringName]
+
+
 var faction_stats: FactionStats
 var economy: MatchEconomy
 @export var map_seed: int = 17
@@ -52,6 +71,13 @@ var _regions_by_id: Dictionary[StringName, MatchRegion] = {}
 var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
 var _outposts_by_region: Dictionary[StringName, MatchBattle.Outpost] = {}
 var _outpost_views: Dictionary[StringName, Node3D] = {}
+var _fortifications: Dictionary[int, PlacedFortification] = {}
+var _fortification_ids: Dictionary[Node3D, int] = {}
+var _selected_fortification := MatchBattle.NO_TARGET
+var _range_ring: MeshInstance3D
+var _splash_ring: MeshInstance3D
+var _wall_start := Vector2.INF
+var _wall_release_pending := false
 var _barracks_by_region: Dictionary[StringName, Array] = {}
 var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
@@ -107,7 +133,14 @@ func _ready() -> void:
 	for building_id in BUILDINGS:
 		var definition: Dictionary = BUILDINGS[building_id]
 		var option := Button.new()
-		option.text = "%s · %s" % [definition.label, MatchEconomy.cost_text(definition.cost)]
+		var profile: Dictionary = Fortifications.PROFILES.get(building_id, definition)
+		option.text = "%s · %s" % [profile.label, MatchEconomy.cost_text(_minimum_build_cost(building_id))]
+		option.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		if building_id == Fortifications.WALL:
+			option.text += " minimum"
+		if definition.has("icon"):
+			option.icon = definition.icon
+			option.text += "\n" + profile.description
 		option.pressed.connect(_begin_placement.bind(building_id))
 		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_build_list.add_child(option)
@@ -118,6 +151,8 @@ func _ready() -> void:
 	_preview_material = StandardMaterial3D.new()
 	_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_range_ring = _create_radius_ring(Color("#ffe5a5"), 0.018)
+	_splash_ring = _create_radius_ring(Color("#ffa977"), 0.06)
 	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
 	_claim_button.text = "Claim\n%s" % MatchEconomy.cost_text(MatchEconomy.CLAIM_COST)
 	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
@@ -162,12 +197,16 @@ func restart_match() -> void:
 		_battle.unit_removed.disconnect(_remove_unit)
 		_battle.base_destroyed.disconnect(_hide_base)
 		_battle.outpost_destroyed.disconnect(_lose_region)
+		_battle.fortification_destroyed.disconnect(_remove_fortification)
 	for view in _outpost_views.values():
 		view.get_parent().remove_child(view)
 		view.queue_free()
 	_outpost_views.clear()
 	_outposts_by_region.clear()
 	_barracks_by_region.clear()
+	_fortifications.clear()
+	_fortification_ids.clear()
+	_select_fortification(MatchBattle.NO_TARGET)
 	for unit_id in _unit_views.keys():
 		_remove_unit(unit_id)
 	_cancel_placement()
@@ -192,6 +231,7 @@ func restart_match() -> void:
 	_battle.unit_removed.connect(_remove_unit)
 	_battle.base_destroyed.connect(_hide_base)
 	_battle.outpost_destroyed.connect(_lose_region)
+	_battle.fortification_destroyed.connect(_remove_fortification)
 	_refresh_hud()
 	set_process(true)
 
@@ -214,6 +254,7 @@ func _process(delta: float) -> void:
 	if _battle.is_finished():
 		_cancel_placement()
 		_select_unit(MatchBattle.NO_TARGET)
+		_select_fortification(MatchBattle.NO_TARGET)
 		set_process(false)
 
 	for unit in _battle.active_units():
@@ -224,11 +265,24 @@ func _process(delta: float) -> void:
 
 func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 		world_position: Vector3) -> bool:
-	if not _placement_block_reason(side, building_id, world_position).is_empty():
+	if not BUILDINGS.has(building_id) or building_id == Fortifications.WALL:
 		return false
 
-	var definition: Dictionary = BUILDINGS[building_id]
 	var ground := _map_plane().project(world_position)
+	var position := _map_position(ground)
+	if Fortifications.PROFILES.has(building_id):
+		var polygon := Fortifications.footprint(position, Fortifications.PROFILES[building_id].size)
+		var regions := _owned_footprint_regions(side, polygon)
+		if not _gun_block_reason(side, building_id, polygon, regions).is_empty() \
+				or not economy.try_spend(side, _minimum_build_cost(building_id)):
+			return false
+		_add_fortification(side, building_id, position, 0.0, regions)
+		_refresh_hud()
+		return true
+
+	if not _placement_block_reason(side, building_id, ground).is_empty():
+		return false
+	var definition: Dictionary = BUILDINGS[building_id]
 	var production: MatchBattle.ProductionTimer = definition.rules.purchase(
 		economy, _battle, side, _map_position(ground), definition.cost)
 	if production == null:
@@ -254,11 +308,26 @@ func _placement_block_reason(side: MatchRegion.Owner, building_id: StringName,
 	if not owns_region(side, region_at_world_position(world_position)):
 		return "Choose a spot in your territory"
 	var position := _map_position(world_position)
+	if Fortifications.PROFILES.has(building_id):
+		var polygon := Fortifications.footprint(position, Fortifications.PROFILES[building_id].size)
+		return _gun_block_reason(side, building_id, polygon, _owned_footprint_regions(side, polygon))
 	var clearance := MatchBattle.BARRACKS_FOOTPRINT + MatchBattle.OUTPOST_CLEARANCE
 	for outpost: MatchBattle.Outpost in _outposts_by_region.values():
 		var offset := (outpost.position - position).abs()
 		if offset.x < clearance.x and offset.y < clearance.y:
 			return "Keep the outpost clear"
+	var spawn_size := MatchBattle.BARRACKS_SPAWN_CLEARANCE * 2.0
+	if not _battle.fortification_site_clear(Fortifications.footprint(position, spawn_size), true):
+		return "Keep defenses and spawn exits clear"
+	return _purchase_block_reason(side, building_id)
+
+
+func _gun_block_reason(side: MatchRegion.Owner, building_id: StringName,
+		polygon: PackedVector2Array, regions: Array[StringName]) -> String:
+	if regions.is_empty():
+		return "Keep the footprint in your territory"
+	if not _battle.fortification_site_clear(polygon):
+		return "Keep structures and spawn exits clear"
 	return _purchase_block_reason(side, building_id)
 
 
@@ -268,7 +337,106 @@ func _purchase_block_reason(side: MatchRegion.Owner, building_id: StringName) ->
 	if not _buildings.has(side) or not BUILDINGS.has(building_id):
 		return "Building unavailable"
 	var definition: Dictionary = BUILDINGS[building_id]
-	return definition.rules.block_reason(economy, side, definition.cost)
+	if definition.has("rules"):
+		return definition.rules.block_reason(economy, side, definition.cost)
+	return economy.cost_block_reason(side, _minimum_build_cost(building_id))
+
+
+func _minimum_build_cost(building_id: StringName) -> Dictionary:
+	if building_id == Fortifications.WALL:
+		return Fortifications.wall_cost(1)
+	return Fortifications.PROFILES.get(building_id, BUILDINGS[building_id]).cost
+
+
+func _owned_footprint_regions(side: MatchRegion.Owner,
+		polygon: PackedVector2Array) -> Array[StringName]:
+	var covered: Array[StringName] = []
+	if not _buildings.has(side):
+		return covered
+	for point in polygon:
+		if not TerritoryLayout.BOUNDS.has_point(point):
+			return []
+	for region_id in _regions_by_id:
+		var region := get_region(region_id)
+		if not Geometry2D.intersect_polygons(polygon, region.polygon).is_empty():
+			if region.region_owner != side:
+				return []
+			covered.append(region_id)
+	return covered
+
+
+func _wall_plan(side: MatchRegion.Owner, start: Vector2, end: Vector2) -> Dictionary:
+	var plan := {"reason": "", "length": 0.0, "cost": {}, "angle": 0.0, "segments": []}
+	if not start.is_finite() or not end.is_finite() or not TerritoryLayout.BOUNDS.has_point(start) \
+			or not TerritoryLayout.BOUNDS.has_point(end):
+		plan.reason = "Keep both endpoints on the map"
+		return plan
+	var count := Fortifications.wall_count(start.distance_to(end))
+	if count < 1:
+		plan.reason = "Minimum length %s unit" % _stat_number(Fortifications.WALL_SEGMENT_LENGTH)
+		return plan
+	var direction := start.direction_to(end)
+	var step := direction * Fortifications.WALL_SEGMENT_LENGTH
+	plan.angle = direction.angle()
+	plan.length = count * Fortifications.WALL_SEGMENT_LENGTH
+	plan.cost = Fortifications.wall_cost(count)
+	if _battle.is_finished():
+		plan.reason = "Match ended"
+		return plan
+	for i in range(count):
+		var center := start + step * (i + 0.5)
+		var polygon := Fortifications.footprint(center, Fortifications.PROFILES[Fortifications.WALL].size,
+			plan.angle)
+		var regions := _owned_footprint_regions(side, polygon)
+		if regions.is_empty():
+			plan.reason = "Keep the entire wall in your territory"
+			return plan
+		if not _battle.fortification_site_clear(polygon):
+			plan.reason = "Keep structures and spawn exits clear"
+			return plan
+		plan.segments.append({"center": center, "regions": regions})
+	plan.reason = economy.cost_block_reason(side, plan.cost)
+	return plan
+
+
+func try_place_wall(side: MatchRegion.Owner, world_start: Vector3, world_end: Vector3) -> bool:
+	var plan := _wall_plan(side, _map_position(world_start), _map_position(world_end))
+	if not plan.reason.is_empty() or not economy.try_spend(side, plan.cost):
+		return false
+	for segment: Dictionary in plan.segments:
+		_add_fortification(side, Fortifications.WALL, segment.center, plan.angle, segment.regions)
+	_refresh_hud()
+	return true
+
+
+func _add_fortification(side: MatchRegion.Owner, kind: StringName, center: Vector2, angle: float,
+		regions: Array[StringName]) -> void:
+	var defense := _battle.add_fortification(kind, side, center, angle)
+	var view := BUILDINGS[kind].scene.instantiate() as Node3D
+	_buildings[side].add_child(view)
+	view.global_position = _world_position(center)
+	view.rotation.y = -angle
+	view.get_node("Marking").material_override = FACTION_ACCENTS[side]
+	var placed := PlacedFortification.new()
+	placed.defense = defense
+	placed.view = view
+	placed.regions = regions
+	_fortifications[defense.id] = placed
+	_fortification_ids[view] = defense.id
+
+
+func _remove_fortification(defense: MatchBattle.Fortification) -> void:
+	var placed := _fortifications[defense.id]
+	_fortifications.erase(defense.id)
+	_fortification_ids.erase(placed.view)
+	placed.view.get_parent().remove_child(placed.view)
+	placed.view.queue_free()
+	if _selected_fortification == defense.id:
+		_select_fortification(MatchBattle.NO_TARGET)
+
+
+func _world_position(point: Vector2) -> Vector3:
+	return _regions.to_global(Vector3(point.x, 0.0, point.y))
 
 
 func _toggle_build_menu() -> void:
@@ -286,8 +454,8 @@ func _begin_placement(building_id: StringName) -> void:
 	if not _purchase_block_reason(PLAYER, building_id).is_empty():
 		return
 	_cancel_placement()
-	_select_unit(MatchBattle.NO_TARGET)
 	_placement_id = building_id
+	_update_unit_selection()
 	var definition: Dictionary = BUILDINGS[building_id]
 	_preview = definition.scene.instantiate() as Node3D
 	_preview.process_mode = Node.PROCESS_MODE_DISABLED
@@ -307,12 +475,18 @@ func _cancel_placement() -> void:
 		_preview = null
 	_placement_id = &""
 	_pending_pick = Vector2.INF
+	_clear_wall_drag()
 	_placement_panel.hide()
 	_build_menu.hide()
+	_update_unit_selection()
+	_update_fortification_inspection()
 
 
 func _update_placement_preview(pointer: Vector2) -> void:
-	var definition: Dictionary = BUILDINGS[_placement_id]
+	if _placement_id == Fortifications.WALL:
+		_update_wall_preview(pointer)
+		return
+	var definition: Dictionary = Fortifications.PROFILES.get(_placement_id, BUILDINGS[_placement_id])
 	var reason := _purchase_block_reason(PLAYER, _placement_id)
 	_preview.hide()
 	if pointer != Vector2.INF:
@@ -325,7 +499,43 @@ func _update_placement_preview(pointer: Vector2) -> void:
 	if reason.is_empty():
 		reason = "Click to place" if _preview.visible else "Choose a spot in your territory"
 	_placement_label.text = "%s · %s" % [definition.label, reason]
+	if definition.has("range"):
+		_placement_label.text += "\n" + _range_text(definition)
+		_show_ranges(definition, _preview.global_position, _preview.visible)
+	else:
+		_hide_ranges()
 	_placement_panel.show()
+
+
+func _update_wall_preview(pointer: Vector2) -> void:
+	_hide_ranges()
+	_preview.hide()
+	var point: Variant = _ground_point(pointer) if pointer != Vector2.INF else null
+	var reason := "Drag from a spot in your territory"
+	var details := "Whole units, rounded down · %s minimum" % MatchEconomy.cost_text(
+		_minimum_build_cost(Fortifications.WALL))
+	if _wall_start.is_finite() and point != null:
+		var plan := _wall_plan(PLAYER, _wall_start, _map_position(point))
+		reason = "Release to build" if plan.reason.is_empty() else plan.reason
+		if plan.length > 0.0:
+			_preview.global_position = _world_position(_wall_start
+				+ Vector2.from_angle(plan.angle) * plan.length * 0.5)
+			_preview.rotation.y = -plan.angle
+			_preview.scale.x = plan.length / Fortifications.WALL_SEGMENT_LENGTH
+			var unit_label := "unit" if is_equal_approx(plan.length, 1.0) else "units"
+			details = "%s %s · %s" % [_stat_number(plan.length), unit_label, MatchEconomy.cost_text(plan.cost)]
+			_preview_material.albedo_color = VALID_PREVIEW if plan.reason.is_empty() else INVALID_PREVIEW
+			_preview.show()
+	elif point != null:
+		_preview.global_position = point
+		_preview.rotation.y = 0.0
+		_preview.scale.x = 1.0
+		var valid := owns_region(PLAYER, region_at_world_position(point))
+		_preview_material.albedo_color = VALID_PREVIEW if valid else INVALID_PREVIEW
+		_preview.show()
+	_placement_label.text = "Wall · %s\n%s" % [reason, details]
+	_placement_panel.show()
+
 
 
 func try_upgrade(side: MatchRegion.Owner) -> bool:
@@ -373,6 +583,17 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 		var active := barracks.production.side == side
 		_battle.set_barracks_active(barracks.production, active)
 		barracks.accent.material_override = FACTION_ACCENTS[side] if active else INACTIVE_ACCENT
+	for placed in _fortifications.values():
+		if not placed.regions.has(region_id):
+			continue
+		var active := true
+		for covered in placed.regions:
+			if not owns_region(placed.defense.side, covered):
+				active = false
+				break
+		_battle.set_fortification_active(placed.defense, active)
+		placed.view.get_node("Marking").material_override = FACTION_ACCENTS[placed.defense.side] \
+			if active else INACTIVE_ACCENT
 	_refresh_hud()
 	if _preview != null:
 		_refresh_placement_preview()
@@ -404,7 +625,7 @@ func region_at_world_position(world_position: Vector3) -> StringName:
 
 
 func selected_unit() -> MatchBattle.Unit:
-	return _battle.get_unit(_selected_unit_id)
+	return _battle.get_unit(_selected_unit_id) if _battle != null else null
 
 
 func _map_position(world_position: Vector3) -> Vector2:
@@ -435,14 +656,47 @@ func _claim_block_reason(region_id: StringName, side := PLAYER) -> String:
 	return "Not adjacent"
 
 
+func _input(event: InputEvent) -> void:
+	if not _camera.is_dragging() and (_preview != null or _build_menu.visible):
+		if event.is_action_pressed("ui_cancel") or (event is InputEventMouseButton
+				and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed):
+			_cancel_placement()
+			get_viewport().set_input_as_handled()
+			return
+	if _wall_start.is_finite() and event is InputEventMouseButton \
+			and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		# A release consumed by the HUD must end the drag without building.
+		_wall_release_pending = true
+		_finish_consumed_wall_release.call_deferred()
+
+
+func _finish_consumed_wall_release() -> void:
+	if _wall_release_pending:
+		_clear_wall_drag()
+
+
+func _clear_wall_drag() -> void:
+	_wall_start = Vector2.INF
+	_wall_release_pending = false
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	if (_preview != null or _build_menu.visible) and (event.is_action_pressed("ui_cancel") or (
-			event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT
-			and event.pressed)):
-		_cancel_placement()
-		get_viewport().set_input_as_handled()
-	elif event.is_action_pressed("ui_cancel") and selected_unit() != null:
+	if event.is_action_pressed("ui_cancel") and (selected_unit() != null
+			or _selected_fortification != MatchBattle.NO_TARGET):
 		_select_unit(MatchBattle.NO_TARGET)
+		_select_fortification(MatchBattle.NO_TARGET)
+		get_viewport().set_input_as_handled()
+	elif _placement_id == Fortifications.WALL and event is InputEventMouseButton \
+			and event.button_index == MOUSE_BUTTON_LEFT:
+		var point: Variant = _ground_point(event.position)
+		if event.pressed:
+			_wall_release_pending = false
+			_wall_start = _map_position(point) if point != null else Vector2.INF
+		else:
+			if not _camera.is_dragging() and _wall_start.is_finite() and point != null \
+					and try_place_wall(PLAYER, _world_position(_wall_start), point):
+				_cancel_placement()
+			_clear_wall_drag()
 		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
@@ -486,15 +740,19 @@ func _pick_map(pointer: Vector2) -> void:
 	var id := _pick_unit(pointer)
 	var unit := _battle.get_unit(id)
 	if unit != null and not _battle.is_finished():
+		_select_fortification(MatchBattle.NO_TARGET)
 		_select_unit(id)
 		_select_region(&"")
 	else:
 		_select_unit(MatchBattle.NO_TARGET)
-		_select_region(_pick_region(pointer))
+		var building := _pick_building(pointer)
+		_select_fortification(_fortification_ids.get(building, MatchBattle.NO_TARGET))
+		var point: Variant = _ground_point(pointer) if building == null else building.global_position
+		_select_region(region_at_world_position(point) if point != null else &"")
 	_refresh_claim_control()
 
 
-func _pick_region(pointer: Vector2) -> StringName:
+func _pick_building(pointer: Vector2) -> Node3D:
 	var start := _camera.project_ray_origin(pointer)
 	var end := start + _camera.project_ray_normal(pointer) * _camera.far
 	var buildings: Array[Node] = [_bases[PLAYER], _bases[CPU]]
@@ -520,10 +778,7 @@ func _pick_region(pointer: Vector2) -> StringName:
 					if distance < depth:
 						nearest = building
 						depth = distance
-	if nearest != null:
-		return region_at_world_position(nearest.global_position)
-	var point: Variant = _map_plane().intersects_segment(start, end)
-	return region_at_world_position(point) if point != null else &""
+	return nearest
 
 
 func _pick_unit(pointer: Vector2) -> int:
@@ -550,7 +805,7 @@ func _select_unit(id: int) -> void:
 
 
 func _update_unit_selection() -> void:
-	var unit := selected_unit()
+	var unit := selected_unit() if _placement_id.is_empty() and _battle != null else null
 	_unit_selection.visible = unit != null
 	_unit_panel.visible = unit != null
 	_route_mesh.clear_surfaces()
@@ -573,6 +828,80 @@ func _update_unit_selection() -> void:
 		_draw_unit_route(unit)
 
 
+func _select_fortification(id: int) -> void:
+	_selected_fortification = id
+	_update_fortification_inspection()
+
+
+func _update_fortification_inspection() -> void:
+	var placed: PlacedFortification = _fortifications.get(_selected_fortification)
+	if placed == null or not _placement_id.is_empty():
+		if _placement_id.is_empty():
+			_hide_ranges()
+		if placed == null and selected_unit() == null:
+			_unit_panel.hide()
+		return
+	var fort := placed.defense
+	_unit_panel.show()
+	_unit_name.text = "%s %s" % [_side_label(fort.side), fort.profile.label]
+	_unit_name.modulate = FACTION_ACCENTS[fort.side].albedo_color.lightened(0.25)
+	_unit_stats.text = _health_text(fort)
+	_unit_stats.tooltip_text = _stat_tooltip("Maximum HP", fort.health_stat())
+	_unit_intent.text = "Active" if fort.active else "Inactive · territory lost"
+	if fort.profile.range > 0.0:
+		_unit_intent.text += "\n" + _range_text(fort.profile).replace(" · ", "\n")
+	_unit_order_hint.hide()
+	_show_ranges(fort.profile, placed.view.global_position, true)
+
+
+func _health_text(building: MatchBattle.BuildingHealth) -> String:
+	return "HP  %s / %s" % [_stat_number(building.hp), _stat_number(building.max_hp)]
+
+
+func _range_text(profile: Dictionary) -> String:
+	var label := "Range %s" % _stat_number(profile.range)
+	if profile.splash > 0.0:
+		label += " · Splash radius %s" % _stat_number(profile.splash)
+	return label
+
+
+func _create_radius_ring(color: Color, width_fraction: float) -> MeshInstance3D:
+	var mesh := ImmediateMesh.new()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = color
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP, material)
+	for i in range(65):
+		var angle := TAU * i / 64.0
+		var direction := Vector3(cos(angle), 0.0, sin(angle))
+		mesh.surface_add_vertex(direction)
+		mesh.surface_add_vertex(direction * (1.0 - width_fraction))
+	mesh.surface_end()
+	var ring := MeshInstance3D.new()
+	ring.mesh = mesh
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring.hide()
+	add_child(ring)
+	return ring
+
+
+func _show_ranges(profile: Dictionary, center: Vector3, visible_at_point: bool) -> void:
+	_range_ring.visible = visible_at_point and profile.range > 0.0
+	_splash_ring.visible = visible_at_point and profile.splash > 0.0
+	if _range_ring.visible:
+		_range_ring.global_position = center + Vector3.UP * 0.15
+		_range_ring.scale = Vector3.ONE * float(profile.range)
+	if _splash_ring.visible:
+		_splash_ring.global_position = center + Vector3.UP * 0.16
+		_splash_ring.scale = Vector3.ONE * float(profile.splash)
+
+
+func _hide_ranges() -> void:
+	_range_ring.hide()
+	_splash_ring.hide()
+
+
 func _selected_unit_can_receive_orders() -> bool:
 	var unit := selected_unit()
 	return unit != null and unit.side == PLAYER and not _battle.is_finished()
@@ -587,6 +916,9 @@ func _target_label(unit: MatchBattle.Unit) -> String:
 	var outpost := _battle.get_outpost(unit.target)
 	if outpost != null:
 		return "%s outpost · %d/%d HP" % [_side_label(outpost.side), outpost.hp, outpost.max_hp]
+	var fort := _battle.get_fortification(unit.target)
+	if fort != null:
+		return "%s · %s" % [fort.profile.label, _health_text(fort)]
 	return "None"
 
 
@@ -769,14 +1101,12 @@ func _refresh_hud() -> void:
 	_barracks_label.text = "Barracks %d/%d" % [
 		economy.barracks_count(PLAYER), MatchEconomy.BARRACKS_CAPACITY,
 	]
-	var has_available_building := false
 	for building_id in _build_options:
-		var available := _purchase_block_reason(PLAYER, building_id).is_empty()
-		_build_options[building_id].disabled = not available
-		has_available_building = has_available_building or available
-	_build_button.disabled = not has_available_building
-	if not has_available_building:
-		_build_menu.hide()
+		var reason := _purchase_block_reason(PLAYER, building_id)
+		_build_options[building_id].disabled = not reason.is_empty()
+		_build_options[building_id].tooltip_text = reason
+	_build_button.disabled = _battle.is_finished()
+	_update_fortification_inspection()
 	_upgrade_button.disabled = _battle.is_finished() or not economy.can_upgrade(PLAYER)
 	_upgrade_button.text = (
 		"Upgraded" if economy.has_upgrade(PLAYER)

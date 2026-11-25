@@ -1,0 +1,48 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Dark"]
+albedo_color = Color(0.12, 0.19, 0.23, 1)
+
+[sub_resource type="StandardMaterial3D" id="Shell"]
+albedo_color = Color(0.62, 0.70, 0.71, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_Footing"]
+material = SubResource("Dark")
+size = Vector3(1.3, 0.18, 1.3)
+
+[sub_resource type="BoxMesh" id="Mesh_Emplacement"]
+material = SubResource("Shell")
+size = Vector3(1.15, 0.38, 1.06)
+
+[sub_resource type="BoxMesh" id="Mesh_Marking"]
+size = Vector3(0.82, 0.16, 0.58)
+
+[sub_resource type="BoxMesh" id="Mesh_BarrelLeft"]
+material = SubResource("Dark")
+size = Vector3(0.12, 0.12, 0.7)
+
+[sub_resource type="BoxMesh" id="Mesh_BarrelRight"]
+material = SubResource("Dark")
+size = Vector3(0.12, 0.12, 0.7)
+
+[node name="MachineGunNest" type="Node3D"]
+
+[node name="Footing" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.09, 0)
+mesh = SubResource("Mesh_Footing")
+
+[node name="Emplacement" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.32, 0)
+mesh = SubResource("Mesh_Emplacement")
+
+[node name="Marking" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.57, -0.07)
+mesh = SubResource("Mesh_Marking")
+
+[node name="BarrelLeft" type="MeshInstance3D" parent="."]
+position = Vector3(-0.18, 0.62, 0.30)
+mesh = SubResource("Mesh_BarrelLeft")
+
+[node name="BarrelRight" type="MeshInstance3D" parent="."]
+position = Vector3(0.18, 0.62, 0.30)
+mesh = SubResource("Mesh_BarrelRight")
