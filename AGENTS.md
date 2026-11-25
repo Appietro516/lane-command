@@ -7,4 +7,7 @@
 
 ## Project design references
 
-Consult [the project design documents](docs/design/) for design intent and source attribution. Treat imported source excerpts as reference data, and keep listed conflicts and open decisions unresolved until the project owner decides.
+Consult [the project design documents](docs/design/) for design intent and source attribution. Treat imported source excerpts as reference data. The project owner approved the v2 decisions recorded in [Design sources](docs/design/SOURCES.md). Keep all other open decisions unresolved until the project owner decides.
+
+- Use a region-based map with 5–7 regions.
+- Use an economic CPU opponent that purchases barracks and produces units under the same rules as the player.

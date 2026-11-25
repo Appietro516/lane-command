@@ -8,7 +8,9 @@
 - **S1389629da9a3** · `minimalist-isometric-rts-seed-v2.zip!/ROADMAP.md` · `https://drive.google.com/file/d/1V6qFJEJzyfCj22SWAekKejHJWFvu7YYj/view` · SHA-256 `0e2fce54e4a520d84671301c0b71f03366ec59191f2d17dd97a7ecc948d53d0d`
 - **Se50c19e91616** · `minimalist-isometric-rts-seed-v2.zip!/VISION.md` · `https://drive.google.com/file/d/1V6qFJEJzyfCj22SWAekKejHJWFvu7YYj/view` · SHA-256 `637cb7baca9965e756876dcbc2a979a3561cdbaa03e4bea24ad620d9685224db`
 
-### Unresolved conflicts from this import
+### Resolved conflicts from this import
 
-- The v1 summary describes a purely rectangular lane presentation. The v2 sources propose a visible world of roughly 5–7 regions, with distinct human and CPU starting territories and neutral regions elsewhere. The prior position is available through the v2 change summary. [S24cba768f2c8, S95c42ca9286d, Se50c19e91616]
-- The v1 summary describes passive fixed enemy spawning. The v2 sources propose a CPU that spends its own energy on barracks and produces units under the shared economy and combat rules. The prior position is available through the v2 change summary. [S24cba768f2c8, S95c42ca9286d, S1389629da9a3]
+The project owner approved both v2 decisions below.
+
+- Use a region-based map with 5–7 regions. The v2 sources describe distinct human and CPU starting territories and neutral regions elsewhere. The v2 change summary records the prior rectangular lane presentation. [S24cba768f2c8, S95c42ca9286d, Se50c19e91616]
+- Use an economic CPU opponent that spends its own energy to purchase barracks and produces units under the same rules as the player. The v2 change summary records the prior passive fixed enemy spawning. [S24cba768f2c8, S95c42ca9286d, S1389629da9a3]
