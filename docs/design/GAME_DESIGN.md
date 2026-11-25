@@ -14,9 +14,10 @@ This treatment favors a tactical board over a natural landscape. Terrain detail 
 
 ## Shared economy and production
 
-Proposed defaults give each side 50 starting energy and 3 energy per second. A barracks costs 40 energy, with a capacity of two barracks per side. The Build menu lists building types and their energy costs. Choose a building and click any point inside owned territory to place it. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 energy and shortens the automatic spawn interval from about 3.5 seconds to 2.5 seconds. Apply the same costs, capacity checks, and production rules to both sides. Reject unaffordable actions and prevent negative energy.
+Provisional defaults give each side 50 Energy at +3/s, 30 Materials at +2/s, and 20 Food at +1/s. A barracks costs 40 Energy and 20 Materials, with a capacity of two barracks per side. The Build menu lists building types and their prices. Choose a building and click any point inside owned territory to place it. The preview indicates whether the point is valid, and Cancel, Escape, or right-click exits placement. A one-time production upgrade costs 60 Energy and 15 Food and shortens the automatic spawn interval from 3.5 seconds to 2.5 seconds. Both sides use the same costs, capacity checks, and production rules. Purchases require sufficient stock in every listed resource and deduct the full price together.
 
 Sources: S95c42ca9286d
+[Three-resource economy ticket](https://trello.com/c/SesjHC9Y/15-expand-the-economy-to-three-resources)
 
 ## CPU opponent and automatic combat
 
@@ -34,7 +35,7 @@ With a player unit selected, right-click reachable ground to issue or replace a 
 
 ## HUD and match reset
 
-Show player energy, income, barracks count, Build and Upgrade controls, both bases' HP, and Restart. CPU activity is visible through buildings and units, with debug labels allowed. Show Victory when the CPU base falls or Defeat when the player's base falls. Restart restores initial ownership and resources, resets CPU and production timers, and clears buildings, units, upgrades, and claims while restoring base HP.
+Show the player's resource stockpiles and net income rates, barracks count, Build and Upgrade controls, both bases' HP, and Restart. Hover over a resource to see its baseline rate, any additional sources, and the total. CPU activity is visible through buildings and units, with debug labels allowed. Show Victory when the CPU base falls or Defeat when the player's base falls. Restart restores initial ownership and resources, resets CPU and production timers, and clears buildings, units, upgrades, and claims while restoring base HP.
 
 Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 

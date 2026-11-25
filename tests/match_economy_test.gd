@@ -3,6 +3,9 @@ extends SceneTree
 const MATCH_SCENE := preload("res://main.tscn")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
+const ENERGY := MatchEconomy.ENERGY
+const MATERIALS := MatchEconomy.MATERIALS
+const FOOD := MatchEconomy.FOOD
 
 var failures := 0
 
@@ -14,6 +17,9 @@ func _initialize() -> void:
 func _run() -> void:
 	_test_rules(PLAYER, CPU)
 	_test_rules(CPU, PLAYER)
+	_test_atomic_purchases(PLAYER, CPU)
+	_test_atomic_purchases(CPU, PLAYER)
+	_test_income_sources()
 	await _test_match_controls()
 	await _test_claimed_placement()
 	_test_cpu_purchases()
@@ -35,17 +41,17 @@ func _test_rules(side: MatchRegion.Owner, other_side: MatchRegion.Owner) -> void
 
 	_check(not economy.try_upgrade(side), "Reject an unaffordable upgrade.")
 	_check_state(economy, side, [53.0, 0, 3.5], "Unaffordable upgrade")
-	_check(economy.try_build(side), "Accept the first barracks.")
+	_check(economy.try_build(side, MatchEconomy.BARRACKS_COST), "Accept the first barracks.")
 	_check_state(economy, side, [13.0, 1, 3.5], "First barracks")
-	_check(not economy.try_build(side), "Reject an unaffordable barracks.")
+	_check(not economy.try_build(side, MatchEconomy.BARRACKS_COST), "Reject an unaffordable barracks.")
 	_check_state(economy, side, [13.0, 1, 3.5], "Unaffordable barracks")
 	_check_state(economy, other_side, [53.0, 0, 3.5], "Other side after first barracks")
 
 	economy.advance(9.0)
-	_check(economy.try_build(side), "Accept a barracks at the exact price.")
+	_check(economy.try_build(side, MatchEconomy.BARRACKS_COST), "Accept a barracks at the exact price.")
 	_check_state(economy, side, [0.0, 2, 3.5], "Second barracks at the exact price")
 	economy.advance(20.0)
-	_check(not economy.try_build(side), "Reject a third barracks with sufficient energy.")
+	_check(not economy.try_build(side, MatchEconomy.BARRACKS_COST), "Reject a third barracks with sufficient energy.")
 	_check_state(economy, side, [60.0, 2, 3.5], "Barracks capacity")
 	_check(economy.try_upgrade(side), "Accept an upgrade at the exact price.")
 	_check_state(economy, side, [0.0, 2, 2.5], "Production upgrade at the exact price")
@@ -53,6 +59,59 @@ func _test_rules(side: MatchRegion.Owner, other_side: MatchRegion.Owner) -> void
 	_check(not economy.try_upgrade(side), "Reject a repeat upgrade with sufficient energy.")
 	_check_state(economy, side, [60.0, 2, 2.5], "Repeat upgrade")
 	_check_state(economy, other_side, [200.0, 0, 3.5], "Other side after all purchases")
+
+
+func _test_atomic_purchases(side: MatchRegion.Owner, other_side: MatchRegion.Owner) -> void:
+	var economy := MatchEconomy.new()
+	_check(economy.cost_block_reason(side, {ENERGY: 40, MATERIALS: 31}) == "Need more materials"
+		and not economy.try_build(side, {ENERGY: 40, MATERIALS: 31}),
+		"Enough Energy alone cannot buy a building when Materials are short.")
+	_check(not economy.try_spend(side, {ENERGY: 1, &"missing": 1})
+		and not economy.try_spend(side, {ENERGY: 1, FOOD: -1}),
+		"Unknown resources and negative costs reject the whole purchase.")
+	_check(economy.stockpile(side, ENERGY) == 50.0 and economy.stockpile(side, MATERIALS) == 30.0
+		and economy.stockpile(side, FOOD) == 20.0 and economy.barracks_count(side) == 0,
+		"A rejected purchase never debits a stockpile or changes barracks count.")
+	_check(economy.try_spend(side, {ENERGY: 50, MATERIALS: 30, FOOD: 20})
+		and economy.stockpile(side, ENERGY) == 0.0 and economy.stockpile(side, MATERIALS) == 0.0
+		and economy.stockpile(side, FOOD) == 0.0,
+		"A purchase can debit every resource at exact affordability.")
+	_check(economy.stockpile(other_side, ENERGY) == 50.0
+		and economy.stockpile(other_side, MATERIALS) == 30.0
+		and economy.stockpile(other_side, FOOD) == 20.0,
+		"A purchase changes only the paying side's stockpiles.")
+	economy.advance(0.5)
+	_check(economy.stockpile(side, ENERGY) == 1.5 and economy.stockpile(side, MATERIALS) == 1.0
+		and economy.stockpile(side, FOOD) == 0.5, "Purchases leave baseline income rates intact.")
+	economy.advance(20.0)
+	_check(economy.try_spend(side, {FOOD: 6}) and not economy.try_upgrade(side)
+		and economy.energy(side) == 61.5 and economy.stockpile(side, FOOD) == 14.5
+		and not economy.has_upgrade(side), "A Food shortage prevents a production upgrade.")
+	economy.advance(0.5)
+	_check(economy.try_upgrade(side) and economy.energy(side) == 3.0
+		and economy.stockpile(side, FOOD) == 0.0 and economy.has_upgrade(side),
+		"An upgrade spends Energy and Food together.")
+
+
+func _test_income_sources() -> void:
+	var economy := MatchEconomy.new()
+	economy.set_income_source(PLAYER, ENERGY, &"generator_2", "Generator #2", 2.0)
+	economy.set_income_source(PLAYER, ENERGY, &"landmark", "Landmark", 1.0)
+	economy.set_income_source(PLAYER, MATERIALS, &"landmark", "Landmark", 0.5)
+	var sources := economy.income_sources(PLAYER, ENERGY)
+	_check(sources.keys() == [MatchEconomy.BASE_INCOME, &"generator_2", &"landmark"]
+		and sources[MatchEconomy.BASE_INCOME].rate == 3.0
+		and sources[&"generator_2"].label == "Generator #2", "Income records preserve source IDs.")
+	sources[MatchEconomy.BASE_INCOME].rate = 0.0
+	economy.advance(2.0)
+	_check(economy.income_rate(PLAYER, ENERGY) == 6.0 and economy.energy(PLAYER) == 62.0
+		and economy.stockpile(PLAYER, MATERIALS) == 35.0 and economy.energy(CPU) == 56.0,
+		"Simulation uses attributed rates, independently for each side and resource.")
+	economy.set_income_source(PLAYER, ENERGY, &"generator_2", "Generator #2", 0.5)
+	economy.set_income_source(PLAYER, ENERGY, &"landmark", "", 0.0)
+	_check(economy.income_rate(PLAYER, ENERGY) == 3.5
+		and not economy.income_sources(PLAYER, ENERGY).has(&"landmark"),
+		"Sources can be replaced or removed by ID.")
 
 
 func _test_match_controls() -> void:
@@ -66,8 +125,10 @@ func _test_match_controls() -> void:
 
 	var build: Button = match_scene.get_node("%Build")
 	var upgrade: Button = match_scene.get_node("%Upgrade")
-	var energy_label: Label = match_scene.get_node("%Energy")
-	var income_label: Label = match_scene.get_node("%Income")
+	var energy_label: Label = match_scene.get_node("%Resources/energy/Stockpile")
+	var income_label := match_scene.get_node("%Resources/energy/Rate") as Label
+	var materials_label := match_scene.get_node("%Resources/materials/Stockpile") as Label
+	var food_label := match_scene.get_node("%Resources/food/Stockpile") as Label
 	var barracks_label: Label = match_scene.get_node("%BarracksCount")
 	var player_buildings := match_scene.get_node("Buildings/Player")
 	var cpu_buildings := match_scene.get_node("Buildings/CPU")
@@ -75,9 +136,22 @@ func _test_match_controls() -> void:
 	var cancel := match_scene.get_node("%CancelPlacement") as Button
 	var status := match_scene.get_node("%PlacementStatus") as Label
 
-	_check(energy_label.text == "Energy 50" and income_label.text == "Income +3/s"
-		and barracks_label.text == "Barracks 0/2", "The HUD renders initial economy values.")
+	_check(energy_label.text == "Energy 50" and income_label.text == "+3/s"
+		and materials_label.text == "Materials 30" and food_label.text == "Food 20"
+		and match_scene.get_node("%Resources/materials/Rate").text == "+2/s"
+		and match_scene.get_node("%Resources/food/Rate").text == "+1/s"
+		and barracks_label.text == "Barracks 0/2", "The HUD renders initial economy values. Rates were %s, %s, %s." % [
+			income_label.text, match_scene.get_node("%Resources/materials/Rate").text,
+			match_scene.get_node("%Resources/food/Rate").text,
+		])
 	_check(not build.disabled and upgrade.disabled, "Only Build is affordable at startup.")
+	var food_readout := food_label.get_parent() as Control
+	match_scene.economy.set_income_source(PLAYER, FOOD, &"bonus", "Supply bonus", 0.5)
+	match_scene._process(0.0)
+	_check(food_readout.tooltip_text == "Food income\nBase  +1/s\nSupply bonus  +0.5/s\nTotal  +1.5/s"
+		and food_readout.get_node("Rate").text == "+1.5/s",
+		"Unexpected HUD source text: %s" % food_readout.tooltip_text)
+	match_scene.economy.set_income_source(PLAYER, FOOD, &"bonus", "", 0.0)
 
 	await _choose_barracks(build)
 	_check(placement_panel.visible and player_buildings.get_child_count() == 0
@@ -115,15 +189,18 @@ func _test_match_controls() -> void:
 		and _building_at(player_buildings, first_position),
 		"The barracks appears at the unsnapped cursor position.")
 	_check(energy_label.text == "Energy 10" and barracks_label.text == "Barracks 1/2"
+		and materials_label.text == "Materials 10" and income_label.text == "+3/s"
 		and build.disabled and upgrade.disabled and not placement_panel.visible,
 		"Placement updates the HUD immediately and exits placement mode.")
 
 	match_scene._process(17.0)
-	_check(energy_label.text == "Energy 61" and not upgrade.disabled,
+	_check(energy_label.text == "Energy 61" and materials_label.text == "Materials 44"
+		and food_label.text == "Food 37" and not upgrade.disabled,
 		"Income refreshes the HUD and enables Upgrade.")
 	_click(upgrade)
 	_check_state(match_scene.economy, PLAYER, [1.0, 1, 2.5], "Upgrade button")
-	_check(energy_label.text == "Energy 1" and upgrade.disabled and upgrade.text == "Upgraded",
+	_check(energy_label.text == "Energy 1" and food_label.text == "Food 22"
+		and upgrade.disabled and upgrade.text == "Upgraded",
 		"Upgrade updates the HUD immediately.")
 
 	_check(cpu_buildings.get_child_count() == 2,
@@ -187,7 +264,7 @@ func _choose_barracks(build: Button) -> void:
 	await process_frame
 	await process_frame
 	_check(list.is_visible_in_tree() and list.get_child_count() == 1
-		and option.text == "Barracks · %d energy" % MatchEconomy.BARRACKS_COST,
+		and option.text == "Barracks · 40 Energy + 20 Materials",
 		"Build opens the catalog menu with the configured price.")
 	_click(option)
 	await process_frame
@@ -224,6 +301,9 @@ func _test_cpu_purchases() -> void:
 		and match_scene.owns_region(CPU, match_scene.region_at_world_position(
 			cpu_buildings.get_child(0).global_position)),
 		"The first CPU barracks appears inside CPU territory.")
+	_check(match_scene.economy.stockpile(CPU, MATERIALS) == 14.0
+		and match_scene.economy.stockpile(PLAYER, MATERIALS) == 34.0,
+		"The CPU spends Materials from its own stockpile.")
 
 	match_scene._process(7.75)
 	_check_state(match_scene.economy, CPU, [39.25, 1, 3.5], "Before the CPU can afford its second barracks")
@@ -250,6 +330,9 @@ func _test_cpu_purchases() -> void:
 	_check_state(match_scene.economy, CPU, [59.25, 2, 3.5], "Before the CPU can afford its upgrade")
 	match_scene._process(0.25)
 	_check_state(match_scene.economy, CPU, [0.0, 2, 2.5], "CPU upgrade at 30 seconds")
+	_check(match_scene.economy.stockpile(CPU, FOOD) == 35.0
+		and match_scene.economy.stockpile(PLAYER, FOOD) == 50.0,
+		"The CPU spends Food from its own stockpile.")
 	_check(match_scene.try_upgrade(PLAYER), "Keep both sides on the upgraded production rate.")
 	match_scene._process(22.0)
 	_check_state(match_scene.economy, CPU, [66.0, 2, 2.5], "After reaching CPU capacity")

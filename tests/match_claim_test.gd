@@ -42,7 +42,7 @@ func _test_claim_rules(scene: Node) -> void:
 
 	_check(scene.try_claim(PLAYER, FIRST_CLAIM), "An adjacent neutral region is claimable.")
 	_check(scene.owns_region(PLAYER, FIRST_CLAIM)
-		and scene.economy.energy(PLAYER) == MatchEconomy.STARTING_ENERGY - MatchEconomy.CLAIM_COST,
+		and scene.economy.energy(PLAYER) == MatchEconomy.STARTING_ENERGY - MatchEconomy.CLAIM_COST[MatchEconomy.ENERGY],
 		"A successful claim transfers ownership and spends exactly the configured cost.")
 	_check_rejected(scene, PLAYER, OTHER_ADJACENT, NEUTRAL, "Unaffordable adjacent target")
 	scene._process(17.0)
@@ -72,13 +72,13 @@ func _test_claim_controls(scene: Node) -> void:
 	var claim := scene.get_node("%Claim") as Button
 	var restart := scene.get_node("%Restart") as Button
 	var selection := scene.get_node("%SelectedRegion") as Label
-	var energy := scene.get_node("%Energy") as Label
+	var energy := scene.get_node("%Resources/energy/Stockpile") as Label
 	var first_region: MatchRegion = scene.get_region(FIRST_CLAIM)
 	var material := first_region.geometry.material_override as StandardMaterial3D
 	var border := first_region.get_node("Border").material_override as StandardMaterial3D
 	var camera := root.get_camera_3d()
 
-	_check(claim.disabled and claim.text == "Claim · %d" % MatchEconomy.CLAIM_COST
+	_check(claim.disabled and claim.text == "Claim\n50 Energy"
 		and selection.text == "Select a region", "Claim shows its price and requires a selection.")
 	await _click_region(camera, scene.get_region(NEXT_CLAIM))
 	_check(claim.disabled and selection.text.contains("Not adjacent"),

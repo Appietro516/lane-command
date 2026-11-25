@@ -496,8 +496,10 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 		_check(base.visible and battle.base_hp(side) == MatchBattle.BASE_HP,
 			"Restart restores both bases and their HP.")
 		_check(economy.energy(side) == MatchEconomy.STARTING_ENERGY
+			and economy.stockpile(side, MatchEconomy.MATERIALS) == 30.0
+			and economy.stockpile(side, MatchEconomy.FOOD) == 20.0
 			and economy.barracks_count(side) == 0 and not economy.has_upgrade(side),
-			"Restart restores starting energy and clears barracks and upgrades for each side.")
+			"Restart restores all starting stockpiles and clears barracks and upgrades for each side.")
 	_check(scene.get_node("Buildings/Player").get_child_count() == 0
 		and scene.get_node("Buildings/CPU").get_child_count() == 0,
 		"Restart removes all placed buildings.")
@@ -506,10 +508,10 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 		"Restart clears units, match time and the recorded outcome.")
 	_check(scene.get_node("%PlayerHP").text == "Player base · 80 HP"
 		and scene.get_node("%CPUHP").text == "CPU base · 80 HP"
-		and scene.get_node("%Energy").text == "Energy 50"
+		and scene.get_node("%Resources/energy/Stockpile").text == "Energy 50"
 		and scene.get_node("%BarracksCount").text == "Barracks 0/2"
 		and not scene.get_node("%Outcome").visible and not scene.get_node("%Build").disabled
-		and scene.get_node("%Upgrade").disabled and scene.get_node("%Upgrade").text == "Upgrade · 60",
+		and scene.get_node("%Upgrade").disabled and scene.get_node("%Upgrade").text == "Upgrade\n60 Energy + 15 Food",
 		"The HUD refreshes to its starting readouts and purchase controls.")
 
 

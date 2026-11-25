@@ -68,8 +68,7 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _unit_stats: Label = %UnitStats
 @onready var _unit_intent: Label = %UnitIntent
 @onready var _unit_order_hint: Label = %UnitOrderHint
-@onready var _energy_label: Label = %Energy
-@onready var _income_label: Label = %Income
+@onready var _resource_readouts: HBoxContainer = %Resources
 @onready var _barracks_label: Label = %BarracksCount
 @onready var _build_button: Button = %Build
 @onready var _build_menu: PanelContainer = %BuildMenu
@@ -90,11 +89,11 @@ func _ready() -> void:
 	_generate_map()
 	_unit_route.mesh = _route_mesh
 	_unit_route.global_transform = _regions.global_transform
-	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
+	_create_resource_readouts()
 	for building_id in BUILDINGS:
 		var definition: Dictionary = BUILDINGS[building_id]
 		var option := Button.new()
-		option.text = "%s · %d energy" % [definition.label, definition.cost]
+		option.text = "%s · %s" % [definition.label, MatchEconomy.cost_text(definition.cost)]
 		option.pressed.connect(_begin_placement.bind(building_id))
 		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_build_list.add_child(option)
@@ -106,7 +105,7 @@ func _ready() -> void:
 	_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
-	_claim_button.text = "Claim · %d" % MatchEconomy.CLAIM_COST
+	_claim_button.text = "Claim\n%s" % MatchEconomy.cost_text(MatchEconomy.CLAIM_COST)
 	_claim_button.pressed.connect(func() -> void: try_claim(PLAYER, _selected_region_id))
 	_restart_button.pressed.connect(restart_match)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
@@ -206,7 +205,7 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 
 	var definition: Dictionary = BUILDINGS[building_id]
 	var ground := _map_plane().project(world_position)
-	if not definition.rules.purchase(economy, _battle, side, _map_position(ground)):
+	if not definition.rules.purchase(economy, _battle, side, _map_position(ground), definition.cost):
 		return false
 
 	var building := definition.scene.instantiate() as Node3D
@@ -231,7 +230,7 @@ func _purchase_block_reason(side: MatchRegion.Owner, building_id: StringName) ->
 	if not _buildings.has(side) or not BUILDINGS.has(building_id):
 		return "Building unavailable"
 	var definition: Dictionary = BUILDINGS[building_id]
-	return definition.rules.block_reason(economy, side)
+	return definition.rules.block_reason(economy, side, definition.cost)
 
 
 func _toggle_build_menu() -> void:
@@ -302,7 +301,7 @@ func try_upgrade(side: MatchRegion.Owner) -> bool:
 func try_claim(side: MatchRegion.Owner, region_id: StringName) -> bool:
 	if side != PLAYER or not _claim_block_reason(region_id).is_empty():
 		return false
-	if not economy.try_spend_energy(side, MatchEconomy.CLAIM_COST):
+	if not economy.try_spend(side, MatchEconomy.CLAIM_COST):
 		return false
 
 	_regions_by_id[region_id].region_owner = side
@@ -344,7 +343,7 @@ func _claim_block_reason(region_id: StringName) -> String:
 		return "Match ended"
 	for neighbor_id in region.neighbor_ids:
 		if owns_region(PLAYER, neighbor_id):
-			return "Need more energy" if economy.energy(PLAYER) < MatchEconomy.CLAIM_COST else ""
+			return economy.cost_block_reason(PLAYER, MatchEconomy.CLAIM_COST)
 	return "Not adjacent"
 
 
@@ -558,7 +557,7 @@ func _advance_simulation(delta: float) -> void:
 
 func _try_cpu_purchase() -> void:
 	if economy.barracks_count(CPU) < MatchEconomy.BARRACKS_CAPACITY:
-		if not economy.can_build(CPU):
+		if not _purchase_block_reason(CPU, &"barracks").is_empty():
 			return
 		var region: MatchRegion = get_region(TerritoryLayout.CPU_START)
 		var tile := region.geometry
@@ -602,12 +601,58 @@ func _hide_base(side: MatchRegion.Owner) -> void:
 	_bases[side].hide()
 
 
+func _create_resource_readouts() -> void:
+	for resource_id in MatchEconomy.RESOURCES:
+		var readout := VBoxContainer.new()
+		readout.name = resource_id
+		readout.custom_minimum_size.x = 100
+		readout.mouse_filter = Control.MOUSE_FILTER_STOP
+		readout.alignment = BoxContainer.ALIGNMENT_CENTER
+		readout.add_theme_constant_override("separation", 0)
+		_resource_readouts.add_child(readout)
+
+		var stockpile := Label.new()
+		stockpile.name = &"Stockpile"
+		stockpile.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		stockpile.add_theme_font_size_override("font_size", 18)
+		stockpile.add_theme_color_override("font_color", Color(0.99, 0.81, 0.49))
+		readout.add_child(stockpile)
+
+		var rate := Label.new()
+		rate.name = &"Rate"
+		rate.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		rate.add_theme_color_override("font_color", Color(0.73, 0.84, 0.90))
+		readout.add_child(rate)
+
+
+func _refresh_resource_readouts() -> void:
+	for readout: Control in _resource_readouts.get_children():
+		var resource_id := readout.name
+		var resource_label: String = MatchEconomy.RESOURCES[resource_id].label
+		var stockpile := readout.get_node(^"Stockpile") as Label
+		var rate := readout.get_node(^"Rate") as Label
+		stockpile.text = "%s %d" % [resource_label, floori(economy.stockpile(PLAYER, resource_id))]
+		rate.text = _rate_text(economy.income_rate(PLAYER, resource_id))
+		var lines := PackedStringArray([resource_label + " income"])
+		for source: Dictionary in economy.income_sources(PLAYER, resource_id).values():
+			lines.append("%s  %s" % [source.label, _rate_text(source.rate)])
+		lines.append("Total  " + rate.text)
+		readout.tooltip_text = "\n".join(lines)
+
+
+func _rate_text(rate: float) -> String:
+	var amount := String.num(rate, 3)
+	if amount.contains("."):
+		amount = amount.rstrip("0").rstrip(".")
+	return "%s%s/s" % ["+" if rate >= 0.0 else "", amount]
+
+
 func _refresh_hud() -> void:
 	_player_hp_label.text = "Player base · %d HP" % _battle.base_hp(PLAYER)
 	_cpu_hp_label.text = "CPU base · %d HP" % _battle.base_hp(CPU)
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
-	_energy_label.text = "Energy %d" % floori(economy.energy(PLAYER))
+	_refresh_resource_readouts()
 	_barracks_label.text = "Barracks %d/%d" % [
 		economy.barracks_count(PLAYER), MatchEconomy.BARRACKS_CAPACITY,
 	]
@@ -621,7 +666,8 @@ func _refresh_hud() -> void:
 		_build_menu.hide()
 	_upgrade_button.disabled = _battle.is_finished() or not economy.can_upgrade(PLAYER)
 	_upgrade_button.text = (
-		"Upgraded" if economy.has_upgrade(PLAYER) else "Upgrade · %d" % MatchEconomy.UPGRADE_COST
+		"Upgraded" if economy.has_upgrade(PLAYER)
+		else "Upgrade\n%s" % MatchEconomy.cost_text(MatchEconomy.UPGRADE_COST)
 	)
 	_refresh_claim_control()
 
