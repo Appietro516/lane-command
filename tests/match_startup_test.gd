@@ -20,6 +20,7 @@ func _run() -> void:
 	_test_invalid_config()
 	_test_scene()
 	await _test_expanded_gameplay()
+	_test_expanded_wall_approach()
 	if failures == 0:
 		print("Generated territory and match startup checks passed.")
 	quit(1 if failures > 0 else 0)
@@ -306,6 +307,49 @@ func _test_expanded_gameplay() -> void:
 		and scene.owns_region(CPU, TerritoryLayout.CPU_START)
 		and scene._battle.active_units().is_empty() and scene.economy.barracks_count(PLAYER) == 0,
 		"Restart preserves the active layout and seed and resets ownership, buildings and combat.")
+	scene.free()
+
+
+func _test_expanded_wall_approach() -> void:
+	const PLAYER := MatchRegion.Owner.PLAYER
+	const CPU := MatchRegion.Owner.CPU
+	var scene := MATCH_SCENE.instantiate()
+	scene.map_seed = 17
+	root.add_child(scene)
+	scene.set_process(false)
+	var battle: MatchBattle = scene._battle
+	var origin: Vector2 = battle._bases[PLAYER]
+	var enemy_base: Vector2 = battle._bases[CPU]
+	var forward := origin.direction_to(enemy_base)
+	var start := origin + forward * 3.0
+	var wall_center := start.lerp(enemy_base, 0.5)
+	# A friendly wall forces a detour without becoming a combat target.
+	var wall_regions: Array[StringName] = []
+	scene._add_fortification(PLAYER, &"wall", wall_center, forward.orthogonal().angle(), wall_regions)
+	var unit := battle.spawn_unit(PLAYER, start)
+	_check(unit != null and not battle.navigation.line_clear(start, enemy_base),
+		"The seeded cross-map approach starts on clear ground with a wall across the direct line.")
+	if unit == null:
+		scene.free()
+		return
+
+	scene._advance_simulation(MatchBattle.STEP)
+	_check(unit.target == MatchBattle.BASE_TARGET and unit.waypoints.size() > 1,
+		"Autonomous infantry plots a waypoint detour toward the enemy base.")
+	var stayed_on_clear_ground := true
+	var earliest_contact := (start.distance_to(enemy_base) - MatchBattle.BASE_ATTACK_RANGE) / 1.8
+	var last_step := ceili((earliest_contact + 2.0) / MatchBattle.STEP)
+	for step in range(1, last_step):
+		if battle.base_hp(CPU) < MatchBattle.BASE_HP:
+			break
+		scene._advance_simulation(MatchBattle.STEP)
+		stayed_on_clear_ground = stayed_on_clear_ground and battle.navigation.is_passable(unit.position)
+
+	_check(stayed_on_clear_ground and unit.position.distance_to(enemy_base) <= MatchBattle.BASE_ATTACK_RANGE + EPSILON
+		and battle.base_hp(CPU) == MatchBattle.BASE_HP - MatchBattle.ATTACK_DAMAGE
+		and battle.elapsed_time() >= earliest_contact - MatchBattle.STEP,
+		"Infantry travels around the wall and first hits the enemy base in range at the slower pace.")
+	print("Seed 17 wall approach: %.2f s to first base hit." % battle.elapsed_time())
 	scene.free()
 
 

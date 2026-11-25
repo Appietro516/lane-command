@@ -68,7 +68,7 @@ func _run() -> void:
 	_check(_matches(battle.unit_dps_stat(unit), 5.5) and _matches(battle.unit_health_stat(unit), 19.0)
 		and unit.hp == 19.0 and stat_text.text.count("Frontier Academy") == 3
 		and stat_text.text.count("Veteran Training") == 3
-		and stat_text.text.contains("Movement speed\nBase  2.4 units/s\nTotal  2.4 units/s"),
+		and stat_text.text.contains("Movement speed\nBase  1.8 units/s\nTotal  1.8 units/s"),
 		"The inspector lists both applied DPS and HP sources and the unmodified speed.")
 
 	var start := unit.position
@@ -77,8 +77,9 @@ func _run() -> void:
 		&"upgrade", "Marching Drills")
 	battle._move(unit)
 	scene._refresh_hud()
-	_check(is_equal_approx(start.distance_to(unit.position), 3.0 * MatchBattle.STEP)
-		and stat_text.text.contains("Marching Drills  +0.6 units/s"),
+	_check(is_equal_approx(start.distance_to(unit.position), 2.4 * MatchBattle.STEP)
+		and stat_text.text.contains("Movement speed\nBase  1.8 units/s\nMarching Drills  +0.6 units/s\nTotal  2.4 units/s")
+		and scene.get_node("%UnitStats").text.contains("Speed  2.4 units/s"),
 		"Movement and inspection use the same modified speed.")
 
 	var stock := economy.energy(PLAYER)

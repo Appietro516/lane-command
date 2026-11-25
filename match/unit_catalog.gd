@@ -8,7 +8,7 @@ const HEAVY := &"heavy"
 const DEFINITIONS := {
 	INFANTRY: {
 		"label": "Infantry",
-		"hp": 12.0, "damage": 3.0, "cooldown": 1.0, "range": 0.9, "speed": 2.4,
+		"hp": 12.0, "damage": 3.0, "cooldown": 1.0, "range": 0.9, "speed": 1.8,
 		"clearance": 0.0, "food": 4, "structure_damage_multiplier": 1.0,
 		"prefer_ready_shot": false,
 		"scene": preload("res://match/unit.tscn"), "tint": Color.WHITE, "tint_weight": 0.0,

@@ -14,6 +14,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	_test_infantry_speed()
 	_test_movement_and_delta_partition()
 	_test_duel_and_cleanup()
 	_test_target_priority(PLAYER, CPU)
@@ -30,19 +31,44 @@ func _run() -> void:
 	quit(1 if failures else 0)
 
 
+func _test_infantry_speed() -> void:
+	var battle := MatchBattle.new(PLAYER_BASE, CPU_BASE)
+	var economy := MatchEconomy.new()
+	var start := Vector2(-4.0, -5.0)
+	var unit := battle.spawn_unit(PLAYER, start)
+	_check(battle.issue_move(unit.id, Vector2(4.0, -5.0)), "Infantry accepts a clear move order.")
+	battle.advance(1.0, economy)
+	var baseline_distance := start.distance_to(unit.position)
+	_check(is_equal_approx(baseline_distance / 2.4, 0.75),
+		"Infantry covers 75% of the previous 2.4-unit distance in one second.")
+
+	battle.stats.set_modifier(&"drill", PLAYER, FactionStats.UNIT_SPEED, 0.6)
+	start = unit.position
+	battle.advance(1.0, economy)
+	_check(is_equal_approx(start.distance_to(unit.position), 2.4),
+		"A live speed buff adds 0.6 units of travel in the next second.")
+
+
 func _test_movement_and_delta_partition() -> void:
 	var economy := MatchEconomy.new()
 	var battle := _with_barracks([PLAYER, CPU])
 	var split_battle := _with_barracks([PLAYER, CPU])
-	battle.advance(4.5, economy)
+	battle.advance(MatchEconomy.PRODUCTION_INTERVAL, economy)
+	var deployed := battle.active_units()
+	_check(deployed.size() == 2, "Both sides deploy one unit on schedule.")
+	if deployed.size() != 2:
+		return
+	var player_spawn := deployed[0].position
+	var cpu_spawn := deployed[1].position
+	battle.advance(1.0, economy)
 	for delta in [0.031, 1.217, 2.002, 1.25]:
 		split_battle.advance(delta, economy)
 	var units := battle.active_units()
-	_check(units.size() == 2, "Both sides deploy one unit.")
+	_check(units.size() == 2, "Only the first wave has deployed after one second of movement.")
 	if units.size() != 2:
 		return
 	_check(units[0].side == PLAYER and units[1].side == CPU
-		and units[0].position.x > -6.5 and units[1].position.x < 6.5
+		and units[0].position.x > player_spawn.x and units[1].position.x < cpu_spawn.x
 		and is_equal_approx(units[0].position.x, -units[1].position.x)
 		and units[0].position.y < 0.0 and units[1].position.y < 0.0,
 		"Both units leave their off-axis barracks and advance toward the opposing base.")
@@ -88,8 +114,8 @@ func _test_duel_and_cleanup() -> void:
 	battle.advance(2.0, economy)
 	_check(player.hp == 0 and cpu.hp == 0 and removed == [player.id, cpu.id],
 		"A simultaneous fourth hit removes both duelists.")
-	var survivors := battle.active_units()
-	_check(not survivors.has(player) and not survivors.has(cpu) and survivors.size() == 2,
+	_check(battle.get_unit(player.id) == null and battle.get_unit(cpu.id) == null
+		and battle.get_unit(3) != null and battle.get_unit(4) != null,
 		"The next wave stays active after the duelists die.")
 
 
@@ -197,6 +223,8 @@ func _test_orders_and_defense() -> void:
 	battle.advance(3.5, economy)
 	var player := battle.active_units()[0]
 	var opponent := battle.active_units()[1]
+	for timer_id in battle._timers:
+		battle.set_barracks_active(timer_id, false)
 	var destination := Vector2(-6.0, 5.0)
 	_check(battle.issue_move(player.id, destination)
 		and player.movement_destination == destination and not player.waypoints.is_empty(),
@@ -216,19 +244,14 @@ func _test_orders_and_defense() -> void:
 	_check(battle.get_unit(opponent.id) == null and player.target == MatchBattle.NO_TARGET
 		and player.movement_destination == destination,
 		"After killing its attacker, the unit resumes the original route.")
-	battle.advance(2.8, economy)
+	battle.advance(4.5, economy)
 	_check(player.order == MatchBattle.Order.HOLD and player.position == destination
 		and player.waypoints.is_empty(), "Arrival converts a move into a persistent hold.")
 
-	battle.advance(0.5, economy)
-	var next_opponent: MatchBattle.Unit
-	for unit in battle.active_units():
-		if unit.side == CPU:
-			next_opponent = unit
+	var next_opponent := battle.spawn_unit(CPU, destination + Vector2(2.0, 0.0))
 	if next_opponent == null:
 		_check(false, "A second opponent is available to test defense after arrival.")
 		return
-	next_opponent.position = player.position + Vector2(2.0, 0.0)
 	battle.advance(MatchBattle.STEP, economy)
 	_check(player.order == MatchBattle.Order.HOLD and player.target == next_opponent.id,
 		"Holding units still defend against local enemies.")
@@ -262,8 +285,8 @@ func _test_routes() -> void:
 		and unit.ordered_destination == destination, "Blocked ground preserves the valid order.")
 	_check(not battle.issue_move(unit.id, Vector2.INF), "Off-map destinations are rejected.")
 	var crossed_obstacle := false
-	for step in range(60):
-		battle.advance(4.0 * MatchBattle.STEP, economy)
+	for step in range(360):
+		battle.advance(MatchBattle.STEP, economy)
 		crossed_obstacle = crossed_obstacle or obstacle.has_point(unit.position)
 	_check(unit.position == destination and not crossed_obstacle,
 		"The unit follows its waypoints around the obstacle and reaches the original destination.")
@@ -331,7 +354,7 @@ func _test_match_scene() -> void:
 		scene.free()
 		return
 	_check(panel.visible and unit_name.text == "CPU Infantry #%d" % cpu.id
-		and stats.text == "HP  12 / 12\nAttack  3 · Speed  2.4 units/s\nRange  0.9 · Cooldown  1s"
+		and stats.text == "HP  12 / 12\nAttack  3 · Speed  1.8 units/s\nRange  0.9 · Cooldown  1s"
 		and intent.text == "Target  Player base\nOrder  Autonomous\nState  Advancing"
 		and marker.global_position == cpu_view.global_position
 		and not order_hint.visible and route.get_surface_count() == 1,
