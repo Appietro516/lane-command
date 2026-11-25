@@ -9,8 +9,9 @@ static func block_reason(economy: MatchEconomy, side: MatchRegion.Owner) -> Stri
 	return "Need more energy"
 
 
-static func purchase(economy: MatchEconomy, battle: MatchBattle, side: MatchRegion.Owner) -> bool:
+static func purchase(economy: MatchEconomy, battle: MatchBattle,
+		side: MatchRegion.Owner, position: Vector2) -> bool:
 	if not economy.try_build(side):
 		return false
-	battle.add_barracks(side)
+	battle.add_barracks(side, position)
 	return true

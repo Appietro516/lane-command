@@ -2,7 +2,7 @@
 
 ## Map and starting territories
 
-Generate 5–7 irregular territories across the playable map and frame all regions and both bases together. The human and CPU each own one starting region at opposite ends of the map. The remaining regions start neutral. The map seed and region count are configurable on the Match scene. The existing combat simulation moves units between the bases. Units cross regions without capturing them, and ownership has no effect on movement or combat.
+Generate 5–7 irregular territories across the playable map and frame all regions and both bases together. The human and CPU each own one starting region at opposite ends of the map. The remaining regions start neutral. The map seed and region count are configurable on the Match scene. Units navigate the open map around building footprints. Units cross regions without capturing them, and ownership has no effect on movement or combat.
 
 Sources: S95c42ca9286d, Se50c19e91616, [generated territory map ticket](https://trello.com/c/gV8QZqOh/9-generate-a-2d-voronoi-style-territory-map)
 
@@ -18,9 +18,15 @@ Sources: S95c42ca9286d
 
 ## CPU opponent and automatic combat
 
-The CPU must visibly spend resources and build a barracks without player input in the first playable build. Its proposed deterministic priority is first barracks, second barracks, then the production upgrade, with a periodic check such as every 2 seconds. Both sides use the same single unit type and combat rules. Units stop to attack opposing units in range, then attack the opposing base at close range when no opposing unit is in range. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
+The CPU must visibly spend resources and build a barracks without player input in the first playable build. Its proposed deterministic priority is first barracks, second barracks, then the production upgrade, with a periodic check such as every 2 seconds. Both sides use the same single unit type and combat rules. Units deploy from their producing barracks and pursue the nearest reachable opponent within their detection radius by default. When no local enemy unit is available, autonomous units advance toward the opposing base and attack at close range. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
 
 Sources: S95c42ca9286d, S1389629da9a3
+
+## Unit orders
+
+Left-click a friendly unit to select it. A ring marks the selection. Right-click reachable ground to issue or replace a move order. The unit can engage nearby opponents during transit and resumes its destination when the threat passes. On arrival it holds the area, engages local threats within its detection radius around the destination, and returns to that location after combat. Detection range and local target priority are tunable on the Match scene.
+
+[Autonomous combat and right-click orders ticket](https://trello.com/c/mHKVpPnR/12-replace-fixed-lane-with-autonomous-combat-and-right-click-unit-orders)
 
 ## HUD and match reset
 

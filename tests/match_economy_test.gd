@@ -278,8 +278,7 @@ func _test_symmetric_production() -> void:
 		_check(cpu_unit.mesh == token and token != null,
 			"Both sides spawn the same triangular token mesh.")
 		_check(cpu_unit.position.x > 0 and player_unit.position.x < 0
-			and cpu_unit.basis.y.is_equal_approx(Vector3.LEFT)
-			and player_unit.basis.y.is_equal_approx(Vector3.RIGHT)
+			and cpu_unit.basis.y.x < 0.0 and player_unit.basis.y.x > 0.0
 			and cpu_unit.material_override != player_unit.material_override,
 			"Units start on their own side, face the opposing base and use distinct colors.")
 

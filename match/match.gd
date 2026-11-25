@@ -31,6 +31,8 @@ const OUTCOME_LABELS := {
 var economy: MatchEconomy
 @export var map_seed: int = 17
 @export_range(5, 7) var region_count: int = 6
+@export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
+@export var unit_target_priority := MatchBattle.TargetPriority.NEAREST
 
 var _battle: MatchBattle
 var _layout: TerritoryLayout
@@ -38,8 +40,7 @@ var _regions_by_id: Dictionary[StringName, MatchRegion] = {}
 var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
 var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
-var _corridor_start: Vector3
-var _corridor_direction: Vector3
+var _selected_unit_id := MatchBattle.NO_TARGET
 var _time_until_cpu_decision: float
 
 var _bases: Dictionary[MatchRegion.Owner, Node3D] = {}
@@ -56,6 +57,7 @@ var _build_options: Dictionary[StringName, Button] = {}
 }
 @onready var _regions: Node3D = $Regions
 @onready var _units: Node3D = $Units
+@onready var _unit_selection: MeshInstance3D = $UnitSelection
 @onready var _energy_label: Label = %Energy
 @onready var _income_label: Label = %Income
 @onready var _barracks_label: Label = %BarracksCount
@@ -147,10 +149,9 @@ func restart_match() -> void:
 	economy = MatchEconomy.new()
 	_time_until_cpu_decision = CPU_DECISION_INTERVAL
 	_cpu_placement_rng.seed = 46
-	_corridor_start = _units.to_local(_bases[PLAYER].global_position)
-	var corridor := _units.to_local(_bases[CPU].global_position) - _corridor_start
-	_corridor_direction = corridor.normalized()
-	_battle = MatchBattle.new(corridor.length())
+	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
+		_map_position(_bases[CPU].global_position), unit_aggro_radius)
+	_battle.target_priority = unit_target_priority
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
 	_battle.base_destroyed.connect(_hide_base)
@@ -175,10 +176,12 @@ func _process(delta: float) -> void:
 		_time_until_cpu_decision -= delta
 	if _battle.is_finished():
 		_cancel_placement()
+		_select_unit(MatchBattle.NO_TARGET)
 		set_process(false)
 
 	for unit in _battle.active_units():
-		_unit_views[unit.id].position = _corridor_start + _corridor_direction * unit.position
+		_update_unit_view(unit, _unit_views[unit.id])
+	_update_unit_selection()
 	_refresh_hud()
 
 
@@ -188,13 +191,13 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 		return false
 
 	var definition: Dictionary = BUILDINGS[building_id]
-	if not definition.rules.purchase(economy, _battle, side):
+	var ground := _map_plane().project(world_position)
+	if not definition.rules.purchase(economy, _battle, side, _map_position(ground)):
 		return false
 
 	var building := definition.scene.instantiate() as Node3D
 	if definition.has("accent_node"):
 		building.get_node(definition.accent_node).material_override = FACTION_ACCENTS[side]
-	var ground := _map_plane().project(world_position)
 	building.position = _buildings[side].to_local(ground)
 	_buildings[side].add_child(building)
 	_refresh_hud()
@@ -302,8 +305,16 @@ func get_region(region_id: StringName) -> MatchRegion:
 
 
 func region_at_world_position(world_position: Vector3) -> StringName:
-	var point := _regions.to_local(world_position)
-	return _layout.region_at(Vector2(point.x, point.z))
+	return _layout.region_at(_map_position(world_position))
+
+
+func selected_unit() -> MatchBattle.Unit:
+	return _battle.get_unit(_selected_unit_id)
+
+
+func _map_position(world_position: Vector3) -> Vector2:
+	var local := _regions.to_local(world_position)
+	return Vector2(local.x, local.z)
 
 
 func _claim_block_reason(region_id: StringName) -> String:
@@ -328,12 +339,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			and event.pressed)):
 		_cancel_placement()
 		get_viewport().set_input_as_handled()
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		if _build_menu.visible:
-			_build_menu.hide()
-		else:
-			_pending_pick = event.position
-		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if _build_menu.visible:
+				_build_menu.hide()
+			elif _preview != null:
+				_pending_pick = event.position
+			else:
+				_pick_map(event.position)
+			get_viewport().set_input_as_handled()
+		elif event.button_index == MOUSE_BUTTON_RIGHT and selected_unit() != null:
+			var point: Variant = _ground_point(event.position)
+			if point != null and _pick_unit(event.position) == MatchBattle.NO_TARGET:
+				_battle.issue_move(_selected_unit_id, _map_position(point))
+			get_viewport().set_input_as_handled()
 
 
 func _physics_process(_delta: float) -> void:
@@ -349,10 +368,48 @@ func _physics_process(_delta: float) -> void:
 		if get_viewport().gui_get_hovered_control() != null:
 			pointer = Vector2.INF
 		_update_placement_preview(pointer)
-	elif click != Vector2.INF:
-		var point: Variant = _ground_point(click)
+
+
+func _pick_map(pointer: Vector2) -> void:
+	var id := _pick_unit(pointer)
+	var unit := _battle.get_unit(id)
+	if unit != null and unit.side == PLAYER and not _battle.is_finished():
+		_select_unit(id)
+		_select_region(&"")
+	else:
+		_select_unit(MatchBattle.NO_TARGET)
+		var point: Variant = _ground_point(pointer)
 		_select_region(region_at_world_position(point) if point != null else &"")
-		_refresh_claim_control()
+	_refresh_claim_control()
+
+
+func _pick_unit(pointer: Vector2) -> int:
+	var start := _camera.project_ray_origin(pointer)
+	var end := start + _camera.project_ray_normal(pointer) * _camera.far
+	var nearest := MatchBattle.NO_TARGET
+	var depth := INF
+	for id in _unit_views:
+		var view := _unit_views[id]
+		var outline := view.get_node("Outline") as MeshInstance3D
+		var hit: Variant = outline.get_aabb().grow(0.08).intersects_segment(
+			outline.to_local(start), outline.to_local(end))
+		if hit != null:
+			var distance := start.distance_squared_to(outline.to_global(hit))
+			if distance < depth:
+				nearest = id
+				depth = distance
+	return nearest
+
+
+func _select_unit(id: int) -> void:
+	_selected_unit_id = id
+	_update_unit_selection()
+
+
+func _update_unit_selection() -> void:
+	_unit_selection.visible = _unit_views.has(_selected_unit_id)
+	if _unit_selection.visible:
+		_unit_selection.global_position = _unit_views[_selected_unit_id].global_position
 
 
 func _ground_point(pointer: Vector2) -> Variant:
@@ -400,12 +457,15 @@ func _try_cpu_purchase() -> void:
 func _spawn_unit(unit: MatchBattle.Unit) -> void:
 	var view := UNIT.instantiate() as MeshInstance3D
 	view.material_override = FACTION_ACCENTS[unit.side]
-	# The prism is laid flat with its tip pointing along +Z before yaw.
-	var heading := _corridor_direction if unit.side == PLAYER else -_corridor_direction
-	view.rotation.y = atan2(heading.x, heading.z)
-	view.position = _corridor_start + _corridor_direction * unit.position
 	_units.add_child(view)
 	_unit_views[unit.id] = view
+	_update_unit_view(unit, view)
+
+
+func _update_unit_view(unit: MatchBattle.Unit, view: MeshInstance3D) -> void:
+	view.global_position = _regions.to_global(Vector3(unit.position.x, 0.14, unit.position.y))
+	# The prism is laid flat with its tip pointing along +Z before yaw.
+	view.rotation.y = atan2(unit.heading.x, unit.heading.y)
 
 
 func _remove_unit(unit_id: int) -> void:
@@ -413,6 +473,8 @@ func _remove_unit(unit_id: int) -> void:
 	_units.remove_child(view)
 	view.queue_free()
 	_unit_views.erase(unit_id)
+	if _selected_unit_id == unit_id:
+		_select_unit(MatchBattle.NO_TARGET)
 
 
 func _hide_base(side: MatchRegion.Owner) -> void:
@@ -446,7 +508,9 @@ func _refresh_hud() -> void:
 func _refresh_claim_control() -> void:
 	var reason := _claim_block_reason(_selected_region_id)
 	_claim_button.disabled = not reason.is_empty()
-	if _regions_by_id.has(_selected_region_id):
+	if selected_unit() != null:
+		_region_label.text = "Unit selected\nRight-click ground"
+	elif _regions_by_id.has(_selected_region_id):
 		_region_label.text = "%s\n%s" % [
 			str(_selected_region_id).capitalize(), "Neutral" if reason.is_empty() else reason,
 		]

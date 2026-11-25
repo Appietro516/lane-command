@@ -9,21 +9,16 @@ ambient_light_source = 2
 ambient_light_color = Color(1, 1, 1, 1)
 ambient_light_energy = 0.65
 
-[sub_resource type="StandardMaterial3D" id="Material_corridor"]
+[sub_resource type="StandardMaterial3D" id="Material_selection"]
 shading_mode = 0
-albedo_color = Color(0.105, 0.157, 0.173, 1)
+albedo_color = Color(1, 0.89, 0.65, 1)
 
-[sub_resource type="StandardMaterial3D" id="Material_corridor_edge"]
-shading_mode = 0
-albedo_color = Color(0.37, 0.48, 0.49, 1)
-
-[sub_resource type="PlaneMesh" id="Mesh_corridor"]
-material = SubResource("Material_corridor")
-size = Vector2(20.4, 1.45)
-
-[sub_resource type="PlaneMesh" id="Mesh_corridor_edge"]
-material = SubResource("Material_corridor_edge")
-size = Vector2(20.4, 0.04)
+[sub_resource type="TorusMesh" id="Mesh_selection"]
+material = SubResource("Material_selection")
+inner_radius = 0.56
+outer_radius = 0.65
+rings = 32
+ring_segments = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_hud"]
 content_margin_left = 24.0
@@ -55,18 +50,6 @@ size = 24.5
 
 [node name="Regions" type="Node3D" parent="."]
 
-[node name="Corridor" type="MeshInstance3D" parent="."]
-position = Vector3(0, 0.045, 2)
-mesh = SubResource("Mesh_corridor")
-
-[node name="NorthEdge" type="MeshInstance3D" parent="Corridor"]
-position = Vector3(0, 0.012, -0.65)
-mesh = SubResource("Mesh_corridor_edge")
-
-[node name="SouthEdge" type="MeshInstance3D" parent="Corridor"]
-position = Vector3(0, 0.012, 0.65)
-mesh = SubResource("Mesh_corridor_edge")
-
 [node name="Buildings" type="Node3D" parent="."]
 
 [node name="Player" type="Node3D" parent="Buildings"]
@@ -74,6 +57,10 @@ mesh = SubResource("Mesh_corridor_edge")
 [node name="CPU" type="Node3D" parent="Buildings"]
 
 [node name="Units" type="Node3D" parent="."]
+
+[node name="UnitSelection" type="MeshInstance3D" parent="."]
+visible = false
+mesh = SubResource("Mesh_selection")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 

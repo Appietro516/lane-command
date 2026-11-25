@@ -8,11 +8,11 @@ Sources: S8f6e375bbe16, Se50c19e91616
 
 ## State and simulation
 
-Generate the region graph by clipping the map bounds around seeded Voronoi sites. Each cell has a stable ID, a polygon, and neighbors that share a border of positive length. The scene tracks ownership and resolves world positions to the nearest site inside the map bounds, breaking ties by site order. Track each side's energy, owned regions, base HP, barracks count, upgrade, and timers. Track unit side, position along the corridor, HP, attack cooldown, and target. Track simulation time and match outcome. Keep rules testable independently of rendering where practical, step shared combat deterministically with delta, and centralize balance values and CPU cadence.
+Generate the region graph by clipping the map bounds around seeded Voronoi sites. Each cell has a stable ID, a polygon, and neighbors that share a border of positive length. The scene tracks ownership and resolves world positions to the nearest site inside the map bounds, breaking ties by site order. Track each side's energy, owned regions, base HP, barracks count, upgrade, and timers. Track unit side, map-plane position, HP, attack cooldown, target, order, ordered destination, current movement destination, and remaining waypoints. Track simulation time and match outcome. Keep rules testable independently of rendering where practical, step shared combat deterministically with delta, and centralize balance values and CPU cadence.
 
 Sources: S8f6e375bbe16, S95c42ca9286d
 
-Corridor combat consumes elapsed time in fixed 60 Hz steps. Units target from the same snapshot before resolving attacks, and casualties are removed after all attacks for that step. The match scene derives the combat endpoints from bases placed in the generated starting regions and renders the battle state.
+Combat consumes elapsed time in fixed 60 Hz steps. Units plan from the same snapshot before movement and damage, and casualties are removed after all attacks for that step. The match scene projects pointer input to the same map plane and renders the battle state. Routes use direct segments or an AStar2D graph of building footprint corners. Adding a building invalidates cached routes. Unit state is available by ID through `MatchBattle.get_unit()` and by current selection through `selected_unit()` on the match scene.
 
 ## Rules interfaces and validation
 

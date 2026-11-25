@@ -3,7 +3,8 @@ extends SceneTree
 const MATCH_SCENE := preload("res://main.tscn")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
-const CORRIDOR_LENGTH := 20.4
+const PLAYER_BASE := Vector2(-10.2, 2.0)
+const CPU_BASE := Vector2(10.2, 2.0)
 
 var failures := 0
 
@@ -19,10 +20,12 @@ func _run() -> void:
 	_test_target_priority(CPU, PLAYER)
 	_test_base_destruction(PLAYER, CPU)
 	_test_base_destruction(CPU, PLAYER)
-	_test_match_scene()
+	_test_orders_and_defense()
+	_test_routes()
+	await _test_match_scene()
 	await _test_match_end_and_restart()
 	if failures == 0:
-		print("Corridor combat, outcomes, HUD and full replay checks passed.")
+		print("Open-map combat, movement orders, outcomes and replay checks passed.")
 	quit(1 if failures else 0)
 
 
@@ -38,9 +41,10 @@ func _test_movement_and_delta_partition() -> void:
 	if units.size() != 2:
 		return
 	_check(units[0].side == PLAYER and units[1].side == CPU
-		and is_equal_approx(units[0].position, 1.75 + MatchBattle.MOVEMENT_SPEED)
-		and is_equal_approx(units[1].position, CORRIDOR_LENGTH - units[0].position),
-		"Both units march toward the enemy base for the time since deployment.")
+		and units[0].position.x > -6.5 and units[1].position.x < 6.5
+		and is_equal_approx(units[0].position.x, -units[1].position.x)
+		and units[0].position.y < 0.0 and units[1].position.y < 0.0,
+		"Both units leave their off-axis barracks and advance toward the opposing base.")
 	_check(units[0].hp == 12 and units[1].hp == 12,
 		"Fresh units start at 12 HP.")
 	_check(battle.base_hp(PLAYER) == 80 and battle.base_hp(CPU) == 80,
@@ -66,7 +70,7 @@ func _test_duel_and_cleanup() -> void:
 	var player := units[0]
 	var cpu := units[1]
 
-	for step in range(300):
+	for step in range(400):
 		if player.hp < 12:
 			break
 		battle.advance(MatchBattle.STEP, economy)
@@ -100,20 +104,33 @@ func _test_target_priority(attacker_side: MatchRegion.Owner, defender_side: Matc
 	var farther := units[1]
 	var nearer := units[2]
 	var direction := 1.0 if attacker_side == PLAYER else -1.0
-	attacker.position = CORRIDOR_LENGTH - 1.8 if attacker_side == PLAYER else 1.8
-	farther.position = attacker.position + direction * 0.75
-	nearer.position = attacker.position + direction * 0.5
+	attacker.position = Vector2(direction * 8.45, 2.0)
+	farther.position = attacker.position + Vector2(0.0, 2.8)
+	nearer.position = attacker.position + Vector2(0.0, 1.4)
+	nearer.hp = MatchBattle.ATTACK_DAMAGE
 
 	battle.advance(MatchBattle.STEP, economy)
-	_check(attacker.target == nearer.id and nearer.hp == 9 and farther.hp == 12
+	_check(attacker.target == nearer.id and attacker.position.y > 2.0 and nearer.hp == 3
 		and battle.base_hp(defender_side) == 80,
-		"The nearest opposing unit takes priority over a farther unit and a base in range.")
-	var far_end := 0.0 if attacker_side == PLAYER else CORRIDOR_LENGTH
-	nearer.position = far_end
-	farther.position = far_end
-	battle.advance(1.0, economy)
-	_check(attacker.target == MatchBattle.BASE_TARGET and battle.base_hp(defender_side) == 77,
-		"The unit attacks the opposing base once there are no opposing units in range.")
+		"The nearest local opponent draws the unit out of base attack range before contact.")
+	battle.target_priority = MatchBattle.TargetPriority.LOWEST_HP
+	farther.hp = 1
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == farther.id, "The optional lowest-HP priority overrides distance.")
+	battle.target_priority = MatchBattle.TargetPriority.NEAREST
+	farther.hp = MatchBattle.UNIT_HP
+	for step in range(100):
+		if battle.get_unit(nearer.id) == null:
+			break
+		battle.advance(MatchBattle.STEP, economy)
+	_check(battle.get_unit(nearer.id) == null and attacker.target == MatchBattle.NO_TARGET,
+		"Removing an opponent clears references to its ID.")
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == farther.id, "The surviving unit acquires the next local opponent.")
+	battle.aggro_radius = 0.05
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == MatchBattle.BASE_TARGET,
+		"Reducing detection below the enemy distance restores strategic advance.")
 
 
 func _test_base_destruction(attacker_side: MatchRegion.Owner, defender_side: MatchRegion.Owner) -> void:
@@ -121,9 +138,12 @@ func _test_base_destruction(attacker_side: MatchRegion.Owner, defender_side: Mat
 	var battle := _with_barracks([attacker_side])
 	var destroyed: Array[MatchRegion.Owner] = []
 	battle.base_destroyed.connect(func(side: MatchRegion.Owner) -> void: destroyed.append(side))
-	battle.advance(10.5, economy)
+	battle.advance(6.0, economy)
 	_check(battle.base_hp(defender_side) == 80, "A distant base takes no damage.")
-	battle.advance(0.25, economy)
+	for step in range(480):
+		if battle.base_hp(defender_side) < 80:
+			break
+		battle.advance(MatchBattle.STEP, economy)
 	_check(battle.base_hp(defender_side) == 77, "An undefended base in close range takes 3 damage.")
 	battle.advance(60.0, economy)
 	var expected_outcome := MatchBattle.Outcome.VICTORY if attacker_side == PLAYER else (
@@ -143,19 +163,113 @@ func _test_base_destruction(attacker_side: MatchRegion.Owner, defender_side: Mat
 		"Further time leaves the completed battle, clock and outcome unchanged.")
 
 
+func _test_orders_and_defense() -> void:
+	var economy := MatchEconomy.new()
+	var battle := _with_barracks([PLAYER, CPU])
+	battle.advance(3.5, economy)
+	var player := battle.active_units()[0]
+	var opponent := battle.active_units()[1]
+	var destination := Vector2(-6.0, 5.0)
+	_check(battle.issue_move(player.id, destination)
+		and player.movement_destination == destination and not player.waypoints.is_empty(),
+		"A move exposes its destination and route immediately.")
+	_check(not battle.issue_move(opponent.id, destination), "CPU units reject player commands.")
+	battle.advance(0.5, economy)
+	_check(player.target == MatchBattle.NO_TARGET and player.position.y > -2.0,
+		"The ordered unit advances away from its strategic base target.")
+
+	opponent.position = player.position + Vector2(2.0, 0.0)
+	opponent.hp = MatchBattle.ATTACK_DAMAGE
+	battle.advance(MatchBattle.STEP, economy)
+	_check(player.target == opponent.id and player.order == MatchBattle.Order.MOVE
+		and player.ordered_destination == destination and player.movement_destination != destination,
+		"Detecting a local threat interrupts movement while retaining the order.")
+	battle.advance(0.5, economy)
+	_check(battle.get_unit(opponent.id) == null and player.target == MatchBattle.NO_TARGET
+		and player.movement_destination == destination,
+		"After killing its attacker, the unit resumes the original route.")
+	battle.advance(2.8, economy)
+	_check(player.order == MatchBattle.Order.HOLD and player.position == destination
+		and player.waypoints.is_empty(), "Arrival converts a move into a persistent hold.")
+
+	battle.advance(0.5, economy)
+	var next_opponent: MatchBattle.Unit
+	for unit in battle.active_units():
+		if unit.side == CPU:
+			next_opponent = unit
+	if next_opponent == null:
+		_check(false, "A second opponent is available to test defense after arrival.")
+		return
+	next_opponent.position = player.position + Vector2(2.0, 0.0)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(player.order == MatchBattle.Order.HOLD and player.target == next_opponent.id,
+		"Holding units still defend against local enemies.")
+	battle.advance(0.25, economy)
+	next_opponent.position = destination + Vector2(battle.aggro_radius + 0.2, 0.0)
+	_check(player.position.distance_to(next_opponent.position) < battle.aggro_radius,
+		"The former target is still close enough to draw the unit away without a hold area.")
+	battle.advance(MatchBattle.STEP, economy)
+	_check(player.target == MatchBattle.NO_TARGET and player.movement_destination == destination,
+		"A nearby opponent outside the hold area breaks off the pursuit.")
+	next_opponent.position = Vector2(4.0, 4.0)
+	battle.advance(0.5, economy)
+	_check(player.position == destination, "The unit returns to the hold destination.")
+
+
+func _test_routes() -> void:
+	var economy := MatchEconomy.new()
+	var battle := _with_barracks([PLAYER])
+	battle.advance(3.5, economy)
+	var unit := battle.active_units()[0]
+	unit.position = Vector2(-4.0, -5.0)
+	var destination := Vector2(4.0, -5.0)
+	_check(battle.issue_move(unit.id, destination) and unit.waypoints.size() == 1,
+		"An unobstructed order uses a direct route.")
+	var obstacle := Rect2(-1.0, -6.0, 2.0, 2.0)
+	battle.navigation.add_obstacle(obstacle)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(unit.waypoints.size() > 1 and unit.waypoints[-1] == destination,
+		"A new obstacle replans the route through intermediate waypoints.")
+	_check(not battle.issue_move(unit.id, obstacle.get_center())
+		and unit.ordered_destination == destination, "Blocked ground preserves the valid order.")
+	_check(not battle.issue_move(unit.id, Vector2.INF), "Off-map destinations are rejected.")
+	var crossed_obstacle := false
+	for step in range(60):
+		battle.advance(4.0 * MatchBattle.STEP, economy)
+		crossed_obstacle = crossed_obstacle or obstacle.has_point(unit.position)
+	_check(unit.position == destination and not crossed_obstacle,
+		"The unit follows its waypoints around the obstacle and reaches the original destination.")
+
+	unit.position = Vector2(-4.0, -5.0)
+	_check(battle.issue_move(unit.id, destination), "The detour remains available before the wall.")
+	battle.navigation.add_obstacle(Rect2(1.5, -9.0, 1.0, 18.0))
+	battle.advance(MatchBattle.STEP, economy)
+	_check(unit.order == MatchBattle.Order.MOVE and unit.waypoints.is_empty()
+		and not battle.issue_move(unit.id, destination),
+		"A passable but disconnected destination clears stale waypoints and rejects a new order.")
+	var previous := unit.position
+	battle.advance(0.25, economy)
+	_check(unit.position == previous, "A unit with no route waits without crossing the blocker.")
+	var replacement := Vector2(-5.0, -5.0)
+	_check(battle.issue_move(unit.id, replacement), "A reachable order replaces a stalled route.")
+	battle.advance(1.0, economy)
+	_check(unit.order == MatchBattle.Order.HOLD and unit.position == replacement,
+		"The replacement reaches its destination.")
+
+
 func _test_match_scene() -> void:
+	root.size = Vector2i(1280, 800)
 	var scene := MATCH_SCENE.instantiate()
 	root.add_child(scene)
 	scene.set_process(false)
-	var units := scene.get_node("Units") as Node3D
-	var regions := scene.get_node("Regions")
-	# Deliberately vary ownership across the same corridor to exercise both and neutral.
-	scene.get_region(&"region_1").region_owner = CPU
-	scene.get_region(&"region_2").region_owner = PLAYER
-	var initial_owners := _region_owners(regions)
+	await process_frame
+	await process_frame
 
+	var units := scene.get_node("Units") as Node3D
+	var player_building := Vector3(-10.2, 0.0, -1.2)
 	scene._process(2.0)
-	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2)), "Build a player barracks alongside the autonomous CPU purchase.")
+	_check(scene.try_place_building(PLAYER, &"barracks", player_building),
+		"Build a player barracks alongside the autonomous CPU purchase.")
 	scene._process(3.5)
 	if units.get_child_count() != 2:
 		_check(false, "Both barracks must deploy a unit.")
@@ -163,28 +277,46 @@ func _test_match_scene() -> void:
 		return
 	var cpu_view := units.get_child(0) as MeshInstance3D
 	var player_view := units.get_child(1) as MeshInstance3D
+	var cpu_building := scene.get_node("Buildings/CPU").get_child(0) as Node3D
+	_check(cpu_view.position.distance_to(cpu_building.position) < 2.0
+		and player_view.position.distance_to(player_building) < 2.0
+		and absf(player_view.position.z - 2.0) > 1.0,
+		"Both factions deploy beside their producing structures, off the former route.")
 	var cpu_start := cpu_view.position
-	var player_start := player_view.position
-	scene._process(3.5)
-	var player_base := scene.get_node("Regions/PlayerStart/PlayerBase") as Node3D
-	var cpu_base := scene.get_node("Regions/CPUStart/CPUBase") as Node3D
-	var route := cpu_base.global_position - player_base.global_position
-	var direction := route.normalized()
-	var gap := (cpu_view.position - player_view.position).dot(direction)
-	_check((cpu_view.position - cpu_start).dot(direction) < 0.0
-		and (player_view.position - player_start).dot(direction) > 0.0
-		and (cpu_view.global_position - player_base.global_position).cross(direction).is_zero_approx()
-		and (player_view.global_position - player_base.global_position).cross(direction).is_zero_approx()
-		and gap > 0.0 and gap <= MatchBattle.UNIT_ATTACK_RANGE,
-		"The scene renders both waves meeting on the route between the bases.")
-	var battle: MatchBattle = scene._battle
-	_check(battle.active_units().size() == 4 and battle.active_units()[0].hp == 9
-		and battle.active_units()[1].hp == 9, "The initial units exchange damage in the match scene.")
-	scene._process(3.0)
-	_check(not cpu_view.is_inside_tree() and not player_view.is_inside_tree()
-		and units.get_child_count() == battle.active_units().size(),
-		"The scene removes dead units and still renders the active units.")
-	_check(_region_owners(regions) == initial_owners, "Moving and fighting leave region ownership unchanged.")
+	scene._process(0.25)
+	_check(cpu_view.position != cpu_start, "The CPU starts moving toward its strategic target.")
+	var marker := scene.get_node("UnitSelection") as MeshInstance3D
+	_click_at_world(cpu_view.global_position)
+	_check(scene.selected_unit() == null and not marker.visible, "Enemy units cannot be selected.")
+	_click_at_world(player_view.global_position)
+	var player: MatchBattle.Unit = scene.selected_unit()
+	if player == null:
+		_check(false, "Clicking the rendered friendly token selects it.")
+		scene.free()
+		return
+	_check(marker.visible and marker.global_position == player_view.global_position,
+		"The scene identifies the selected friendly unit with a ring.")
+	var destination := Vector3(-5.0, 0.0, -4.0)
+	_click_at_world(destination, MOUSE_BUTTON_RIGHT)
+	_check(player.ordered_destination.is_equal_approx(Vector2(destination.x, destination.z)),
+		"A right-click issues a real move order through viewport input.")
+	_click_at_world(player_building, MOUSE_BUTTON_RIGHT)
+	_click_at_world(cpu_view.global_position, MOUSE_BUTTON_RIGHT)
+	_check(player.ordered_destination.is_equal_approx(Vector2(destination.x, destination.z)),
+		"Clicking a building footprint or enemy unit preserves the prior order.")
+	scene._process(0.5)
+	var first_position := player_view.position
+	var replacement := Vector3(-7.0, 0.0, -5.0)
+	_click_at_world(replacement, MOUSE_BUTTON_RIGHT)
+	scene._process(2.0)
+	_check(player_view.position != first_position
+		and player.position.is_equal_approx(Vector2(replacement.x, replacement.z))
+		and player.order == MatchBattle.Order.HOLD and marker.global_position == player_view.global_position,
+		"A second right-click supersedes the first and the visible unit and marker reach it.")
+	player.hp = 0
+	scene._process(MatchBattle.STEP)
+	_check(scene.selected_unit() == null and not marker.visible and not player_view.is_inside_tree(),
+		"Removing the selected unit clears both the selection and its rendered view.")
 	scene.free()
 
 
@@ -209,22 +341,25 @@ func _test_match_end_and_restart() -> void:
 	var units := scene.get_node("Units")
 	_check_full_reset(scene, initial_owners)
 
-	# Give the first player barracks a two-second lead, then keep pace with CPU purchases.
-	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2)),
+	# A staggered approach from opposite sides of the player base wins this layout.
+	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-12.0, 0, 5.0)),
 		"The first barracks starts the player advance.")
 	scene._process(10.0)
-	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -3.65)), "The player adds the second barracks at 10 seconds.")
+	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-7.7, 0, -1.0)),
+		"The player adds the second barracks at 10 seconds.")
 	scene._process(20.0)
 	_check(scene.try_upgrade(PLAYER) and scene.economy.has_upgrade(CPU),
 		"Both sides have upgraded before the deciding attack.")
 	scene.get_region(&"region_1").region_owner = PLAYER
 	regions.get_node("CPUStart").region_owner = PLAYER
-	scene._process(30.0)
+	scene._process(45.0)
 	var battle: MatchBattle = scene._battle
 	_check(battle.outcome() == MatchBattle.Outcome.VICTORY and outcome.visible
 		and outcome.text == "Victory" and player_base.visible and not cpu_base.visible
 		and player_hp.text == "Player base · 80 HP" and cpu_hp.text == "CPU base · 0 HP",
-		"Destroying the CPU base shows Victory and updates both base readouts.")
+		"Destroying the CPU base shows Victory and updates both base readouts. Got %s, %s, %s." % [
+			outcome.text, player_hp.text, cpu_hp.text,
+		])
 	_check(units.get_child_count() > 0 and battle.elapsed_time() > 30.0,
 		"The finished match still has units and elapsed time to clear.")
 	_check(not scene.is_processing() and build.disabled and upgrade.disabled
@@ -257,7 +392,11 @@ func _test_match_end_and_restart() -> void:
 	_click(restart)
 	scene.set_process(false)
 	_check_full_reset(scene, initial_owners)
-	scene._process(13.0)
+	scene._process(8.0)
+	for step in range(600):
+		if scene._battle.base_hp(PLAYER) < MatchBattle.BASE_HP:
+			break
+		scene._process(MatchBattle.STEP)
 	_check(player_hp.text == "Player base · 77 HP" and cpu_hp.text == "CPU base · 80 HP"
 		and not outcome.visible, "The HUD reflects nonlethal base damage during play.")
 	scene._process(47.0)
@@ -307,9 +446,17 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 
 
 func _click(button: Button) -> void:
+	_click_at(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+
+
+func _click_at_world(point: Vector3, button := MOUSE_BUTTON_LEFT) -> void:
+	_click_at(root.get_camera_3d().unproject_position(point), button)
+
+
+func _click_at(point: Vector2, button: MouseButton) -> void:
 	var event := InputEventMouseButton.new()
-	event.button_index = MOUSE_BUTTON_LEFT
-	event.position = button.get_global_rect().get_center()
+	event.button_index = button
+	event.position = point
 	event.pressed = true
 	root.push_input(event, true)
 	var release := event.duplicate() as InputEventMouseButton
@@ -318,9 +465,9 @@ func _click(button: Button) -> void:
 
 
 func _with_barracks(sides: Array) -> MatchBattle:
-	var battle := MatchBattle.new(CORRIDOR_LENGTH)
+	var battle := MatchBattle.new(PLAYER_BASE, CPU_BASE)
 	for side in sides:
-		battle.add_barracks(side)
+		battle.add_barracks(side, Vector2(PLAYER_BASE.x if side == PLAYER else CPU_BASE.x, -3.0))
 	return battle
 
 
