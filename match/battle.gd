@@ -453,12 +453,16 @@ func elapsed_time() -> float:
 	return _elapsed_time
 
 
-func advance(delta: float, economy: MatchEconomy, accrue_income := false) -> void:
+## Returns the delta used before a decision interrupted the frame.
+func advance(delta: float, economy: MatchEconomy, accrue_income := false,
+		should_interrupt := Callable()) -> float:
 	if delta < 0.0 or is_finished():
-		return
+		return 0.0
 
 	# An upgrade can make an existing timer due immediately.
 	_advance_production(0.0, economy)
+	if should_interrupt.is_valid() and should_interrupt.call():
+		return 0.0
 	_pending_time += delta
 	while _pending_time + TIME_EPSILON >= STEP and not is_finished():
 		_pending_time = maxf(0.0, _pending_time - STEP)
@@ -469,6 +473,11 @@ func advance(delta: float, economy: MatchEconomy, accrue_income := false) -> voi
 		if not is_finished():
 			_advance_production(STEP, economy)
 		step_finished.emit()
+		if should_interrupt.is_valid() and should_interrupt.call():
+			var used := clampf(delta - _pending_time, 0.0, delta)
+			_pending_time = 0.0
+			return used
+	return delta
 
 
 func _advance_production(delta: float, economy: MatchEconomy) -> void:

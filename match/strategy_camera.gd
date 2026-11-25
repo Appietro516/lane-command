@@ -17,8 +17,8 @@ var _dragging := false
 
 func _ready() -> void:
 	get_viewport().size_changed.connect(_update_overview_size)
-	get_window().focus_exited.connect(_end_drag)
-	get_window().mouse_exited.connect(_end_drag)
+	get_window().focus_exited.connect(end_drag)
+	get_window().mouse_exited.connect(end_drag)
 	_update_overview_size()
 	reset_view(true)
 
@@ -99,7 +99,7 @@ func _input(event: InputEvent) -> void:
 		if event.pressed:
 			get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_MIDDLE:
-			_end_drag()
+			end_drag()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -117,5 +117,5 @@ func _unhandled_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 
-func _end_drag() -> void:
+func end_drag() -> void:
 	_dragging = false

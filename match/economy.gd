@@ -136,6 +136,13 @@ func try_spend(side: MatchRegion.Owner, cost: Dictionary) -> bool:
 	return true
 
 
+func grant_resource(side: MatchRegion.Owner, resource_id: StringName, amount: int) -> bool:
+	if not _sides.has(side) or not RESOURCES.has(resource_id) or amount <= 0:
+		return false
+	_sides[side].stockpiles[resource_id] = stockpile(side, resource_id) + amount
+	return true
+
+
 func barracks_count(side: MatchRegion.Owner) -> int:
 	return _sides[side].barracks_count
 

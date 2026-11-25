@@ -91,6 +91,9 @@ class PlacedFortification:
 
 var faction_stats: FactionStats
 var economy: MatchEconomy
+var narrative_events: NarrativeEvents
+
+@export var narrative_catalog: NarrativeCatalog
 @export_group("Map")
 @export var map_seed: int = 17
 @export var map_width := TerritoryLayout.DEFAULT_SIZE.x
@@ -164,6 +167,8 @@ var _unit_materials: Dictionary[StringName, StandardMaterial3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
 var _route_mesh := ImmediateMesh.new()
 var _time_until_cpu_decision: float
+var _advancing_battle := false
+var _owns_narrative_pause := false
 
 var _bases: Dictionary[MatchRegion.Owner, Node3D] = {}
 var _pending_pick := Vector2.INF
@@ -216,6 +221,7 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _cpu_hp_label: Label = %CPUHP
 @onready var _outcome_label: Label = %Outcome
 @onready var _restart_button: Button = %Restart
+@onready var _event_dialogue := $NarrativeOverlay/EventDialogue
 
 
 func _ready() -> void:
@@ -273,6 +279,7 @@ func _ready() -> void:
 		_scout_buttons.append(button)
 	$HUD.move_child(%ClaimMarkers, 0)
 	_restart_button.pressed.connect(restart_match)
+	_event_dialogue.choice_pressed.connect(_resolve_narrative_choice)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
 	restart_match()
 
@@ -388,9 +395,13 @@ func _add_starting_base(region: MatchRegion) -> void:
 
 
 func restart_match() -> void:
+	if narrative_events != null:
+		narrative_events.close()
+		narrative_events.queue_changed.disconnect(_sync_narrative_dialogue)
 	_camera.reset_view(true)
 	if _battle != null:
 		_battle.step_finished.disconnect(_expeditions._step)
+		_battle.step_finished.disconnect(_advance_narrative_time)
 		_battle.unit_produced.disconnect(_spawn_unit)
 		_battle.unit_removed.disconnect(_remove_unit)
 		_battle.base_destroyed.disconnect(_hide_base)
@@ -431,6 +442,8 @@ func restart_match() -> void:
 			landmark.stat, landmark.magnitude, &"legendary", landmark.display_name,
 			"", true, 0, landmark.region_id)
 	economy = MatchEconomy.new(faction_stats)
+	narrative_events = NarrativeEvents.new(active_map_seed, economy, narrative_catalog)
+	narrative_events.queue_changed.connect(_sync_narrative_dialogue)
 	_time_until_cpu_decision = cpu_decision_interval
 	_cpu_strategy = CpuStrategy.new(active_map_seed)
 	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
@@ -445,6 +458,7 @@ func restart_match() -> void:
 	_battle.outpost_destroyed.connect(_lose_region)
 	_battle.fortification_destroyed.connect(_remove_fortification)
 	_battle.fortification_fired.connect(_show_fortification_shot)
+	_battle.step_finished.connect(_advance_narrative_time)
 	_expeditions = ScoutExpeditions.new(_battle, economy, _regions_by_id, {
 		"claim_energy": claim_energy,
 		"duration": claim_duration,
@@ -462,20 +476,24 @@ func restart_match() -> void:
 
 
 func _process(delta: float) -> void:
-	if _battle.is_finished():
+	if _battle.is_finished() or _has_narrative_decision():
 		return
 
 	# Apply income and production up to each decision before making its purchase.
 	while delta >= _time_until_cpu_decision and not _battle.is_finished():
-		_advance_simulation(_time_until_cpu_decision)
-		delta -= _time_until_cpu_decision
+		var used := _advance_simulation(_time_until_cpu_decision)
+		delta -= used
+		_time_until_cpu_decision -= used
+		if _has_narrative_decision():
+			break
 		_time_until_cpu_decision = cpu_decision_interval
 		if not _battle.is_finished():
 			_try_cpu_purchase()
+		if _has_narrative_decision():
+			break
 
-	if not _battle.is_finished():
-		_advance_simulation(delta)
-		_time_until_cpu_decision -= delta
+	if not _battle.is_finished() and not _has_narrative_decision():
+		_time_until_cpu_decision -= _advance_simulation(delta)
 	if _battle.is_finished():
 		_cancel_placement()
 		_select_unit(MatchBattle.NO_TARGET)
@@ -1297,8 +1315,55 @@ func _select_region(region_id: StringName) -> void:
 		_regions_by_id[_selected_region_id].set_selected(true)
 
 
-func _advance_simulation(delta: float) -> void:
-	_battle.advance(delta, economy, true)
+func _advance_simulation(delta: float) -> float:
+	if _has_narrative_decision():
+		return 0.0
+	_advancing_battle = true
+	var used := _battle.advance(delta, economy, true, _has_narrative_decision)
+	_advancing_battle = false
+	if _has_narrative_decision():
+		_sync_narrative_dialogue()
+	return used
+
+
+func _has_narrative_decision() -> bool:
+	return not narrative_events.pending_player_id().is_empty()
+
+
+func _advance_narrative_time() -> void:
+	narrative_events.advance_time(_battle.elapsed_time())
+
+
+func _sync_narrative_dialogue() -> void:
+	if _advancing_battle and _has_narrative_decision():
+		return
+	if _has_narrative_decision() and not _event_dialogue.visible:
+		_owns_narrative_pause = not get_tree().paused
+		get_tree().paused = true
+		_pending_pick = Vector2.INF
+		_clear_wall_drag()
+		_camera.end_drag()
+	_event_dialogue.present(narrative_events.player_dialogue())
+	if not _has_narrative_decision():
+		_release_narrative_pause()
+
+
+func _resolve_narrative_choice(instance_id: StringName, option_id: StringName) -> void:
+	if narrative_events.resolve_player(instance_id, option_id):
+		_refresh_hud()
+
+
+func _release_narrative_pause() -> void:
+	if _owns_narrative_pause:
+		_owns_narrative_pause = false
+		get_tree().paused = false
+
+
+func _exit_tree() -> void:
+	if narrative_events != null:
+		narrative_events.queue_changed.disconnect(_sync_narrative_dialogue)
+		narrative_events.close()
+	_release_narrative_pause()
 
 
 func _try_cpu_purchase() -> void:
@@ -1343,6 +1408,7 @@ func _remove_unit(unit_id: int) -> void:
 
 func _hide_base(side: MatchRegion.Owner) -> void:
 	_bases[side].hide()
+	narrative_events.close()
 
 
 func _create_resource_readouts() -> void:
