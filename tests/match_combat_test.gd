@@ -25,7 +25,7 @@ func _run() -> void:
 	await _test_match_scene()
 	await _test_match_end_and_restart()
 	if failures == 0:
-		print("Open-map combat, movement orders, outcomes and replay checks passed.")
+		print("Open-map combat, unit inspection, movement orders, outcomes and replay checks passed.")
 	quit(1 if failures else 0)
 
 
@@ -286,8 +286,28 @@ func _test_match_scene() -> void:
 	scene._process(0.25)
 	_check(cpu_view.position != cpu_start, "The CPU starts moving toward its strategic target.")
 	var marker := scene.get_node("UnitSelection") as MeshInstance3D
+	var panel := scene.get_node("%UnitInspection") as PanelContainer
+	var unit_name := scene.get_node("%UnitName") as Label
+	var stats := scene.get_node("%UnitStats") as Label
+	var intent := scene.get_node("%UnitIntent") as Label
+	var order_hint := scene.get_node("%UnitOrderHint") as Label
+	var route := (scene.get_node("UnitRoute") as MeshInstance3D).mesh
 	_click_at_world(cpu_view.global_position)
-	_check(scene.selected_unit() == null and not marker.visible, "Enemy units cannot be selected.")
+	var cpu: MatchBattle.Unit = scene.selected_unit()
+	if cpu == null or cpu.side != CPU:
+		_check(false, "Clicking the enemy token selects it.")
+		scene.free()
+		return
+	_check(panel.visible and unit_name.text == "CPU combat unit #%d" % cpu.id
+		and stats.text == "HP  12 / 12\nAttack  3 · Speed  2.4 units/s"
+		and intent.text == "Target  Player base\nState  Advancing"
+		and marker.global_position == cpu_view.global_position
+		and not order_hint.visible and route.get_surface_count() == 1,
+		"Enemy inspection shows the live stats, strategic target, ring and route.")
+	var destination := Vector3(-5.0, 0.0, -4.0)
+	_click_at_world(destination, MOUSE_BUTTON_RIGHT)
+	_check(cpu.order == MatchBattle.Order.AUTONOMOUS and scene.selected_unit() == cpu,
+		"Right-clicking ground leaves an inspected CPU unit autonomous.")
 	_click_at_world(player_view.global_position)
 	var player: MatchBattle.Unit = scene.selected_unit()
 	if player == null:
@@ -296,10 +316,15 @@ func _test_match_scene() -> void:
 		return
 	_check(marker.visible and marker.global_position == player_view.global_position,
 		"The scene identifies the selected friendly unit with a ring.")
-	var destination := Vector3(-5.0, 0.0, -4.0)
+	_check(unit_name.text == "Player combat unit #%d" % player.id
+		and intent.text == "Target  CPU base\nState  Advancing" and order_hint.visible,
+		"Switching to a friendly unit refreshes the name, target and move hint.")
 	_click_at_world(destination, MOUSE_BUTTON_RIGHT)
 	_check(player.ordered_destination.is_equal_approx(Vector2(destination.x, destination.z)),
 		"A right-click issues a real move order through viewport input.")
+	_check(intent.text == "Target  None\nState  Moving to order"
+		and route.get_surface_count() == 1 and route.get_aabb().end.x > destination.x,
+		"The route and panel refresh immediately to show the order destination.")
 	_click_at_world(player_building, MOUSE_BUTTON_RIGHT)
 	_click_at_world(cpu_view.global_position, MOUSE_BUTTON_RIGHT)
 	_check(player.ordered_destination.is_equal_approx(Vector2(destination.x, destination.z)),
@@ -313,10 +338,53 @@ func _test_match_scene() -> void:
 		and player.position.is_equal_approx(Vector2(replacement.x, replacement.z))
 		and player.order == MatchBattle.Order.HOLD and marker.global_position == player_view.global_position,
 		"A second right-click supersedes the first and the visible unit and marker reach it.")
+	_check(route.get_surface_count() == 0 and intent.text == "Target  None\nState  Holding",
+		"The route clears when the selected unit reaches its hold point.")
+
+	cpu.position = player.position + Vector2(0.0, -2.0)
+	scene._process(MatchBattle.STEP)
+	_check(player.target == cpu.id and intent.text == "Target  CPU unit #%d\nState  Pursuing" % cpu.id
+		and route.get_surface_count() == 1 and route.get_aabb().position.z < cpu.position.y,
+		"A new target and its pursuit route replace the previous movement intent live.")
+	cpu.position = player.position + Vector2(0.0, -0.55)
+	scene._process(MatchBattle.STEP)
+	_check(player.hp == 9 and stats.text.begins_with("HP  9 / 12")
+		and intent.text.ends_with("State  Engaging") and route.get_surface_count() == 0,
+		"Combat damage updates live and reaching attack range clears the route.")
+	cpu.hp = 0
+	scene._process(MatchBattle.STEP)
+	_check(scene.selected_unit() == player and intent.text.begins_with("Target  None"),
+		"Losing the target refreshes the panel while preserving the surviving selection.")
+
+	_click_at_world(player_building)
+	_check(scene.selected_unit() == null and not panel.visible and not marker.visible
+		and route.get_surface_count() == 0 and scene._selected_region_id == TerritoryLayout.PLAYER_START,
+		"Clicking the map clears inspection and selects the underlying region.")
+	_click_at_world(player_view.global_position)
+	_check(scene._selected_region_id == &"", "Selecting a unit clears the region selection.")
+	_press_escape()
+	_check(scene.selected_unit() == null and not panel.visible, "Escape clears inspection.")
+
+	_click_at_world(player_view.global_position)
+	scene.economy.advance(10.0)
+	scene._refresh_hud()
+	_click(scene.get_node("%Build"))
+	await process_frame
+	_click(scene.get_node("%BuildList").get_child(0))
+	_check(scene._preview != null and scene.selected_unit() == null and not panel.visible,
+		"Entering placement clears inspection.")
+	_click_at_world(player_view.global_position)
+	_check(scene._pending_pick != Vector2.INF and scene.selected_unit() == null,
+		"Clicks over a unit go to building placement while it is active.")
+	_press_escape()
+	_check(scene._preview == null, "Escape still cancels placement.")
+
+	_click_at_world(player_view.global_position)
 	player.hp = 0
 	scene._process(MatchBattle.STEP)
-	_check(scene.selected_unit() == null and not marker.visible and not player_view.is_inside_tree(),
-		"Removing the selected unit clears both the selection and its rendered view.")
+	_check(scene.selected_unit() == null and not marker.visible and not panel.visible
+		and route.get_surface_count() == 0 and not player_view.is_inside_tree(),
+		"Removing the selected unit clears inspection and the rendered view.")
 	scene.free()
 
 
@@ -462,6 +530,15 @@ func _click_at(point: Vector2, button: MouseButton) -> void:
 	var release := event.duplicate() as InputEventMouseButton
 	release.pressed = false
 	root.push_input(release, true)
+
+
+func _press_escape() -> void:
+	var event := InputEventKey.new()
+	event.keycode = KEY_ESCAPE
+	event.pressed = true
+	root.push_input(event, true)
+	event.pressed = false
+	root.push_input(event, true)
 
 
 func _with_barracks(sides: Array) -> MatchBattle:

@@ -20,6 +20,11 @@ outer_radius = 0.65
 rings = 32
 ring_segments = 8
 
+[sub_resource type="StandardMaterial3D" id="Material_route"]
+cull_mode = 2
+shading_mode = 0
+albedo_color = Color(1, 0.89, 0.65, 1)
+
 [sub_resource type="StyleBoxFlat" id="StyleBox_hud"]
 content_margin_left = 24.0
 content_margin_top = 12.0
@@ -60,7 +65,12 @@ size = 24.5
 
 [node name="UnitSelection" type="MeshInstance3D" parent="."]
 visible = false
+cast_shadow = 0
 mesh = SubResource("Mesh_selection")
+
+[node name="UnitRoute" type="MeshInstance3D" parent="."]
+material_override = SubResource("Material_route")
+cast_shadow = 0
 
 [node name="HUD" type="CanvasLayer" parent="."]
 
@@ -105,6 +115,46 @@ custom_minimum_size = Vector2(104, 0)
 layout_mode = 2
 theme_override_font_sizes/font_size = 18
 text = "Restart"
+
+[node name="UnitInspection" type="PanelContainer" parent="HUD"]
+unique_name_in_owner = true
+visible = false
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -298.0
+offset_top = 24.0
+offset_right = -24.0
+offset_bottom = 24.0
+theme_override_styles/panel = SubResource("StyleBox_hud")
+
+[node name="Readouts" type="VBoxContainer" parent="HUD/UnitInspection"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="UnitName" type="Label" parent="HUD/UnitInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+
+[node name="UnitStats" type="Label" parent="HUD/UnitInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Divider" type="HSeparator" parent="HUD/UnitInspection/Readouts"]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="UnitIntent" type="Label" parent="HUD/UnitInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="UnitOrderHint" type="Label" parent="HUD/UnitInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
+theme_override_font_sizes/font_size = 14
+text = "Right-click ground to move"
 
 [node name="EconomyPanel" type="PanelContainer" parent="HUD"]
 anchor_left = 0.5

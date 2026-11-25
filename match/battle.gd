@@ -42,6 +42,7 @@ class Unit:
 	var strategic_revision := -1
 	var hp := UNIT_HP
 	var target := NO_TARGET
+	var can_attack_target := false
 	var cooldown := 0.0
 
 	func _init(unit_id: int, owner: MatchRegion.Owner, spawn_position: Vector2) -> void:
@@ -102,6 +103,7 @@ func issue_move(id: int, destination: Vector2) -> bool:
 	unit.order = Order.MOVE
 	unit.ordered_destination = destination
 	unit.target = NO_TARGET
+	unit.can_attack_target = false
 	_set_route(unit, destination, route)
 	return true
 
@@ -178,7 +180,8 @@ func _step_combat() -> void:
 	var attacks: Array[Unit] = []
 	for unit in units:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
-		if _plan_turn(unit, units) and unit.cooldown <= TIME_EPSILON:
+		unit.can_attack_target = _plan_turn(unit, units)
+		if unit.can_attack_target and unit.cooldown <= TIME_EPSILON:
 			attacks.append(unit)
 
 	for unit in units:
@@ -201,6 +204,7 @@ func _step_combat() -> void:
 	for unit in _units.values():
 		if unit.target > NO_TARGET and not _units.has(unit.target):
 			unit.target = NO_TARGET
+			unit.can_attack_target = false
 			_clear_route(unit)
 
 	if base_hp(PLAYER) == 0:

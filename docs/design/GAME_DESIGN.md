@@ -24,7 +24,9 @@ Sources: S95c42ca9286d, S1389629da9a3
 
 ## Unit orders
 
-Left-click a friendly unit to select it. A ring marks the selection. Right-click reachable ground to issue or replace a move order. The unit can engage nearby opponents during transit and resumes its destination when the threat passes. On arrival it holds the area, engages local threats within its detection radius around the destination, and returns to that location after combat. Detection range and local target priority are tunable on the Match scene.
+Left-click a player or CPU unit to inspect its HP, attack damage, movement speed, current target, and state. A ring marks the unit, and a line traces its remaining route to the current movement destination. Click the map or press Escape to clear inspection. Building placement takes priority over unit selection.
+
+With a player unit selected, right-click reachable ground to issue or replace a move order. The unit can engage nearby opponents during transit and resumes its destination when the threat passes. On arrival it holds the area, engages local threats within its detection radius around the destination, and returns to that location after combat. Detection range and local target priority are tunable on the Match scene.
 
 [Autonomous combat and right-click orders ticket](https://trello.com/c/mHKVpPnR/12-replace-fixed-lane-with-autonomous-combat-and-right-click-unit-orders)
 

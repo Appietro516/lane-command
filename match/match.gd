@@ -16,6 +16,9 @@ const STARTING_BASE := preload("res://match/starting_base.tscn")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const CPU_DECISION_INTERVAL := 2.0
+const ROUTE_HEIGHT := 0.12
+const ROUTE_HALF_WIDTH := 0.045
+const ROUTE_TIP_RADIUS := 0.18
 
 const FACTION_ACCENTS := {
 	PLAYER: preload("res://match/player_accent.tres"),
@@ -41,6 +44,7 @@ var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
 var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
+var _route_mesh := ImmediateMesh.new()
 var _time_until_cpu_decision: float
 
 var _bases: Dictionary[MatchRegion.Owner, Node3D] = {}
@@ -58,6 +62,12 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _regions: Node3D = $Regions
 @onready var _units: Node3D = $Units
 @onready var _unit_selection: MeshInstance3D = $UnitSelection
+@onready var _unit_route: MeshInstance3D = $UnitRoute
+@onready var _unit_panel: PanelContainer = %UnitInspection
+@onready var _unit_name: Label = %UnitName
+@onready var _unit_stats: Label = %UnitStats
+@onready var _unit_intent: Label = %UnitIntent
+@onready var _unit_order_hint: Label = %UnitOrderHint
 @onready var _energy_label: Label = %Energy
 @onready var _income_label: Label = %Income
 @onready var _barracks_label: Label = %BarracksCount
@@ -78,6 +88,8 @@ var _build_options: Dictionary[StringName, Button] = {}
 
 func _ready() -> void:
 	_generate_map()
+	_unit_route.mesh = _route_mesh
+	_unit_route.global_transform = _regions.global_transform
 	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
 	for building_id in BUILDINGS:
 		var definition: Dictionary = BUILDINGS[building_id]
@@ -235,6 +247,7 @@ func _begin_placement(building_id: StringName) -> void:
 	if not _purchase_block_reason(PLAYER, building_id).is_empty():
 		return
 	_cancel_placement()
+	_select_unit(MatchBattle.NO_TARGET)
 	_placement_id = building_id
 	var definition: Dictionary = BUILDINGS[building_id]
 	_preview = definition.scene.instantiate() as Node3D
@@ -339,6 +352,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			and event.pressed)):
 		_cancel_placement()
 		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("ui_cancel") and selected_unit() != null:
+		_select_unit(MatchBattle.NO_TARGET)
+		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if _build_menu.visible:
@@ -348,10 +364,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				_pick_map(event.position)
 			get_viewport().set_input_as_handled()
-		elif event.button_index == MOUSE_BUTTON_RIGHT and selected_unit() != null:
+		elif event.button_index == MOUSE_BUTTON_RIGHT and _selected_unit_can_receive_orders():
 			var point: Variant = _ground_point(event.position)
-			if point != null and _pick_unit(event.position) == MatchBattle.NO_TARGET:
-				_battle.issue_move(_selected_unit_id, _map_position(point))
+			if point != null and _pick_unit(event.position) == MatchBattle.NO_TARGET \
+					and _battle.issue_move(_selected_unit_id, _map_position(point)):
+				_update_unit_selection()
 			get_viewport().set_input_as_handled()
 
 
@@ -373,7 +390,7 @@ func _physics_process(_delta: float) -> void:
 func _pick_map(pointer: Vector2) -> void:
 	var id := _pick_unit(pointer)
 	var unit := _battle.get_unit(id)
-	if unit != null and unit.side == PLAYER and not _battle.is_finished():
+	if unit != null and not _battle.is_finished():
 		_select_unit(id)
 		_select_region(&"")
 	else:
@@ -407,9 +424,79 @@ func _select_unit(id: int) -> void:
 
 
 func _update_unit_selection() -> void:
-	_unit_selection.visible = _unit_views.has(_selected_unit_id)
-	if _unit_selection.visible:
-		_unit_selection.global_position = _unit_views[_selected_unit_id].global_position
+	var unit := selected_unit()
+	_unit_selection.visible = unit != null
+	_unit_panel.visible = unit != null
+	_route_mesh.clear_surfaces()
+	if unit == null:
+		return
+
+	_unit_selection.global_position = _unit_views[unit.id].global_position
+	_unit_name.text = "%s combat unit #%d" % [_side_label(unit.side), unit.id]
+	_unit_name.modulate = FACTION_ACCENTS[unit.side].albedo_color.lightened(0.25)
+	_unit_stats.text = "HP  %d / %d\nAttack  %d · Speed  %.1f units/s" % [
+		unit.hp, MatchBattle.UNIT_HP, MatchBattle.ATTACK_DAMAGE, MatchBattle.MOVEMENT_SPEED,
+	]
+	_unit_intent.text = "Target  %s\nState  %s" % [_target_label(unit), _unit_state_label(unit)]
+	_unit_order_hint.visible = _selected_unit_can_receive_orders()
+	if not unit.waypoints.is_empty():
+		_draw_unit_route(unit)
+
+
+func _selected_unit_can_receive_orders() -> bool:
+	var unit := selected_unit()
+	return unit != null and unit.side == PLAYER and not _battle.is_finished()
+
+
+func _target_label(unit: MatchBattle.Unit) -> String:
+	if unit.target == MatchBattle.BASE_TARGET:
+		return "CPU base" if unit.side == PLAYER else "Player base"
+	var target := _battle.get_unit(unit.target)
+	if target != null:
+		return "%s unit #%d" % [_side_label(target.side), target.id]
+	return "None"
+
+
+func _unit_state_label(unit: MatchBattle.Unit) -> String:
+	if unit.can_attack_target:
+		return "Engaging"
+	if not unit.waypoints.is_empty():
+		if unit.target > MatchBattle.NO_TARGET:
+			return "Pursuing"
+		match unit.order:
+			MatchBattle.Order.MOVE: return "Moving to order"
+			MatchBattle.Order.HOLD: return "Returning to hold point"
+		return "Advancing"
+	if unit.order == MatchBattle.Order.HOLD and unit.position == unit.ordered_destination:
+		return "Holding"
+	if unit.order != MatchBattle.Order.AUTONOMOUS or unit.target != MatchBattle.NO_TARGET:
+		return "Waiting for route"
+	return "Idle"
+
+
+func _draw_unit_route(unit: MatchBattle.Unit) -> void:
+	_route_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	var previous := unit.position
+	for waypoint in unit.waypoints:
+		var edge := previous.direction_to(waypoint).orthogonal() * ROUTE_HALF_WIDTH
+		_add_route_triangle(previous + edge, previous - edge, waypoint + edge)
+		_add_route_triangle(waypoint + edge, previous - edge, waypoint - edge)
+		previous = waypoint
+
+	var right := Vector2.RIGHT * ROUTE_TIP_RADIUS
+	var down := Vector2.DOWN * ROUTE_TIP_RADIUS
+	_add_route_triangle(previous - right, previous - down, previous + right)
+	_add_route_triangle(previous - right, previous + right, previous + down)
+	_route_mesh.surface_end()
+
+
+func _add_route_triangle(a: Vector2, b: Vector2, c: Vector2) -> void:
+	for point: Vector2 in [a, b, c]:
+		_route_mesh.surface_add_vertex(Vector3(point.x, ROUTE_HEIGHT, point.y))
+
+
+func _side_label(side: MatchRegion.Owner) -> String:
+	return "Player" if side == PLAYER else "CPU"
 
 
 func _ground_point(pointer: Vector2) -> Variant:
@@ -508,9 +595,7 @@ func _refresh_hud() -> void:
 func _refresh_claim_control() -> void:
 	var reason := _claim_block_reason(_selected_region_id)
 	_claim_button.disabled = not reason.is_empty()
-	if selected_unit() != null:
-		_region_label.text = "Unit selected\nRight-click ground"
-	elif _regions_by_id.has(_selected_region_id):
+	if _regions_by_id.has(_selected_region_id):
 		_region_label.text = "%s\n%s" % [
 			str(_selected_region_id).capitalize(), "Neutral" if reason.is_empty() else reason,
 		]
