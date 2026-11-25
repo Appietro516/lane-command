@@ -16,23 +16,9 @@ if [[ ! $version =~ ^4\.[0-9]+\.[0-9]+-stable$ ]] ||
 fi
 
 python3 - <<'PY'
-import configparser
 from pathlib import Path
 
-project = configparser.ConfigParser(interpolation=None, strict=False)
-project.read_string("[project]\n" + Path("project.godot").read_text(encoding="utf-8-sig"))
-rendering = project["rendering"] if "rendering" in project else {}
-method = rendering.get("renderer/rendering_method.web", rendering.get("renderer/rendering_method"))
-if method != '"gl_compatibility"':
-    raise SystemExit("Web export requires the Compatibility renderer (gl_compatibility).")
-application = project["application"] if "application" in project else {}
-if not application.get("run/main_scene", "").strip('"'):
-    raise SystemExit("Set a main scene before exporting.")
-features = application.get("config/features", "")
-version = Path(".godot-version").read_text().strip()
-if f'"{version.rsplit(".", 1)[0]}"' not in features:
-    raise SystemExit("project.godot features and .godot-version must use the same Godot major/minor.")
-if '"C#"' in features or any(Path(".").glob("*.csproj")) or any(
+if any(Path(".").glob("*.csproj")) or any(
     path.suffix == ".gdextension" and not any(part.startswith(".") for part in path.parts)
     for path in Path(".").rglob("*.gdextension")
 ):
@@ -51,6 +37,7 @@ run_godot() {
     rm -f "$log"
 }
 
+run_godot --script res://.github/scripts/validate-project.gd
 mkdir -p "$output/windows" "$output/web"
 run_godot --import
 run_godot --quit-after 120
