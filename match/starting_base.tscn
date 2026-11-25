@@ -1,0 +1,33 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_concrete"]
+albedo_color = Color(0.82, 0.86, 0.89, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_structure"]
+albedo_color = Color(0.19, 0.23, 0.29, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_foundation"]
+material = SubResource("Material_concrete")
+size = Vector3(2.7, 0.24, 2.7)
+
+[sub_resource type="BoxMesh" id="Mesh_hull"]
+material = SubResource("Material_structure")
+size = Vector3(2.15, 0.8, 2.15)
+
+[sub_resource type="BoxMesh" id="Mesh_tower"]
+material = SubResource("Material_concrete")
+size = Vector3(1.35, 0.85, 1.35)
+
+[node name="StartingBase" type="Node3D"]
+
+[node name="Foundation" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.12, 0)
+mesh = SubResource("Mesh_foundation")
+
+[node name="Hull" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.64, 0)
+mesh = SubResource("Mesh_hull")
+
+[node name="Tower" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.465, 0)
+mesh = SubResource("Mesh_tower")
