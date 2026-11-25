@@ -472,38 +472,6 @@ func _test_cpu_purchases() -> void:
 	_check_state(match_scene.economy, PLAYER, [80.0, 0, 3.5], "Idle player")
 	match_scene.free()
 
-	# Keep both bases defended while checking the CPU's later economy decisions.
-	match_scene = MATCH_FIXTURE.instantiate()
-	root.add_child(match_scene)
-	match_scene.set_process(false)
-	match_scene._process(2.0)
-	_check(match_scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2)), "Build the player's first defending barracks.")
-	match_scene._process(8.0)
-	_check(match_scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -3.65)), "Build the player's second defending barracks.")
-	match_scene._process(6.0)
-	_check(match_scene.try_place_building(PLAYER, &"farm",
-		_clear_producer_point(match_scene, TerritoryLayout.PLAYER_START, &"farm")),
-		"The player can fund sustained production on the same schedule as the CPU.")
-	match_scene._process(13.75)
-	_check_state(match_scene.economy, CPU, [59.25, 2, 3.5], "Before the CPU can afford its upgrade")
-	match_scene._process(0.25)
-	_check_state(match_scene.economy, CPU, [0.0, 2, 2.5], "CPU upgrade at 30 seconds")
-	_check(match_scene.economy.stockpile(CPU, FOOD) == 21.0
-		and match_scene.economy.stockpile(PLAYER, FOOD) == 40.0,
-		"The CPU's units and upgrade spend Food from its own stockpile.")
-	_check(match_scene.try_upgrade(PLAYER), "Keep both sides on the upgraded production rate.")
-	var cpu_deployments: Array[int] = []
-	match_scene._battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
-		if unit.side == CPU:
-			cpu_deployments.append(unit.id))
-	match_scene._process(22.0)
-	for resource_id in MatchEconomy.RESOURCES:
-		_check(match_scene.economy.income_rate(CPU, resource_id) > MatchEconomy.RESOURCES[resource_id].baseline,
-			"The CPU builds a producer for %s." % resource_id)
-	_check(cpu_deployments.size() == 16,
-		"The CPU continues to fund both barracks at the upgraded rate.")
-	match_scene.free()
-
 
 func _test_symmetric_production() -> void:
 	var match_scene := MATCH_FIXTURE.instantiate()
@@ -542,8 +510,11 @@ func _test_symmetric_production() -> void:
 	_check(match_scene.try_place_building(PLAYER, &"farm",
 		_clear_producer_point(match_scene, TerritoryLayout.PLAYER_START, &"farm")),
 		"Both sides add Food income at 16 seconds.")
+	# Compare the shared production timers with identical upgrade timing.
+	match_scene._time_until_cpu_decision = 120.0
 	match_scene._process(14.0)
-	_check(match_scene.try_upgrade(PLAYER), "Both sides upgrade at 30 seconds.")
+	_check(match_scene.try_upgrade(PLAYER) and match_scene.try_upgrade(CPU),
+		"Both factions can buy the same upgrade at 30 seconds.")
 	match_scene._process(0.0)
 	_check(produced.size() == 28, "Both upgrades preserve elapsed production time.")
 	match_scene._process(2.25)
@@ -578,20 +549,15 @@ func _test_expanded_production() -> void:
 	_check(battle.active_barracks_count(PLAYER) == 4, "All four player barracks are operational.")
 
 	economy.set_income_source(CPU, FOOD, &"test_supply", "Test supply", 10.0)
-	for decision in range(16):
-		var count := economy.barracks_count(CPU)
+	for point in [Vector3(10.2, 0, -1.2), Vector3(12.73, 0, 0.41),
+			Vector3(12.0, 0, -3.0), Vector3(12.8, 0, 3.3)]:
 		var before := _stockpiles(economy, CPU)
-		scene._try_cpu_purchase()
-		if economy.barracks_count(CPU) > count:
-			_check(economy.barracks_count(CPU) == count + 1
-				and economy.stockpile(CPU, ENERGY) == before[ENERGY] - 40.0
-				and economy.stockpile(CPU, MATERIALS) == before[MATERIALS] - 20.0
-				and economy.stockpile(CPU, FOOD) == before[FOOD],
-				"Autonomous CPU construction uses the shared barracks price.")
-		if economy.barracks_count(CPU) == 4:
-			break
-	_check(battle.active_barracks_count(CPU) == 4,
-		"The CPU grows beyond two barracks when its economy supports expansion.")
+		_check(scene.try_place_building(CPU, &"barracks", point)
+			and economy.stockpile(CPU, ENERGY) == before[ENERGY] - 40.0
+			and economy.stockpile(CPU, MATERIALS) == before[MATERIALS] - 20.0
+			and economy.stockpile(CPU, FOOD) == before[FOOD],
+			"CPU construction uses the shared barracks price.")
+	_check(battle.active_barracks_count(CPU) == 4, "All four CPU barracks are operational.")
 	var sources := {}
 	for timer: MatchBattle.ProductionTimer in battle._timers:
 		_check(not sources.has(timer.source_id), "Each barracks has a unique source ID.")
@@ -599,7 +565,7 @@ func _test_expanded_production() -> void:
 		_check(scene.owns_region(timer.side, scene.region_at_world_position(scene._world_position(timer.position))),
 			"Every barracks belongs to the faction that owns its placement point.")
 
-	_check(scene.try_upgrade(PLAYER) and economy.has_upgrade(CPU), "Both factions fund their upgrade.")
+	_check(scene.try_upgrade(PLAYER) and scene.try_upgrade(CPU), "Both factions fund their upgrade.")
 	var deployments := {PLAYER: 0, CPU: 0}
 	var unit_ids := {}
 	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:

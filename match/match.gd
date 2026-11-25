@@ -51,8 +51,7 @@ const LEGENDARY_OUTPOST_SPACING := 2.0
 const INACTIVE_ACCENT := preload("res://match/inactive_accent.tres")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
-const CPU_DECISION_INTERVAL := 2.0
-const CPU_OPENING_SUPPLY_CYCLES := 4.0
+const CpuStrategy := preload("res://match/cpu_strategy.gd")
 const ROUTE_HEIGHT := 0.12
 const ROUTE_HALF_WIDTH := 0.045
 const ROUTE_TIP_RADIUS := 0.18
@@ -101,6 +100,13 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 	LegendaryBuff.new("Harvest Shrine", FactionStats.FOOD),
 	LegendaryBuff.new("Ancient Bastion", FactionStats.BUILDING_MAX_HP, 10.0),
 ]
+@export_group("CPU Strategy", "cpu_")
+@export_range(0.25, 10.0, 0.25) var cpu_decision_interval := 2.0
+@export_range(4.0, 24.0, 0.5) var cpu_threat_radius := 10.0
+@export_range(2.0, 60.0, 0.5) var cpu_defense_cooldown := 6.0
+@export_range(2.0, 60.0, 0.5) var cpu_placement_retry := 8.0
+@export_range(0, 16) var cpu_expansion_limit := 3
+@export_range(8.0, 45.0, 0.5) var cpu_investment_horizon := 26.0
 @export_group("")
 @export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
 @export var unit_target_priority := MatchBattle.TargetPriority.NEAREST
@@ -141,7 +147,7 @@ var _pending_pick := Vector2.INF
 var _placement_id: StringName = &""
 var _preview: Node3D
 var _preview_material: StandardMaterial3D
-var _cpu_placement_rng := RandomNumberGenerator.new()
+var _cpu_strategy: CpuStrategy
 var _build_options: Dictionary[StringName, Button] = {}
 
 @onready var _buildings: Dictionary[MatchRegion.Owner, Node3D] = {
@@ -394,8 +400,8 @@ func restart_match() -> void:
 			landmark.stat, landmark.magnitude, &"legendary", landmark.display_name,
 			"", true, 0, landmark.region_id)
 	economy = MatchEconomy.new(faction_stats)
-	_time_until_cpu_decision = CPU_DECISION_INTERVAL
-	_cpu_placement_rng.seed = 46
+	_time_until_cpu_decision = cpu_decision_interval
+	_cpu_strategy = CpuStrategy.new(active_map_seed)
 	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
 		_map_position(_bases[CPU].global_position), unit_aggro_radius,
 		_layout.bounds, faction_stats)
@@ -421,7 +427,7 @@ func _process(delta: float) -> void:
 	while delta >= _time_until_cpu_decision and not _battle.is_finished():
 		_advance_simulation(_time_until_cpu_decision)
 		delta -= _time_until_cpu_decision
-		_time_until_cpu_decision = CPU_DECISION_INTERVAL
+		_time_until_cpu_decision = cpu_decision_interval
 		if not _battle.is_finished():
 			_try_cpu_purchase()
 
@@ -1257,66 +1263,7 @@ func _advance_simulation(delta: float) -> void:
 
 
 func _try_cpu_purchase() -> void:
-	var active_barracks := _battle.active_barracks_count(CPU)
-	if active_barracks == 0 and _try_cpu_build(&"barracks"):
-		return
-
-	var food_per_unit := float(MatchEconomy.UNIT_COST[MatchEconomy.FOOD])
-	var food_income := economy.income_rate(CPU, MatchEconomy.FOOD)
-	var interval := economy.production_interval(CPU)
-	var demand := food_per_unit * active_barracks / MatchEconomy.UPGRADED_PRODUCTION_INTERVAL
-	# Opening stockpiles can fund expansion while the CPU saves for a Farm.
-	var opening_cycle_deficit := food_per_unit * (active_barracks + 1) - food_income * interval
-	if not economy.has_upgrade(CPU) and food_income < demand \
-			and economy.stockpile(CPU, MatchEconomy.FOOD) >= opening_cycle_deficit * CPU_OPENING_SUPPLY_CYCLES:
-		if not _purchase_block_reason(CPU, &"barracks").is_empty() or _try_cpu_build(&"barracks"):
-			return
-
-	# Secure the income needed to keep all barracks running after the upgrade.
-	if food_income < demand:
-		_try_cpu_build(&"farm")
-		return
-	if not economy.has_upgrade(CPU):
-		try_upgrade(CPU)
-		return
-
-	for building_id in BUILDINGS:
-		var income: Dictionary = BUILDINGS[building_id].get("income", {})
-		if income.is_empty():
-			continue
-		var has_active_building := false
-		for placed: PlacedFortification in _fortifications.values():
-			var structure := placed.defense
-			if structure.side == CPU and structure.kind == building_id and structure.active:
-				has_active_building = true
-				break
-		if not has_active_building and _try_cpu_build(building_id):
-			return
-
-	# Support the next barracks with recurring income before adding its unit costs.
-	if food_income >= demand + food_per_unit / interval:
-		_try_cpu_build(&"barracks")
-	elif _purchase_block_reason(CPU, &"barracks").is_empty():
-		_try_cpu_build(&"farm")
-
-
-func _try_cpu_build(building_id: StringName) -> bool:
-	if not _purchase_block_reason(CPU, building_id).is_empty():
-		return false
-	for region: MatchRegion in _regions_by_id.values():
-		if region.region_owner != CPU:
-			continue
-		var tile := region.geometry
-		var bounds := tile.get_aabb()
-		# Sample the territory and let the shared placement check validate its shape.
-		for attempt in range(8):
-			var point := tile.to_global(Vector3(
-				_cpu_placement_rng.randf_range(bounds.position.x, bounds.end.x),
-				bounds.end.y,
-				_cpu_placement_rng.randf_range(bounds.position.z, bounds.end.z)))
-			if try_place_building(CPU, building_id, point):
-				return true
-	return false
+	_cpu_strategy.decide(self)
 
 
 func _spawn_unit(unit: MatchBattle.Unit) -> void:

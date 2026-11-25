@@ -456,12 +456,19 @@ func _test_match_end_and_restart() -> void:
 	_check(scene.try_place_building(PLAYER, &"farm", Vector3(-12.8, 0, -5.2)),
 		"A Farm funds the player's upgraded barracks.")
 	scene._process(14.0)
-	_check(scene.try_upgrade(PLAYER) and scene.economy.has_upgrade(CPU),
-		"Both sides have upgraded before the deciding attack.")
-	scene.get_region(&"region_1").region_owner = PLAYER
-	regions.get_node("CPUStart").region_owner = PLAYER
-	scene._process(45.0)
+	_check(scene.try_upgrade(PLAYER), "The player upgrades before the deciding attack.")
 	var battle: MatchBattle = scene._battle
+	scene.economy.advance(30.0)
+	_check(scene.economy.has_upgrade(CPU) or scene.try_upgrade(CPU),
+		"The CPU has a paid upgrade to clear on restart.")
+	# Give the player a clear victory fixture independent of CPU build priorities.
+	scene._time_until_cpu_decision = 120.0
+	scene._set_region_owner(&"region_1", PLAYER)
+	scene._set_region_owner(TerritoryLayout.CPU_START, MatchRegion.Owner.NEUTRAL)
+	for unit in battle.active_units():
+		if unit.side == CPU:
+			unit.hp = 0.0
+	scene._process(45.0)
 	_check(battle.outcome() == MatchBattle.Outcome.VICTORY and outcome.visible
 		and outcome.text == "Victory" and player_base.visible and not cpu_base.visible
 		and player_hp.text == "Player base · 80 HP" and cpu_hp.text == "CPU base · 0 HP",

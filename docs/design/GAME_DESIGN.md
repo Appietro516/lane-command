@@ -31,7 +31,7 @@ Sources: S95c42ca9286d
 
 ## CPU opponent and automatic combat
 
-Every two seconds the CPU checks for a purchase. It uses opening food reserves to establish production, adds enough income to fund upgraded production, buys the upgrade, and develops its economy. It adds more barracks as food income and construction resources allow. Both sides use the same single unit type and combat rules. Units deploy from their producing barracks and pursue the nearest reachable opponent within their detection radius by default. When no local enemy unit is available, autonomous units attack reachable enemy outposts or advance toward the opposing base. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
+Every two seconds by default, the CPU considers one purchase. It opens with barracks, adds Farms when current or projected production needs Food, and buys Mines and Generators when their income can cover projected construction spending. The CPU protects a Food reserve for deployments when buying upgrades or mortars. Under pressure near its base or outposts, it positions machine gun nests to cover active approaches and places mortars to defend from farther back. Short walls intercept an observed approach with room on both ends for units to pass. The CPU limits fortifications per defended region and retries blocked sites after a cooldown. Both sides use the same single unit type and combat rules. Units deploy from their producing barracks and pursue the nearest reachable opponent within their detection radius by default. When no local enemy unit is available, autonomous units attack reachable enemy outposts or advance toward the opposing base. Proposed stats are 12 unit HP, 3 attack damage, a 1-second attack cooldown, and 80 HP per base. Remove dead units and stop combat when a base falls.
 
 Sources: S95c42ca9286d, S1389629da9a3
 
@@ -51,7 +51,7 @@ Sources: S95c42ca9286d, S8f6e375bbe16, Se50c19e91616
 
 ## Optional region claiming
 
-The player can select a neutral region adjacent to existing territory and use Claim to spend 50 Energy and acquire it. A successful claim changes the map color, opens building placement, and adds one outpost with 24 HP by default. Select its region to inspect its health. Both factions use the same claim rules. Automated CPU expansion is deferred.
+The player can select a neutral region adjacent to existing territory and use Claim to spend 50 Energy and acquire it. A successful claim changes the map color, opens building placement, and adds one outpost with 24 HP by default. Select its region to inspect its health. Both factions use the same claim rules. The CPU prefers adjacent regions near its forces, regions with landmarks, and regions where reclaiming territory can reactivate its buildings. It limits expansion while defending threatened holdings.
 
 Destroying an outpost returns its region to neutral, so it no longer supports building placement or further claims for the former owner. Existing barracks stay visible and still appear in their faction's barracks count. Production pauses until their original faction pays to reclaim the region, then resumes from the existing timer. Only the starting bases determine victory and defeat. Restart clears expansion outposts.
 
