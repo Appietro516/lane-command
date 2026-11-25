@@ -12,6 +12,8 @@ Author the region graph explicitly with stable IDs, owner values, neighbor IDs, 
 
 Sources: S8f6e375bbe16, S95c42ca9286d
 
+Corridor combat consumes elapsed time in fixed 60 Hz steps. Units target from the same snapshot before resolving attacks, and casualties are removed after all attacks for that step. The match scene derives the corridor endpoints from the authored bases and renders the battle state.
+
 ## Rules interfaces and validation
 
 The proposed responsibility split gives match logic authority over purchases, claims, CPU actions, and end states. Shared battle logic handles spawning, movement, targeting, damage, and cleanup. Map visuals and HUD reflect state through the shared rules interface. Use a single side-and-region claim API that validates ownership, adjacency, and cost. Keep any browser instrumentation minimal and read-only. Cover initial ownership and adjacency, valid and invalid claims and purchases, barracks capacity, CPU actions, symmetric spawning, combat, outcomes, and reset in headless logic tests. A headless scene-load test checks initialization.
