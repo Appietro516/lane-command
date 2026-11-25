@@ -22,6 +22,8 @@ func _run() -> void:
 	_test_income_sources()
 	await _test_match_controls()
 	await _test_claimed_placement()
+	await _test_producers()
+	_test_food_starvation()
 	_test_cpu_purchases()
 	_test_symmetric_production()
 	if failures == 0:
@@ -196,16 +198,16 @@ func _test_match_controls() -> void:
 
 	match_scene._process(17.0)
 	_check(energy_label.text == "Energy 61" and materials_label.text == "Materials 44"
-		and food_label.text == "Food 37" and not upgrade.disabled,
-		"Income refreshes the HUD and enables Upgrade.")
+		and food_label.text == "Food 21" and not upgrade.disabled,
+		"Income and unit costs refresh the HUD and enable Upgrade.")
 	_click(upgrade)
 	_check_state(match_scene.economy, PLAYER, [1.0, 1, 2.5], "Upgrade button")
-	_check(energy_label.text == "Energy 1" and food_label.text == "Food 22"
+	_check(energy_label.text == "Energy 1" and food_label.text == "Food 6"
 		and upgrade.disabled and upgrade.text == "Upgraded",
 		"Upgrade updates the HUD immediately.")
 
-	_check(cpu_buildings.get_child_count() == 2,
-		"The CPU places both barracks autonomously.")
+	_check(cpu_buildings.get_child_count() == 3 and match_scene.economy.barracks_count(CPU) == 2,
+		"The CPU places both barracks and a Farm autonomously.")
 	match_scene._process(13.0)
 	await _choose_barracks(build)
 	var second_position := Vector3(-12.73, 0.0, 0.41)
@@ -257,6 +259,136 @@ func _test_claimed_placement() -> void:
 	scene.free()
 
 
+func _test_producers() -> void:
+	var scene := MATCH_SCENE.instantiate()
+	root.add_child(scene)
+	scene.set_process(false)
+	await process_frame
+	await process_frame
+	var economy: MatchEconomy = scene.economy
+	var battle: MatchBattle = scene._battle
+	var home := TerritoryLayout.PLAYER_START
+	var expansion := &"region_1"
+	var enemy: MatchRegion = scene.get_region(TerritoryLayout.CPU_START)
+	var stock := _stockpiles(economy, PLAYER)
+	_check(not scene.try_place_building(PLAYER, &"mine", enemy.global_position)
+		and _stockpiles(economy, PLAYER) == stock, "Enemy territory rejects a producer without spending.")
+	_check(scene.try_claim(PLAYER, expansion), "Claim adjacent territory for producer placement.")
+	var mine_site := _clear_producer_point(scene, expansion, &"mine")
+	stock = _stockpiles(economy, PLAYER)
+	_check(not scene.try_place_building(PLAYER, &"mine", mine_site)
+		and _stockpiles(economy, PLAYER) == stock,
+		"Missing Energy rejects a multi-resource producer without spending Materials.")
+	economy.advance(60.0)
+	scene._refresh_hud()
+
+	var cases := [[&"generator", ENERGY, 2.0, "Generator · 26 Materials\n+2/s Energy"],
+		[&"mine", MATERIALS, 2.0, "Mine · 24 Materials + 15 Energy\n+2/s Materials"],
+		[&"farm", FOOD, 3.0, "Farm · 20 Materials\n+3/s Food"]]
+	for item in cases:
+		var kind: StringName = item[0]
+		var resource_id: StringName = item[1]
+		var rate: float = item[2]
+		stock = _stockpiles(economy, PLAYER)
+		var site := _clear_producer_point(scene, expansion, kind)
+		_click(scene.get_node("%Build"))
+		await process_frame
+		await process_frame
+		var button: Button = scene._build_options[kind]
+		_check(button.text == item[3] and not button.disabled, "%s shows its price and effect." % kind)
+		_click(button)
+		await process_frame
+		await _click_world(site)
+		var cost: Dictionary = scene.BUILDINGS[kind].cost
+		for checked_resource: StringName in MatchEconomy.RESOURCES:
+			_check(economy.stockpile(PLAYER, checked_resource) == stock[checked_resource] -
+				cost.get(checked_resource, 0), "%s charges its configured cost exactly once." % kind)
+		var income := economy.income_stat(PLAYER, resource_id)
+		_check(income.breakdown.size() == 2 and income.total == income.breakdown[0].magnitude + rate,
+			"%s adds the configured income." % kind)
+		if income.breakdown.size() != 2:
+			continue
+		var source: Dictionary = income.breakdown[1]
+		var structure := battle.get_fortification(source.building_id)
+		_check(source.region_id == expansion and source.owner == PLAYER
+			and source.magnitude == rate and source.source_id == structure.source_id,
+			"%s retains building, region and owner attribution." % kind)
+
+		_check(scene.try_place_building(PLAYER, kind, _clear_producer_point(scene, home, kind)),
+			"A second %s can be placed in starting territory." % kind)
+		var sources := economy.income_sources(PLAYER, resource_id)
+		_check(sources.size() == 3 and sources[source.source_id].region_id == expansion
+			and economy.income_rate(PLAYER, resource_id) == income.total + rate,
+			"Two %s buildings stack as separate sources." % kind)
+		var readout: Control = scene.get_node("%%Resources/%s" % resource_id)
+		_check(readout.get_node("Rate").text == "+%d/s" % (income.total + rate)
+			and readout.tooltip_text.contains(source.source_name + "  +%d/s" % rate),
+			"The HUD shows the same %s total and source." % resource_id)
+
+	var food_before := economy.stockpile(PLAYER, FOOD)
+	economy.advance(2.0)
+	_check(economy.stockpile(PLAYER, FOOD) == food_before + 14.0, "Stacked farms accrue Food over time.")
+	var farm_sources := economy.income_sources(PLAYER, FOOD)
+	var expansion_farm: StringName
+	for source_id in farm_sources:
+		if farm_sources[source_id].get("region_id") == expansion:
+			expansion_farm = source_id
+	var outpost: MatchBattle.Outpost = scene._outposts_by_region[expansion]
+	outpost.hp = 0.0
+	battle.advance(MatchBattle.STEP, economy)
+	_check(economy.income_rate(PLAYER, FOOD) == 4.0
+		and not economy.income_sources(PLAYER, FOOD).has(expansion_farm)
+		and not economy.income_stat(PLAYER, FOOD).breakdown.filter(
+			func(entry: Dictionary) -> bool: return entry.source_id == expansion_farm)[0].active,
+		"Losing the outpost immediately disables the local source.")
+	_check(scene.try_claim(PLAYER, expansion), "The original owner can reclaim the region.")
+	scene._set_region_owner(expansion, PLAYER)
+	_check(economy.income_rate(PLAYER, FOOD) == 7.0
+		and economy.income_sources(PLAYER, FOOD).size() == 3,
+		"Reactivation restores each original contribution once.")
+	var farm := battle.get_fortification(farm_sources[expansion_farm].building_id)
+	farm.hp = 0.0
+	battle.advance(MatchBattle.STEP, economy)
+	_check(economy.income_rate(PLAYER, FOOD) == 4.0 and economy.income_stat(PLAYER, FOOD).breakdown.size() == 2,
+		"Destroying a Farm removes its registry entry entirely.")
+	scene.restart_match()
+	scene.set_process(false)
+	_check(scene.economy.income_rate(PLAYER, FOOD) == 1.0
+		and scene.get_node("Buildings/Player").get_child_count() == 0,
+		"Restart clears producer sources and their views.")
+	scene.free()
+
+
+func _clear_producer_point(scene: Node, region_id: StringName, kind: StringName) -> Vector3:
+	var region: MatchRegion = scene.get_region(region_id)
+	var point := region.interior_point(func(candidate: Vector2) -> bool:
+		var reason: String = scene._placement_block_reason(PLAYER, kind, scene._world_position(candidate))
+		return reason.is_empty() or reason.begins_with("Need more"))
+	return scene._world_position(point)
+
+
+func _stockpiles(economy: MatchEconomy, side: MatchRegion.Owner) -> Dictionary:
+	var stock := {}
+	for resource_id in MatchEconomy.RESOURCES:
+		stock[resource_id] = economy.stockpile(side, resource_id)
+	return stock
+
+
+func _test_food_starvation() -> void:
+	var economy := MatchEconomy.new()
+	var battle := MatchBattle.new(Vector2(-10, 0), Vector2(10, 0))
+	var barracks := battle.add_barracks(PLAYER, Vector2(-8, 0))
+	economy.try_spend(PLAYER, {FOOD: 20})
+	battle.advance(3.75, economy, true)
+	_check(battle.active_units().is_empty() and is_equal_approx(barracks.elapsed, 3.5)
+		and is_equal_approx(economy.stockpile(PLAYER, FOOD), 3.75),
+		"An unaffordable unit waits at a ready timer without debiting Food.")
+	battle.advance(0.25, economy, true)
+	_check(battle.active_units().size() == 1 and barracks.elapsed < MatchBattle.STEP
+		and economy.stockpile(PLAYER, FOOD) == 0.0,
+		"The ready barracks spends Food once when affordable without banking additional spawns.")
+
+
 func _choose_barracks(build: Button) -> void:
 	_click(build)
 	var scene := build.owner
@@ -264,8 +396,8 @@ func _choose_barracks(build: Button) -> void:
 	var option := list.get_child(0) as Button
 	await process_frame
 	await process_frame
-	_check(list.is_visible_in_tree() and list.get_child_count() == 4
-		and option.text == "Barracks · 40 Energy + 20 Materials",
+	_check(list.is_visible_in_tree() and list.get_child_count() == scene.BUILDINGS.size()
+		and option.text == "Barracks · 40 Energy + 20 Materials\nAuto-spawn · 4 Food per unit",
 		"Build opens the catalog menu with the configured price.")
 	_click(option)
 	await process_frame
@@ -327,16 +459,28 @@ func _test_cpu_purchases() -> void:
 	_check(match_scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -1.2)), "Build the player's first defending barracks.")
 	match_scene._process(8.0)
 	_check(match_scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -3.65)), "Build the player's second defending barracks.")
-	match_scene._process(19.75)
+	match_scene._process(6.0)
+	_check(match_scene.try_place_building(PLAYER, &"farm",
+		_clear_producer_point(match_scene, TerritoryLayout.PLAYER_START, &"farm")),
+		"The player can fund sustained production on the same schedule as the CPU.")
+	match_scene._process(13.75)
 	_check_state(match_scene.economy, CPU, [59.25, 2, 3.5], "Before the CPU can afford its upgrade")
 	match_scene._process(0.25)
 	_check_state(match_scene.economy, CPU, [0.0, 2, 2.5], "CPU upgrade at 30 seconds")
-	_check(match_scene.economy.stockpile(CPU, FOOD) == 35.0
-		and match_scene.economy.stockpile(PLAYER, FOOD) == 50.0,
-		"The CPU spends Food from its own stockpile.")
+	_check(match_scene.economy.stockpile(CPU, FOOD) == 21.0
+		and match_scene.economy.stockpile(PLAYER, FOOD) == 40.0,
+		"The CPU's units and upgrade spend Food from its own stockpile.")
 	_check(match_scene.try_upgrade(PLAYER), "Keep both sides on the upgraded production rate.")
+	var cpu_deployments: Array[int] = []
+	match_scene._battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
+		if unit.side == CPU:
+			cpu_deployments.append(unit.id))
 	match_scene._process(22.0)
-	_check_state(match_scene.economy, CPU, [66.0, 2, 2.5], "After reaching CPU capacity")
+	for resource_id in MatchEconomy.RESOURCES:
+		_check(match_scene.economy.income_rate(CPU, resource_id) > MatchEconomy.RESOURCES[resource_id].baseline,
+			"The CPU builds a producer for %s." % resource_id)
+	_check(cpu_deployments.size() == 16,
+		"The CPU continues to fund both barracks at the upgraded rate.")
 	match_scene.free()
 
 
@@ -373,7 +517,11 @@ func _test_symmetric_production() -> void:
 	match_scene._process(1.0)
 	_check(produced.size() == 8, "The second barracks on each side starts a full cycle.")
 
-	match_scene._process(16.5)
+	match_scene._process(2.5)
+	_check(match_scene.try_place_building(PLAYER, &"farm",
+		_clear_producer_point(match_scene, TerritoryLayout.PLAYER_START, &"farm")),
+		"Both sides add Food income at 16 seconds.")
+	match_scene._process(14.0)
 	_check(match_scene.try_upgrade(PLAYER), "Both sides upgrade at 30 seconds.")
 	match_scene._process(0.0)
 	_check(produced.size() == 28, "Both upgrades preserve elapsed production time.")
@@ -408,7 +556,8 @@ func _check_state(economy: MatchEconomy, side: MatchRegion.Owner, expected: Arra
 		context: String) -> void:
 	var actual := [economy.energy(side), economy.barracks_count(side),
 		economy.production_interval(side)]
-	_check(actual == expected, "%s for %s. Expected %s, got %s." % [
+	_check(is_equal_approx(actual[0], expected[0]) and actual.slice(1) == expected.slice(1),
+		"%s for %s. Expected %s, got %s." % [
 		context, MatchRegion.Owner.keys()[side], expected, actual,
 	])
 

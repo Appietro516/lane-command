@@ -1,0 +1,42 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_bed"]
+
+albedo_color = Color(0.31, 0.23, 0.20, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_bed"]
+size = Vector3(1.33, 0.2, 1.29)
+material = SubResource("Material_bed")
+
+[sub_resource type="StandardMaterial3D" id="Material_crop"]
+
+albedo_color = Color(0.62, 0.84, 0.40, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_crop"]
+size = Vector3(0.22, 0.19, 0.88)
+material = SubResource("Material_crop")
+
+[sub_resource type="BoxMesh" id="Mesh_marking"]
+size = Vector3(1.2, 0.1, 0.18)
+
+[node name="Farm" type="Node3D"]
+
+[node name="Bed" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.1, 0)
+mesh = SubResource("Mesh_bed")
+
+[node name="Crop1" type="MeshInstance3D" parent="."]
+position = Vector3(-0.39, 0.28, -0.08)
+mesh = SubResource("Mesh_crop")
+
+[node name="Crop2" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.28, -0.08)
+mesh = SubResource("Mesh_crop")
+
+[node name="Crop3" type="MeshInstance3D" parent="."]
+position = Vector3(0.39, 0.28, -0.08)
+mesh = SubResource("Mesh_crop")
+
+[node name="Marking" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.25, 0.48)
+mesh = SubResource("Mesh_marking")

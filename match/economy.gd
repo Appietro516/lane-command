@@ -12,6 +12,7 @@ const RESOURCES := {
 	FOOD: {"label": "Food", "starting_stock": 20.0, "baseline": 1.0},
 }
 const BARRACKS_COST := {ENERGY: 40, MATERIALS: 20}
+const UNIT_COST := {FOOD: 4}
 const UPGRADE_COST := {ENERGY: 60, FOOD: 15}
 const CLAIM_COST := {ENERGY: 50}
 const BARRACKS_CAPACITY := 2
@@ -52,7 +53,10 @@ func advance(delta: float) -> void:
 
 
 func stockpile(side: MatchRegion.Owner, resource_id: StringName) -> float:
-	return _sides[side].stockpiles[resource_id]
+	var amount := _sides[side].stockpiles[resource_id]
+	# Fixed simulation steps can leave a stockpile a fraction below an exact price.
+	var whole := roundf(amount)
+	return whole if absf(amount - whole) < 1e-9 else amount
 
 
 func energy(side: MatchRegion.Owner) -> float:
@@ -74,6 +78,11 @@ func income_sources(side: MatchRegion.Owner, resource_id: StringName) -> Diction
 		if entry.active:
 			var id := StringName(str(entry.source_id).trim_prefix(prefix))
 			sources[id] = {"label": entry.source_name, "rate": entry.magnitude}
+			if entry.has("building_id"):
+				sources[id].merge({
+					"building_id": entry.building_id, "region_id": entry.region_id,
+					"owner": entry.owner,
+				})
 	return sources
 
 
@@ -122,7 +131,7 @@ func try_spend(side: MatchRegion.Owner, cost: Dictionary) -> bool:
 
 	var state := _sides[side]
 	for resource_id in cost:
-		state.stockpiles[resource_id] -= cost[resource_id]
+		state.stockpiles[resource_id] = stockpile(side, resource_id) - cost[resource_id]
 	return true
 
 

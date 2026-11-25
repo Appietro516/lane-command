@@ -148,6 +148,7 @@ func _test_match_lifecycle() -> void:
 		"Removing a whole source clears every contribution.")
 	stats.set_modifier(&"trade", CPU, BUILDING_HP, 5.0, &"upgrade", "Armor")
 	stats.set_modifier(&"training", PLAYER, DPS, 1.5, &"upgrade", "Training")
+	economy.advance(4.0)
 	battle.advance(MatchEconomy.PRODUCTION_INTERVAL, economy)
 	scene._select_unit(1)
 	scene._refresh_hud()

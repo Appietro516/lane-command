@@ -190,7 +190,11 @@ func get_outpost(id: int) -> Outpost:
 
 func add_fortification(kind: StringName, side: MatchRegion.Owner, position: Vector2,
 		angle := 0.0) -> Fortification:
-	var profile: Dictionary = Fortifications.PROFILES[kind]
+	return add_structure(kind, Fortifications.PROFILES[kind], side, position, angle)
+
+
+func add_structure(kind: StringName, profile: Dictionary, side: MatchRegion.Owner,
+		position: Vector2, angle := 0.0) -> Fortification:
 	var fort := Fortification.new(stats, side, profile.hp)
 	fort.id = _next_structure_id
 	_next_structure_id -= 1
@@ -332,7 +336,7 @@ func elapsed_time() -> float:
 	return _elapsed_time
 
 
-func advance(delta: float, economy: MatchEconomy) -> void:
+func advance(delta: float, economy: MatchEconomy, accrue_income := false) -> void:
 	if delta < 0.0 or is_finished():
 		return
 
@@ -342,6 +346,8 @@ func advance(delta: float, economy: MatchEconomy) -> void:
 	while _pending_time + TIME_EPSILON >= STEP and not is_finished():
 		_pending_time = maxf(0.0, _pending_time - STEP)
 		_elapsed_time += STEP
+		if accrue_income:
+			economy.advance(STEP)
 		_step_combat()
 		if not is_finished():
 			_advance_production(STEP, economy)
@@ -355,6 +361,9 @@ func _advance_production(delta: float, economy: MatchEconomy) -> void:
 		var interval := economy.production_interval(timer.side)
 		timer.elapsed += delta
 		while timer.elapsed + TIME_EPSILON >= interval:
+			if not economy.try_spend(timer.side, MatchEconomy.UNIT_COST):
+				timer.elapsed = interval
+				break
 			timer.elapsed = maxf(0.0, timer.elapsed - interval)
 			var direction := timer.position.direction_to(_bases[_opponent(timer.side)])
 			var unit := Unit.new(_next_unit_id, timer.side, _spawn_position(timer.position, direction))
@@ -456,7 +465,7 @@ func _step_combat() -> void:
 
 func _fire_fortifications(units: Array[Unit]) -> void:
 	for fort: Fortification in _fortifications.values():
-		if not fort.active or fort.profile.range <= 0.0:
+		if not fort.active or fort.profile.get("range", 0.0) <= 0.0:
 			continue
 		fort.cooldown = maxf(0.0, fort.cooldown - STEP)
 		if fort.cooldown > TIME_EPSILON:

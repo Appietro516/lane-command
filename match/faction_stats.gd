@@ -26,13 +26,16 @@ var _computed: Dictionary[StringName, Dictionary] = {}
 
 func set_modifier(source_id: StringName, owner: MatchRegion.Owner, stat: StringName,
 		magnitude: float, source_type := &"buff", source_name := "", description := "",
-		active := true) -> bool:
+		active := true, building_id := 0, region_id := &"") -> bool:
 	if not STAT_DEFINITIONS.has(stat) or source_id.is_empty() or source_id in [BASELINE, LIMIT] \
 			or owner not in MatchRegion.Owner.values() or not is_finite(magnitude):
 		return false
 	var contribution := _contribution(source_id, source_type,
 		str(source_id) if source_name.is_empty() else source_name, owner, stat, magnitude, active)
 	contribution["description"] = description
+	if building_id != 0:
+		contribution["building_id"] = building_id
+		contribution["region_id"] = region_id
 	var sources := _sources.get_or_add(stat, {}) as Dictionary
 	if sources.get(source_id) != contribution:
 		sources[source_id] = contribution

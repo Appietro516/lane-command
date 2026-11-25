@@ -1,0 +1,49 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_body"]
+
+albedo_color = Color(0.20, 0.25, 0.28, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_body"]
+size = Vector3(1.28, 0.22, 1.12)
+material = SubResource("Material_body")
+
+[sub_resource type="StandardMaterial3D" id="Material_hopper"]
+
+albedo_color = Color(0.76, 0.59, 0.45, 1)
+
+[sub_resource type="CylinderMesh" id="Mesh_hopper"]
+top_radius = 0.5
+bottom_radius = 0.25
+height = 0.55
+radial_segments = 4
+material = SubResource("Material_hopper")
+
+[sub_resource type="StandardMaterial3D" id="Material_ore"]
+
+albedo_color = Color(0.29, 0.23, 0.24, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_ore"]
+size = Vector3(0.44, 0.08, 0.44)
+material = SubResource("Material_ore")
+
+[sub_resource type="BoxMesh" id="Mesh_marking"]
+size = Vector3(1.12, 0.07, 0.17)
+
+[node name="Mine" type="Node3D"]
+
+[node name="Body" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.11, 0)
+mesh = SubResource("Mesh_body")
+
+[node name="Hopper" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.47, 0)
+mesh = SubResource("Mesh_hopper")
+
+[node name="Ore" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.76, 0)
+mesh = SubResource("Mesh_ore")
+
+[node name="Marking" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.26, 0.45)
+mesh = SubResource("Mesh_marking")

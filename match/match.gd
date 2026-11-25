@@ -9,6 +9,24 @@ const BUILDINGS := {
 		"rules": preload("res://match/barracks_rules.gd"),
 		"accent_node": ^"RoofMarking",
 	},
+	&"generator": {
+		"label": "Generator", "cost": {MatchEconomy.MATERIALS: 26},
+		"scene": preload("res://match/producers/generator.tscn"),
+		"hp": 24, "size": Vector2(1.4, 1.4),
+		"income": {MatchEconomy.ENERGY: 2.0},
+	},
+	&"mine": {
+		"label": "Mine", "cost": {MatchEconomy.MATERIALS: 24, MatchEconomy.ENERGY: 15},
+		"scene": preload("res://match/producers/mine.tscn"),
+		"hp": 24, "size": Vector2(1.4, 1.4),
+		"income": {MatchEconomy.MATERIALS: 2.0},
+	},
+	&"farm": {
+		"label": "Farm", "cost": {MatchEconomy.MATERIALS: 20},
+		"scene": preload("res://match/producers/farm.tscn"),
+		"hp": 24, "size": Vector2(1.4, 1.4),
+		"income": {MatchEconomy.FOOD: 3.0},
+	},
 	Fortifications.NEST: {
 		"scene": preload("res://match/fortifications/machine_gun_nest.tscn"),
 		"icon": preload("res://match/fortifications/machine_gun_nest.svg"),
@@ -142,12 +160,18 @@ func _ready() -> void:
 			option.text += " minimum"
 		if definition.has("icon"):
 			option.icon = definition.icon
-			option.text += "\n" + profile.description
+		var effect: String = profile.get("description", "")
+		if definition.has("income"):
+			effect = _income_text(definition.income)
+		elif definition.has("rules"):
+			effect = "Auto-spawn · %s per unit" % MatchEconomy.cost_text(MatchEconomy.UNIT_COST)
+		if not effect.is_empty():
+			option.text += "\n" + effect
 		option.pressed.connect(_begin_placement.bind(building_id))
 		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_build_list.add_child(option)
 		_build_options[building_id] = option
-	%BuildScroll.custom_minimum_size.y = minf(_build_list.get_combined_minimum_size().y, 240.0)
+	%BuildScroll.custom_minimum_size.y = minf(_build_list.get_combined_minimum_size().y, 360.0)
 	_build_button.pressed.connect(_toggle_build_menu)
 	%CancelPlacement.pressed.connect(_cancel_placement)
 	_preview_material = StandardMaterial3D.new()
@@ -296,8 +320,21 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 	if not _placement_block_reason(side, building_id, ground).is_empty():
 		return false
 	var definition: Dictionary = BUILDINGS[building_id]
+	var region_id := region_at_world_position(ground)
+	if definition.has("income"):
+		if not economy.try_spend(side, definition.cost):
+			return false
+		var structure := _battle.add_structure(building_id, definition, side, position)
+		_add_structure_view(structure, [region_id])
+		for resource_id in definition.income:
+			faction_stats.set_modifier(structure.source_id, side, resource_id,
+				definition.income[resource_id], &"building",
+				"%s #%d" % [definition.label, absi(structure.id)], "", true, structure.id, region_id)
+		_refresh_hud()
+		return true
+
 	var production: MatchBattle.ProductionTimer = definition.rules.purchase(
-		economy, _battle, side, _map_position(ground), definition.cost)
+		economy, _battle, side, position, definition.cost)
 	if production == null:
 		return false
 
@@ -308,7 +345,6 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 	barracks.accent.material_override = FACTION_ACCENTS[side]
 	building.position = _buildings[side].to_local(ground)
 	_buildings[side].add_child(building)
-	var region_id := region_at_world_position(ground)
 	if not _barracks_by_region.has(region_id):
 		_barracks_by_region[region_id] = []
 	_barracks_by_region[region_id].append(barracks)
@@ -324,6 +360,11 @@ func _placement_block_reason(side: MatchRegion.Owner, building_id: StringName,
 	if Fortifications.PROFILES.has(building_id):
 		var polygon := Fortifications.footprint(position, Fortifications.PROFILES[building_id].size)
 		return _gun_block_reason(side, building_id, polygon, _owned_footprint_regions(side, polygon))
+	var definition: Dictionary = BUILDINGS[building_id]
+	if definition.has("income"):
+		if not _battle.fortification_site_clear(Fortifications.footprint(position, definition.size)):
+			return "Keep structures and spawn exits clear"
+		return _purchase_block_reason(side, building_id)
 	var clearance := MatchBattle.BARRACKS_FOOTPRINT + MatchBattle.OUTPOST_CLEARANCE
 	for outpost: MatchBattle.Outpost in _outposts_by_region.values():
 		var offset := (outpost.position - position).abs()
@@ -424,12 +465,15 @@ func try_place_wall(side: MatchRegion.Owner, world_start: Vector3, world_end: Ve
 
 func _add_fortification(side: MatchRegion.Owner, kind: StringName, center: Vector2, angle: float,
 		regions: Array[StringName]) -> void:
-	var defense := _battle.add_fortification(kind, side, center, angle)
-	var view := BUILDINGS[kind].scene.instantiate() as Node3D
-	_buildings[side].add_child(view)
-	view.global_position = _world_position(center)
-	view.rotation.y = -angle
-	view.get_node("Marking").material_override = FACTION_ACCENTS[side]
+	_add_structure_view(_battle.add_fortification(kind, side, center, angle), regions)
+
+
+func _add_structure_view(defense: MatchBattle.Fortification, regions: Array[StringName]) -> void:
+	var view := BUILDINGS[defense.kind].scene.instantiate() as Node3D
+	_buildings[defense.side].add_child(view)
+	view.global_position = _world_position(defense.position)
+	view.rotation.y = -defense.angle
+	view.get_node("Marking").material_override = FACTION_ACCENTS[defense.side]
 	var placed := PlacedFortification.new()
 	placed.defense = defense
 	placed.view = view
@@ -537,6 +581,8 @@ func _update_placement_preview(pointer: Vector2) -> void:
 	if reason.is_empty():
 		reason = "Click to place" if _preview.visible else "Choose a spot in your territory"
 	_placement_label.text = "%s · %s" % [definition.label, reason]
+	if definition.has("income"):
+		_placement_label.text += "\n" + _income_text(definition.income)
 	if definition.has("range"):
 		_placement_label.text += "\n" + _range_text(definition)
 		_show_ranges(definition, _map_position(_preview.global_position), _preview.visible)
@@ -886,7 +932,9 @@ func _update_fortification_inspection() -> void:
 	_unit_stats.text = _health_text(fort)
 	_unit_stats.tooltip_text = _stat_tooltip("Maximum HP", fort.health_stat())
 	_unit_intent.text = "Active" if fort.active else "Inactive · territory lost"
-	if fort.profile.range > 0.0:
+	if fort.active and fort.profile.has("income"):
+		_unit_intent.text += "\n" + _income_text(fort.profile.income)
+	if fort.profile.get("range", 0.0) > 0.0:
 		_unit_intent.text += "\n" + _range_text(fort.profile).replace(" · ", "\n")
 	_unit_order_hint.hide()
 	_show_ranges(fort.profile, fort.position, true)
@@ -924,8 +972,10 @@ func _create_radius_ring(color: Color, width_fraction: float) -> MeshInstance3D:
 
 
 func _show_ranges(profile: Dictionary, center: Vector2, visible_at_point: bool) -> void:
-	_show_radius_ring(_range_ring, profile.range, Vector3(center.x, 0.15, center.y), visible_at_point)
-	_show_radius_ring(_splash_ring, profile.splash, Vector3(center.x, 0.16, center.y), visible_at_point)
+	_show_radius_ring(_range_ring, profile.get("range", 0.0),
+		Vector3(center.x, 0.15, center.y), visible_at_point)
+	_show_radius_ring(_splash_ring, profile.get("splash", 0.0),
+		Vector3(center.x, 0.16, center.y), visible_at_point)
 
 
 func _show_radius_ring(ring: MeshInstance3D, radius: float, center: Vector3, visible_at_point: bool) -> void:
@@ -1021,15 +1071,48 @@ func _select_region(region_id: StringName) -> void:
 
 
 func _advance_simulation(delta: float) -> void:
-	economy.advance(delta)
-	_battle.advance(delta, economy)
+	_battle.advance(delta, economy, true)
 
 
 func _try_cpu_purchase() -> void:
 	if economy.barracks_count(CPU) < MatchEconomy.BARRACKS_CAPACITY:
-		if not _purchase_block_reason(CPU, &"barracks").is_empty():
+		_try_cpu_build(&"barracks")
+		return
+
+	# Secure the income needed to keep all barracks running after the upgrade.
+	for resource_id in MatchEconomy.UNIT_COST:
+		var demand := float(MatchEconomy.UNIT_COST[resource_id]) * economy.barracks_count(CPU) \
+			/ MatchEconomy.UPGRADED_PRODUCTION_INTERVAL
+		if economy.income_rate(CPU, resource_id) < demand:
+			for building_id in BUILDINGS:
+				var income: Dictionary = BUILDINGS[building_id].get("income", {})
+				if income.get(resource_id, 0.0) > 0.0:
+					_try_cpu_build(building_id)
+					return
+	if not economy.has_upgrade(CPU):
+		try_upgrade(CPU)
+		return
+
+	for building_id in BUILDINGS:
+		var income: Dictionary = BUILDINGS[building_id].get("income", {})
+		if income.is_empty():
+			continue
+		var has_active_building := false
+		for placed: PlacedFortification in _fortifications.values():
+			var structure := placed.defense
+			if structure.side == CPU and structure.kind == building_id and structure.active:
+				has_active_building = true
+				break
+		if not has_active_building and _try_cpu_build(building_id):
 			return
-		var region: MatchRegion = get_region(TerritoryLayout.CPU_START)
+
+
+func _try_cpu_build(building_id: StringName) -> bool:
+	if not _purchase_block_reason(CPU, building_id).is_empty():
+		return false
+	for region: MatchRegion in _regions_by_id.values():
+		if region.region_owner != CPU:
+			continue
 		var tile := region.geometry
 		var bounds := tile.get_aabb()
 		# Sample the territory and let the shared placement check validate its shape.
@@ -1038,10 +1121,9 @@ func _try_cpu_purchase() -> void:
 				_cpu_placement_rng.randf_range(bounds.position.x, bounds.end.x),
 				bounds.end.y,
 				_cpu_placement_rng.randf_range(bounds.position.z, bounds.end.z)))
-			if try_place_building(CPU, &"barracks", point):
-				break
-	elif not economy.has_upgrade(CPU):
-		try_upgrade(CPU)
+			if try_place_building(CPU, building_id, point):
+				return true
+	return false
 
 
 func _spawn_unit(unit: MatchBattle.Unit) -> void:
@@ -1117,6 +1199,14 @@ func _stat_number(value: float) -> String:
 func _stat_amount(value: float, suffix: String) -> String:
 	return "%s%s%s" % ["+" if value >= 0.0 and not suffix.is_empty() else "",
 		_stat_number(value), suffix]
+
+
+func _income_text(income: Dictionary) -> String:
+	var rates := PackedStringArray()
+	for resource_id in income:
+		rates.append("%s %s" % [_stat_amount(income[resource_id], "/s"),
+			MatchEconomy.RESOURCES[resource_id].label])
+	return ", ".join(rates)
 
 
 func _stat_tooltip(title: String, result: Dictionary, suffix := "") -> String:

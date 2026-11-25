@@ -416,7 +416,10 @@ func _test_match_end_and_restart() -> void:
 	scene._process(10.0)
 	_check(scene.try_place_building(PLAYER, &"barracks", Vector3(-7.7, 0, -1.0)),
 		"The player adds the second barracks at 10 seconds.")
-	scene._process(20.0)
+	scene._process(6.0)
+	_check(scene.try_place_building(PLAYER, &"farm", Vector3(-12.8, 0, -5.2)),
+		"A Farm funds the player's upgraded barracks.")
+	scene._process(14.0)
 	_check(scene.try_upgrade(PLAYER) and scene.economy.has_upgrade(CPU),
 		"Both sides have upgraded before the deciding attack.")
 	scene.get_region(&"region_1").region_owner = PLAYER

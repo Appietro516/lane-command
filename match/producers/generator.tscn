@@ -1,0 +1,41 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_body"]
+
+albedo_color = Color(0.18, 0.23, 0.28, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_body"]
+size = Vector3(1.15, 0.22, 1.15)
+material = SubResource("Material_body")
+
+[sub_resource type="StandardMaterial3D" id="Material_cells"]
+
+albedo_color = Color(0.93, 0.67, 0.24, 1)
+
+[sub_resource type="CylinderMesh" id="Mesh_cells"]
+top_radius = 0.25
+bottom_radius = 0.25
+height = 0.52
+radial_segments = 8
+material = SubResource("Material_cells")
+
+[sub_resource type="BoxMesh" id="Mesh_marking"]
+size = Vector3(1.0, 0.07, 0.17)
+
+[node name="Generator" type="Node3D"]
+
+[node name="Body" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.11, 0)
+mesh = SubResource("Mesh_body")
+
+[node name="Cells1" type="MeshInstance3D" parent="."]
+position = Vector3(-0.29, 0.46, 0)
+mesh = SubResource("Mesh_cells")
+
+[node name="Cells2" type="MeshInstance3D" parent="."]
+position = Vector3(0.29, 0.46, 0)
+mesh = SubResource("Mesh_cells")
+
+[node name="Marking" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.26, 0.46)
+mesh = SubResource("Mesh_marking")
