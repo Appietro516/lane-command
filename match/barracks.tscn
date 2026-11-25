@@ -1,36 +1,51 @@
 [gd_scene format=3]
 
-[sub_resource type="StandardMaterial3D" id="Material_walls"]
-albedo_color = Color(0.55, 0.61, 0.68, 1)
+[sub_resource type="StandardMaterial3D" id="Material_footing"]
+shading_mode = 0
+albedo_color = Color(0.11, 0.17, 0.19, 1)
 
-[sub_resource type="StandardMaterial3D" id="Material_roof"]
-albedo_color = Color(0.96, 0.72, 0.35, 1)
+[sub_resource type="StandardMaterial3D" id="Material_shell"]
+albedo_color = Color(0.65, 0.72, 0.71, 1)
 
-[sub_resource type="StandardMaterial3D" id="Material_door"]
-albedo_color = Color(0.17, 0.20, 0.23, 1)
+[sub_resource type="CylinderMesh" id="Mesh_footing"]
+material = SubResource("Material_footing")
+top_radius = 1.0
+bottom_radius = 1.0
+height = 0.15
+radial_segments = 8
+rings = 0
 
-[sub_resource type="BoxMesh" id="Mesh_walls"]
-material = SubResource("Material_walls")
-size = Vector3(2.25, 0.8, 1.65)
+[sub_resource type="CylinderMesh" id="Mesh_shell"]
+material = SubResource("Material_shell")
+top_radius = 0.83
+bottom_radius = 0.97
+height = 0.59
+radial_segments = 8
+rings = 0
 
-[sub_resource type="BoxMesh" id="Mesh_roof"]
-material = SubResource("Material_roof")
-size = Vector3(2.45, 0.24, 1.85)
-
-[sub_resource type="BoxMesh" id="Mesh_door"]
-material = SubResource("Material_door")
-size = Vector3(0.86, 0.58, 0.05)
+[sub_resource type="CylinderMesh" id="Mesh_roof_marking"]
+top_radius = 0.72
+bottom_radius = 0.72
+height = 0.025
+radial_segments = 8
+rings = 0
 
 [node name="Barracks" type="Node3D"]
 
-[node name="Walls" type="MeshInstance3D" parent="."]
-position = Vector3(0, 0.4, 0)
-mesh = SubResource("Mesh_walls")
+[node name="Footing" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.075, 0)
+rotation_degrees = Vector3(0, 22.5, 0)
+scale = Vector3(1.36, 1, 0.86)
+mesh = SubResource("Mesh_footing")
 
-[node name="Roof" type="MeshInstance3D" parent="."]
-position = Vector3(0, 0.92, 0)
-mesh = SubResource("Mesh_roof")
+[node name="Shell" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.43, 0)
+rotation_degrees = Vector3(0, 22.5, 0)
+scale = Vector3(1.36, 1, 0.86)
+mesh = SubResource("Mesh_shell")
 
-[node name="Door" type="MeshInstance3D" parent="."]
-position = Vector3(0, 0.29, 0.84)
-mesh = SubResource("Mesh_door")
+[node name="RoofMarking" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.735, 0)
+rotation_degrees = Vector3(0, 22.5, 0)
+scale = Vector3(1.36, 1, 0.43)
+mesh = SubResource("Mesh_roof_marking")

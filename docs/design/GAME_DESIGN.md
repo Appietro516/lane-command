@@ -6,6 +6,10 @@ Show roughly 5–7 fixed regions and both bases together. The human and CPU each
 
 Sources: S95c42ca9286d, Se50c19e91616
 
+The prototype uses six fitted cells with straight seams and flat ownership fills. Blue marks the player, coral marks the CPU, slate marks neutral territory, and a pale rim marks the selection. Circular bases, long barracks roofs, and triangular unit markers give each piece a distinct silhouette at a distance.
+
+This treatment favors a tactical board over a natural landscape. Terrain detail and architectural identity remain art-direction choices. Ownership at a glance still depends on color.
+
 ## Shared economy and production
 
 Proposed defaults give each side 50 starting energy and 3 energy per second. A barracks costs 40 energy and fills the next free slot in the side's starting region, with two slots per side. A one-time production upgrade costs 60 energy and shortens the automatic spawn interval from about 3.5 seconds to 2.5 seconds. Apply the same costs, capacity checks, and production rules to both sides. Reject unaffordable actions and prevent negative energy.

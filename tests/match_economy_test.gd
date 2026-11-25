@@ -164,11 +164,14 @@ func _test_symmetric_production() -> void:
 	if units.get_child_count() == 2:
 		var cpu_unit := units.get_child(0) as MeshInstance3D
 		var player_unit := units.get_child(1) as MeshInstance3D
-		_check(cpu_unit.mesh == player_unit.mesh and cpu_unit.mesh is BoxMesh,
-			"Both sides spawn the same cube mesh.")
+		var token := player_unit.mesh as PrismMesh
+		_check(cpu_unit.mesh == token and token != null,
+			"Both sides spawn the same triangular token mesh.")
 		_check(cpu_unit.position.x > 0 and player_unit.position.x < 0
+			and cpu_unit.basis.y.is_equal_approx(Vector3.LEFT)
+			and player_unit.basis.y.is_equal_approx(Vector3.RIGHT)
 			and cpu_unit.material_override != player_unit.material_override,
-			"Cubes spawn on their own side and use distinct colors.")
+			"Units start on their own side, face the opposing base and use distinct colors.")
 
 	match_scene._process(4.5)
 	_check(match_scene.try_build(PLAYER), "Both sides add a second barracks at 10 seconds.")

@@ -6,9 +6,9 @@ const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const CPU_DECISION_INTERVAL := 2.0
 
-const UNIT_MATERIALS := {
-	PLAYER: preload("res://match/player_unit_material.tres"),
-	CPU: preload("res://match/cpu_unit_material.tres"),
+const FACTION_ACCENTS := {
+	PLAYER: preload("res://match/player_accent.tres"),
+	CPU: preload("res://match/cpu_accent.tres"),
 }
 
 const OUTCOME_LABELS := {
@@ -55,6 +55,8 @@ func _ready() -> void:
 	for region: MatchRegion in $Regions.get_children():
 		_regions_by_id[region.region_id] = region
 		_initial_owners[region.region_id] = region.region_owner
+	for side in _bases:
+		_bases[side].get_node("Core").material_override = FACTION_ACCENTS[side]
 	_income_label.text = "Income +%d/s" % MatchEconomy.INCOME_PER_SECOND
 	_build_button.text = "Build · %d" % MatchEconomy.BARRACKS_COST
 	_build_button.pressed.connect(func() -> void: try_build(PLAYER))
@@ -125,7 +127,9 @@ func try_build(side: MatchRegion.Owner) -> bool:
 
 	var slot_index := economy.barracks_count(side) - 1
 	var slot: Marker3D = _slots[side][slot_index]
-	slot.add_child(BARRACKS.instantiate())
+	var barracks := BARRACKS.instantiate()
+	barracks.get_node("RoofMarking").material_override = FACTION_ACCENTS[side]
+	slot.add_child(barracks)
 	_battle.add_barracks(side, slot_index)
 	_refresh_hud()
 	return true
@@ -215,7 +219,10 @@ func _try_cpu_purchase() -> void:
 
 func _spawn_unit(unit: MatchBattle.Unit, _slot_index: int) -> void:
 	var view := UNIT.instantiate() as MeshInstance3D
-	view.material_override = UNIT_MATERIALS[unit.side]
+	view.material_override = FACTION_ACCENTS[unit.side]
+	# The prism is laid flat with its tip pointing along +Z before yaw.
+	var heading := _corridor_direction if unit.side == PLAYER else -_corridor_direction
+	view.rotation.y = atan2(heading.x, heading.z)
 	view.position = _corridor_start + _corridor_direction * unit.position
 	_units.add_child(view)
 	_unit_views[unit.id] = view

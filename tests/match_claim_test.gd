@@ -68,6 +68,7 @@ func _test_claim_controls(scene: Node) -> void:
 	var tiles := scene.get_node("Regions")
 	var northwest := tiles.get_node("Northwest") as MatchRegion
 	var material := northwest.geometry.material_override as StandardMaterial3D
+	var border := northwest.get_node("Border").material_override as StandardMaterial3D
 	var camera := root.get_camera_3d()
 
 	_check(claim.disabled and claim.text == "Claim · %d" % MatchEconomy.CLAIM_COST
@@ -75,19 +76,26 @@ func _test_claim_controls(scene: Node) -> void:
 	await _click_region(camera, tiles.get_node("Northeast"))
 	_check(claim.disabled and selection.text.contains("Not adjacent"),
 		"Selecting a distant neutral tile keeps Claim disabled.")
-	await _click_region(camera, northwest)
-	_check(not claim.disabled and selection.text.begins_with("Northwest") and material.emission_enabled
+	await _click_map(camera, Vector3(-3.45, -0.02, -5.86))
+	_check(not claim.disabled and selection.text.begins_with("Northwest")
+		and border.albedo_color == MatchRegion.SELECTED_BORDER_COLOR
 		and material.albedo_color == MatchRegion.OWNER_COLORS[NEUTRAL],
-		"Clicking an adjacent neutral tile highlights it and enables Claim.")
+		"Clicking the rim of an adjacent neutral tile highlights it and enables Claim.")
 	_click(claim.get_global_rect().get_center())
 	_check(claim.disabled and selection.text.contains("Player-owned") and energy.text == "Energy 0"
+		and border.albedo_color == MatchRegion.SELECTED_BORDER_COLOR
 		and material.albedo_color == MatchRegion.OWNER_COLORS[PLAYER],
 		"Clicking Claim updates the HUD and recolors the selected tile.")
 	await _click_region(camera, tiles.get_node("Southwest"))
-	_check(claim.disabled and selection.text.contains("Need more energy") and not material.emission_enabled,
+	_check(claim.disabled and selection.text.contains("Need more energy")
+		and border.albedo_color == MatchRegion.BORDER_COLOR,
 		"Moving selection clears the previous highlight and shows the affordability restriction.")
 	scene._process(17.0)
 	_check(not claim.disabled, "Passive income re-enables Claim for the selected tile.")
+	await _click_map(camera, Vector3(0, -0.02, -0.7))
+	_check(claim.disabled and selection.text == "Select a region",
+		"The gap between cells does not select a region.")
+	await _click_region(camera, northwest)
 	_click(Vector2(20, 140))
 	await physics_frame
 	await physics_frame
@@ -96,12 +104,17 @@ func _test_claim_controls(scene: Node) -> void:
 	_click(restart.get_global_rect().get_center())
 	scene.set_process(false)
 	_check(claim.disabled and selection.text == "Select a region" and energy.text == "Energy 50"
-		and not material.emission_enabled and material.albedo_color == MatchRegion.OWNER_COLORS[NEUTRAL],
+		and border.albedo_color == MatchRegion.BORDER_COLOR
+		and material.albedo_color == MatchRegion.OWNER_COLORS[NEUTRAL],
 		"The Restart control clears selection and restores neutral color and starting energy.")
 
 
 func _click_region(camera: Camera3D, region: MatchRegion) -> void:
-	_click(camera.unproject_position(region.global_position))
+	await _click_map(camera, region.global_position)
+
+
+func _click_map(camera: Camera3D, point: Vector3) -> void:
+	_click(camera.unproject_position(point))
 	await physics_frame
 	await physics_frame
 

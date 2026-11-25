@@ -158,7 +158,7 @@ func _test_match_scene() -> void:
 	_check(scene.try_build(PLAYER), "Build a player barracks alongside the autonomous CPU purchase.")
 	scene._process(3.5)
 	if units.get_child_count() != 2:
-		_check(false, "Both barracks must deploy a cube.")
+		_check(false, "Both barracks must deploy a unit.")
 		scene.free()
 		return
 	var cpu_view := units.get_child(0) as MeshInstance3D
@@ -175,11 +175,11 @@ func _test_match_scene() -> void:
 		"The scene renders both waves meeting along the straight corridor.")
 	var battle: MatchBattle = scene._battle
 	_check(battle.active_units().size() == 4 and battle.active_units()[0].hp == 9
-		and battle.active_units()[1].hp == 9, "The initial cubes exchange damage in the match scene.")
+		and battle.active_units()[1].hp == 9, "The initial units exchange damage in the match scene.")
 	scene._process(3.0)
 	_check(not cpu_view.is_inside_tree() and not player_view.is_inside_tree()
 		and units.get_child_count() == battle.active_units().size(),
-		"The scene removes dead cubes and still renders the active units.")
+		"The scene removes dead units and still renders the active units.")
 	_check(_region_owners(regions) == initial_owners, "Moving and fighting leave region ownership unchanged.")
 	scene.free()
 
