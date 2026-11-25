@@ -1,0 +1,73 @@
+name: Godot builds
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: godot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Godot and templates
+        shell: bash
+        run: |
+          version=$(cat .godot-version)
+          [[ "$version" =~ ^4\.[0-9]+\.[0-9]+-stable$ ]]
+          base="https://github.com/godotengine/godot-builds/releases/download/$version"
+          editor="Godot_v${version}_linux.x86_64"
+          archive="Godot_v${version}_export_templates.tpz"
+          curl --fail --silent --show-error --location --retry 3 "$base/$editor.zip" -o "$RUNNER_TEMP/editor.zip"
+          unzip -q "$RUNNER_TEMP/editor.zip" -d "$RUNNER_TEMP"
+          ln -s "$RUNNER_TEMP/$editor" "$RUNNER_TEMP/godot"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          curl --fail --silent --show-error --location --retry 3 "$base/$archive" -o "$RUNNER_TEMP/templates.tpz"
+          version_dir="${version/-/.}"
+          unzip -q "$RUNNER_TEMP/templates.tpz" 'templates/windows_release_x86_64.exe' 'templates/web_nothreads_release.zip' -d "$RUNNER_TEMP"
+          mkdir -p "$HOME/.local/share/godot/export_templates/$version_dir"
+          mv "$RUNNER_TEMP/templates/"* "$HOME/.local/share/godot/export_templates/$version_dir/"
+      - name: Validate and export
+        run: bash .github/scripts/build-godot.sh "$RUNNER_TEMP/godot-build"
+      - name: Upload Windows ZIP
+        id: windows
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ runner.temp }}/godot-build/windows-x86_64.zip
+          name: windows-x86_64
+          if-no-files-found: error
+      - name: Link Windows artifact
+        env:
+          ARTIFACT_URL: ${{ steps.windows.outputs.artifact-url }}
+        run: printf '[Download the Windows artifact](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Web build for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/godot-build/web
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Web build
+        id: deployment
+        uses: actions/deploy-pages@v4
