@@ -143,7 +143,8 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 
 	# Protect the next few deployments before paying for anything that takes Food.
 	var reserve: float = production.food_per_cycle * scene.cpu_food_buffer_cycles * difficulty.food_buffer
-	if (food_rate < production.food_per_second and food_stock < reserve
+	if (food_rate < production.food_per_second
+			and (food_stock < reserve or (now >= 65.0 and not under_pressure))
 			and _want_build(scene, food_producer, sites, now)):
 		return
 
@@ -157,7 +158,7 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 		return
 
 	var upgrade := production.upgrade_candidate
-	if upgrade != null and production.active >= opening_goal:
+	if upgrade != null and production.active >= opening_goal and not under_pressure:
 		var food: int = UnitCatalog.DEFINITIONS[upgrade.unit_type].food
 		var upgraded_demand := production.food_per_second + food * (
 			1.0 / upgrade.cycle_interval(economy, 2) - 1.0 / upgrade.interval(economy))
@@ -362,7 +363,9 @@ func _military_options(scene: Node3D, production: Production, allies: Dictionary
 		var cycle_reserve: float = cycle_food * buffer_cycles
 		if production.active <= 1:
 			cycle_reserve = maxf(cycle_food, (cycle_food - food_rate * interval) * buffer_cycles)
-		var food_ready: bool = food_rate >= food_demand or food_stock - profile.cost.get(FOOD, 0) >= cycle_reserve
+		var spend_stockpile := now < 65.0 or production.active <= 1
+		var food_ready: bool = food_rate >= food_demand or (
+			spend_stockpile and food_stock - profile.cost.get(FOOD, 0) >= cycle_reserve)
 		var present_share: float = float(allies.get(profile.unit_type, 0)) / maxi(1, army)
 		var installed_share: float = float(production.counts.get(kind, 0)) / maxi(1, production.active)
 		var construction_cost: float = 0.0

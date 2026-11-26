@@ -331,8 +331,9 @@ func _seed_force(scene: Node, side: MatchRegion.Owner, type: StringName, count: 
 		var position := base + Vector2(distance, 3.0 + index * 0.35)
 		var unit := battle.spawn_unit(side, position, type)
 		if unit == null:
-			for offset: float in [0.5, 1.0, 1.5, 2.0, -0.5, -1.0]:
-				unit = battle.spawn_unit(side, position + Vector2(offset, 0), type)
+			for candidate in 16:
+				var offset := Vector2.from_angle(TAU * candidate / 16.0) * 3.0
+				unit = battle.spawn_unit(side, position + offset, type)
 				if unit != null:
 					break
 		_check(unit != null, "The scenario can position its starting force.")

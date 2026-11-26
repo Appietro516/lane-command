@@ -1214,6 +1214,7 @@ func _ruin_strike_regions(flight: MatchBattle.MissileFlight) -> void:
 		if landmark != null and (region.ruined or Fortifications.blast_hits(target,
 				landmark.footprint.get_center(), landmark.footprint.size)):
 			if _battle.remove_landmark_footprint(landmark.footprint):
+				_unregister_region_structure(landmark.source_id)
 				faction_stats.remove_source(landmark.source_id)
 				var remains := landmark.duplicate() as Node3D
 				landmark.get_parent().add_child(remains)
