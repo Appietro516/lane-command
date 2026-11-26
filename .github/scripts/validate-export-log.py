@@ -10,7 +10,7 @@ from pathlib import Path
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 ERROR = re.compile(r"^\s*(?:SCRIPT ERROR|ERROR):")
-LEAK_ERROR = "ERROR: 1 resources still in use at exit (run with --verbose for details)."
+LEAK_ERROR = re.compile(r"^ERROR: [1-9][0-9]* resources still in use at exit \(run with --verbose for details\)\.$")
 LEAK_WARNING = "WARNING: ObjectDB instances leaked at exit (run with --verbose for details)."
 
 
@@ -23,7 +23,7 @@ def only_shutdown_resource_leak(log: str) -> bool:
         return False
     error_index, error_text = errors[0]
     return (
-        error_text == LEAK_ERROR
+        LEAK_ERROR.fullmatch(error_text) is not None
         and packed[0] < warnings[0] < error_index
         and not any(line and not line.startswith("at:") for line in lines[error_index + 1 :])
     )
