@@ -68,29 +68,30 @@ func _test_demolition_step() -> void:
 
 func _test_links_with_two_blockers() -> void:
 	var navigation := BattleNavigation.new(BOUNDS)
-	var left := navigation.add_obstacle(Rect2(-4.5, -0.5, 1, 1))
-	var right := navigation.add_obstacle(Rect2(3.5, -0.5, 1, 1))
+	# The query endpoints represent the facing upper corners from the
+	# visibility graph test. Assert the public route uses the opened segment.
+	navigation.add_obstacle(Rect2(-4.5, -0.5, 1, 1))
+	navigation.add_obstacle(Rect2(3.5, -0.5, 1, 1))
 	var first := navigation.add_obstacle(Rect2(-1.8, -1, 0.8, 2))
 	var second := navigation.add_obstacle(Rect2(1, -1, 0.8, 2))
-	var start := Vector2(-8, 0)
-	var end := Vector2(8, 0)
 	for clearance: float in CLEARANCES:
 		var routes := navigation.with_clearance(clearance)
-		routes.path(start, end)
-		_check(not routes._graph.are_points_connected(left * 4 + 1, right * 4),
-			"The two blocks prevent an edge between the facing upper corners.")
+		var start := Vector2(-3.475 + clearance, -0.525 - clearance)
+		var end := Vector2(3.475 - clearance, start.y)
+		_check(routes.path(start, end).size() > 1, "Both footprints prevent a straight route.")
 	navigation.remove_obstacle(first)
 	for clearance: float in CLEARANCES:
 		var routes := navigation.with_clearance(clearance)
-		routes.path(start, end)
-		_check(not routes._graph.are_points_connected(left * 4 + 1, right * 4),
-			"A second footprint still prevents the same edge.")
+		var start := Vector2(-3.475 + clearance, -0.525 - clearance)
+		var end := Vector2(3.475 - clearance, start.y)
+		_check(routes.path(start, end).size() > 1, "The other footprint still forces a detour.")
 	navigation.remove_obstacle(second)
 	for clearance: float in CLEARANCES:
 		var routes := navigation.with_clearance(clearance)
-		routes.path(start, end)
-		_check(routes._graph.are_points_connected(left * 4 + 1, right * 4),
-			"The last removal restores the edge between previously visible corners.")
+		var start := Vector2(-3.475 + clearance, -0.525 - clearance)
+		var end := Vector2(3.475 - clearance, start.y)
+		_check(routes.path(start, end) == PackedVector2Array([end]),
+			"The last removal restores a direct route between the same endpoints.")
 
 
 func _test_repeated_removals() -> void:
@@ -102,7 +103,7 @@ func _test_repeated_removals() -> void:
 		var overlap := navigation.add_obstacle(OVERLAP, 0.1)
 		var screen := navigation.add_obstacle(SCREEN, -0.23)
 		var survivor := navigation.add_obstacle(SCREEN, 0.23)
-		# Warm the graph and both endpoint caches with obstacles still present.
+		# Warm the mesh and route cache with obstacles still present.
 		var routes_by_clearance: Array[BattleNavigation] = []
 		for clearance: float in CLEARANCES:
 			var routes := navigation.with_clearance(clearance)
@@ -120,7 +121,7 @@ func _test_repeated_removals() -> void:
 			var expected := fresh.with_clearance(CLEARANCES[i]).path(start, end)
 			_check(not expected.is_empty() and is_equal_approx(
 				_route_length(start, actual), _route_length(start, expected)),
-				"Incremental and freshly constructed graphs find equally short routes.")
+				"Incremental and freshly constructed meshes find equally short routes.")
 			var previous := start
 			for point in actual:
 				_check(routes.line_clear(previous, point), "Every route segment remains passable.")

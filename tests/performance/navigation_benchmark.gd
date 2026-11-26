@@ -24,7 +24,7 @@ func _ready() -> void:
 
 func _run() -> void:
 	var args := OS.get_cmdline_user_args()
-	if args.size() != 4:
+	if args.size() != 6:
 		push_error("Run this scene through tests/performance/run_navigation_benchmark.py.")
 		get_tree().quit(2)
 		return
@@ -40,10 +40,15 @@ func _run() -> void:
 		"rendering_method": RenderingServer.get_current_rendering_method(),
 		"viewport": [get_viewport().get_visible_rect().size.x, get_viewport().get_visible_rect().size.y],
 	})
-	if args[0] in ["all", "matrix"]:
-		for obstacle_count in args[3].split(","):
-			for unit_count in [12, 48]:
-				await _run_matrix_case(int(obstacle_count), unit_count)
+	if args[0] in ["all", "matrix", "targeting"]:
+		if not args[5].is_empty():
+			for entry in args[5].split(","):
+				var pair := entry.split(":")
+				await _run_matrix_case(int(pair[0]), int(pair[1]), args[0] == "targeting")
+		else:
+			for obstacle_count in args[3].split(","):
+				for unit_count in args[4].split(","):
+					await _run_matrix_case(int(obstacle_count), int(unit_count), args[0] == "targeting")
 	if args[0] in ["all", "match", "normal"]:
 		await _run_normal_match()
 	if args[0] in ["all", "match", "ownership"]:
@@ -53,7 +58,7 @@ func _run() -> void:
 	get_tree().quit(int(_failures != 0))
 
 
-func _run_matrix_case(obstacles: int, unit_count: int) -> void:
+func _run_matrix_case(obstacles: int, unit_count: int, targeting_only: bool) -> void:
 	var battle := MatchBattle.new(Vector2(-26, 0), Vector2(26, 0), 4.0, BOUNDS)
 	var economy := MatchEconomy.new()
 	var rng := RandomNumberGenerator.new()
@@ -80,18 +85,33 @@ func _run_matrix_case(obstacles: int, unit_count: int) -> void:
 	for i in range(unit_count):
 		var side := PLAYER if i % 2 == 0 else CPU
 		var direction := -1.0 if side == CPU else 1.0
-		var lane := 0.18 * (floorf(i / 6.0) - 1.5) if i % 4 < 2 else -15.0
+		var lane := 0.18 * (fmod(floorf(i / 6.0), 16.0) - 1.5) if i % 4 < 2 else -15.0
+		# This stress fixture intentionally exceeds the match's production cap.
+		if battle._military_count[side] >= MatchBattle.MILITARY_UNIT_CAP:
+			battle._military_count[side] = 0
 		var unit := battle.spawn_unit(side, Vector2(-18 * direction, lane),
 			UnitCatalog.COMBAT_TYPES[floori(i / 2.0) % UnitCatalog.COMBAT_TYPES.size()])
 		_expect(unit != null, "Matrix unit spawn")
 		units.append(unit)
 
+	battle._military_count[PLAYER] = (unit_count + 1) / 2
+	battle._military_count[CPU] = unit_count / 2
+	var step := func() -> void: battle.advance(STEP, economy)
+	var id := "%d obstacles / %d units" % [obstacles, unit_count]
+	if targeting_only:
+		for unit in units:
+			var column := (unit.id - 1) / 2 % 20
+			unit.position = Vector2(-0.4 if unit.side == PLAYER else 0.4, -16.0 + column * 0.07)
+			_expect(battle.order_hold(unit.side, unit.id), "Stationary targeting order")
+		await _phase(id, "stationary_targeting", battle, 30, step)
+		_expect(units.any(func(unit: MatchBattle.Unit) -> bool:
+			return unit.target > MatchBattle.NO_TARGET), "The stress armies engage.")
+		return
+
 	var issue_orders := func() -> void:
 		for unit in units:
 			var destination := Vector2(-unit.position.x, unit.position.y)
 			_expect(battle.order_move(unit.side, unit.id, destination), "Matrix move order")
-	var step := func() -> void: battle.advance(STEP, economy)
-	var id := "%d obstacles / %d units" % [obstacles, unit_count]
 	await _phase(id, "cold_orders", battle, 1, Callable(), issue_orders)
 	await _phase(id, "warm_orders", battle, 1, Callable(), issue_orders)
 	_check_routes(battle, units)
@@ -118,7 +138,7 @@ func _run_matrix_case(obstacles: int, unit_count: int) -> void:
 	for i in range(units.size()):
 		var unit := units[i]
 		unit.position = Vector2(-1.2 if unit.side == PLAYER else 1.2,
-			-15.0 + (floorf(i / 6.0) - 2.0) * 0.04)
+			-15.0 + (fmod(floorf(i / 6.0), 16.0) - 2.0) * 0.04)
 		battle.set_unit_stance(unit.side, unit.id, MatchBattle.Stance.SEEK_NEAREST, true)
 	await _phase(id, "local_engagement", battle, 30, step)
 

@@ -366,7 +366,9 @@ func _want_build(scene: Node3D, kind: StringName, regions: Array[MatchRegion], n
 
 func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle.Unit]) -> Array[CpuTactics.Threat]:
 	var threats: Array[CpuTactics.Threat] = []
-	var radius_squared: float = scene.cpu_threat_radius ** 2
+	var battle: MatchBattle = scene._battle
+	var radius: float = absf(scene.cpu_threat_radius)
+	var radius_squared := radius * radius
 	for region in owned:
 		var hub := CpuTactics.Threat.new()
 		hub.region = region
@@ -381,7 +383,7 @@ func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle
 		else:
 			continue
 		var nearest_distance := INF
-		for unit in units:
+		for unit in battle.nearby_units(units, hub.hub, radius):
 			if unit.type_id == UnitCatalog.SCOUT or unit.hp <= 0.0:
 				continue
 			var distance := hub.hub.distance_squared_to(unit.position)

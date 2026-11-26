@@ -1,10 +1,35 @@
 class_name BattleNavigation
 extends RefCounted
-## Routes ground positions around static footprints using their corners as waypoints.
+## Owns a private native navigation map for one movement clearance.
 
-const CORNER_CLEARANCE := 0.025
-const MAX_CACHED_ENDPOINTS := 256
+const MeshBuild := preload("res://match/battle_navigation_mesh.gd")
+
+const MESH_MARGIN := 0.02
+const MESH_CELL := 0.01
+const CHUNK_SIZE := 12.0
+const MAX_CACHED_REQUESTS := 512
+const MAX_CHANGE_HISTORY := 64
+
+class Chunk:
+	var bounds: Rect2
+	var region: RID
+	var dirty := true
+	var generation := 0
+	var pending_generation := -1
+	var pending: MeshBuild
+	var task := -1
+	var outline: PackedVector2Array
+
 const OBSTACLES_PER_BRANCH := 6
+
+class Change:
+	var bounds: Rect2
+	var removed: bool
+
+	func _init(footprint: Rect2, demolition: bool) -> void:
+		bounds = footprint
+		removed = demolition
+
 
 class Obstacle:
 	var rect: Rect2
@@ -40,14 +65,14 @@ var _obstacles: Dictionary[int, Obstacle] = {}
 var _next_obstacle_id := 0
 var _obstacle_tree: ObstacleBranch
 var _clearance_routes: Dictionary[float, BattleNavigation] = {}
-var _graph := AStar2D.new()
-var _graph_revision := -1
-var _removed_obstacles := PackedInt64Array()
-# For each rejected link, remember one obstacle that must disappear before the
-# link can become visible. A packed pair keeps this index compact.
-var _blocked_links: Dictionary[int, PackedInt64Array] = {}
-var _start_links: Dictionary[Vector2, PackedInt64Array] = {}
-var _end_links: Dictionary[Vector2, PackedInt64Array] = {}
+var _map: RID
+var _chunks: Array[Chunk] = []
+var _dirty := false
+var _pending_tasks := 0
+var _ready_to_publish := false
+var _walkable: PackedVector2Array
+var _requests: Dictionary[Vector4, PackedVector2Array] = {}
+var _changes: Array[Change] = []
 
 
 func _init(bounds: Rect2, boundary := PackedVector2Array(), boundary_clearance := 0.0) -> void:
@@ -68,25 +93,23 @@ func _insert_obstacle(id: int, footprint: Rect2, angle: float) -> void:
 	_obstacles[id] = obstacle
 	_obstacle_tree = null
 	revision += 1
-	# An addition can invalidate any existing link. Rebuild on the next detour.
-	_graph_revision = -1
-	_removed_obstacles.clear()
+	_geometry_changed((obstacle.transform * obstacle.rect.grow(MESH_MARGIN)))
 	for clearance in _clearance_routes:
 		_clearance_routes[clearance]._insert_obstacle(id, obstacle.footprint().grow(clearance),
 			obstacle.transform.get_rotation())
 
 
 func remove_obstacle(id: int) -> void:
+	var obstacle := _obstacles.get(id) as Obstacle
 	if _obstacles.erase(id):
 		_obstacle_tree = null
 		revision += 1
-		if _graph_revision >= 0:
-			_removed_obstacles.append(id)
+		_geometry_changed(obstacle.transform * obstacle.rect.grow(MESH_MARGIN), true)
 		for routes in _clearance_routes.values():
 			routes.remove_obstacle(id)
 
 
-## Maintain one route graph per movement clearance, with matching obstacle IDs.
+## Maintain one native map per movement clearance, with matching obstacle IDs.
 func with_clearance(clearance: float) -> BattleNavigation:
 	if clearance == 0.0:
 		return self
@@ -97,6 +120,7 @@ func with_clearance(clearance: float) -> BattleNavigation:
 			var obstacle := _obstacles[id]
 			routes._insert_obstacle(id, obstacle.footprint().grow(clearance),
 				obstacle.transform.get_rotation())
+		routes.revision = revision
 		_clearance_routes[clearance] = routes
 	return routes
 
@@ -226,105 +250,208 @@ func path(start: Vector2, end: Vector2) -> PackedVector2Array:
 	if _first_blocker(start, end, -1, true) == -1:
 		return PackedVector2Array([end])
 
-	if _graph_revision < 0:
-		_rebuild_graph()
-	elif _graph_revision != revision:
-		_refresh_graph_after_removals()
-	var start_links := _visible_corners(start, true, _start_links)
-	var end_links := _visible_corners(end, false, _end_links)
-	if start_links.is_empty() or end_links.is_empty():
-		return PackedVector2Array()
-	var start_id := _next_obstacle_id * 4
-	var end_id := start_id + 1
-	_graph.add_point(start_id, start)
-	_graph.add_point(end_id, end)
-	for id in start_links:
-		_graph.connect_points(start_id, id)
-	for id in end_links:
-		_graph.connect_points(id, end_id)
-	var route := _graph.get_point_path(start_id, end_id)
-	_graph.remove_point(start_id)
-	_graph.remove_point(end_id)
-	return route.slice(1)
+	var key := Vector4(start.x, start.y, end.x, end.y)
+	if _requests.has(key):
+		return _requests[key].duplicate()
+	var route := _native_path(start, end)
+	if _requests.size() >= MAX_CACHED_REQUESTS:
+		_requests.clear()
+	_requests[key] = route.duplicate()
+	return route
 
 
-func _visible_corners(point: Vector2, is_start: bool,
-		cache: Dictionary[Vector2, PackedInt64Array]) -> PackedInt64Array:
-	if cache.has(point):
-		return cache[point]
-	var links := PackedInt64Array()
-	for id in _graph.get_point_ids():
-		var corner := _graph.get_point_position(id)
-		var visible := line_clear(point, corner, -1, true) if is_start else line_clear(corner, point)
-		if visible:
-			links.append(id)
-	# Moving endpoints can be unique on every step, even on an unchanged map.
-	if cache.size() >= MAX_CACHED_ENDPOINTS:
-		cache.clear()
-	cache[point] = links
-	return links
+func _native_path(start: Vector2, end: Vector2) -> PackedVector2Array:
+	_ensure_map()
+	if _dirty:
+		_update_chunks(true)
+	var raw := NavigationServer2D.map_get_path(_map, start, end, true)
+	var route := _safe_route(raw, start, end)
+	if route.is_empty() and not raw.is_empty() and raw[-1].is_equal_approx(end):
+		# The funnel can cut across a narrow post at a fuzzy seam. The
+		# midpoint variant takes the same corridor through each portal.
+		route = _safe_route(NavigationServer2D.map_get_path(_map, start, end, false), start, end)
+	return route
 
 
-func _rebuild_graph() -> void:
-	_graph.clear()
-	_blocked_links.clear()
-	_add_visible_corners()
-	_finish_graph_update()
+func _safe_route(raw: PackedVector2Array, start: Vector2, end: Vector2) -> PackedVector2Array:
+	var route := PackedVector2Array()
+	if raw.is_empty():
+		return route
+	# Native queries project endpoints and can return partial paths. Connect
+	# endpoints to the live geometry and accept only a complete safe route.
+	var previous := start
+	for i in raw.size():
+		var point := raw[i]
+		if i == raw.size() - 1:
+			if point.is_equal_approx(end):
+				point = end
+			elif not line_clear(point, end):
+				return PackedVector2Array()
+		if previous.is_equal_approx(point):
+			continue
+		if not line_clear(previous, point, -1, route.is_empty()):
+			return PackedVector2Array()
+		route.append(point)
+		previous = point
+	if previous != end:
+		if not line_clear(previous, end, -1, route.is_empty()):
+			return PackedVector2Array()
+		route.append(end)
+	return route
 
 
-func _refresh_graph_after_removals() -> void:
-	for obstacle_id in _removed_obstacles:
-		for offset in range(4):
-			var point_id := obstacle_id * 4 + offset
-			if _graph.has_point(point_id):
-				_graph.remove_point(point_id)
-	for obstacle_id in _removed_obstacles:
-		var links := _blocked_links.get(obstacle_id, PackedInt64Array()) as PackedInt64Array
-		_blocked_links.erase(obstacle_id)
-		for index in range(0, links.size(), 2):
-			var a := links[index]
-			var b := links[index + 1]
-			if _graph.has_point(a) and _graph.has_point(b):
-				_connect_corners(a, b, _graph.get_point_position(a))
-	# Overlapping footprints can hide corners of surviving obstacles.
-	_add_visible_corners()
-	_finish_graph_update()
+func route_affected(start: Vector2, destination: Vector2, waypoints: PackedVector2Array,
+		since: int) -> bool:
+	if since == revision:
+		return false
+	var first := _changes.size() - (revision - since)
+	if since < 0 or first < 0 or waypoints.is_empty():
+		return true
+	for index in range(first, _changes.size()):
+		var change := _changes[index]
+		if change.removed:
+			# Demolition only warrants a detour change when it opens a shortcut.
+			if waypoints.size() > 1 and _overlaps_bounds(change.bounds,
+					start.min(destination), start.max(destination)) \
+					and line_clear(start, destination, -1, true):
+				return true
+			continue
+		var previous := start
+		for point in waypoints:
+			if _overlaps_bounds(change.bounds, previous.min(point), previous.max(point)) \
+					and not line_clear(previous, point, -1, previous == start):
+				return true
+			previous = point
+	return false
 
 
-func _finish_graph_update() -> void:
-	_start_links.clear()
-	_end_links.clear()
-	_removed_obstacles.clear()
-	_graph_revision = revision
+func _geometry_changed(bounds: Rect2, removed := false) -> void:
+	_requests.clear()
+	_changes.append(Change.new(bounds, removed))
+	if _changes.size() > MAX_CHANGE_HISTORY:
+		_changes.pop_front()
+	for chunk in _chunks:
+		if chunk.bounds.grow(MESH_MARGIN).intersects(bounds, true):
+			chunk.generation += 1
+			chunk.dirty = true
+			_dirty = true
+			_ready_to_publish = false
 
 
-func _add_visible_corners() -> void:
-	for obstacle_id in _obstacles:
-		var obstacle := _obstacles[obstacle_id]
-		var corners := corners_of(obstacle.rect.grow(CORNER_CLEARANCE))
-		for offset in corners.size():
-			var id := obstacle_id * 4 + offset
-			if _graph.has_point(id):
-				continue
-			var corner := obstacle.transform * corners[offset]
-			if not is_passable(corner):
-				continue
-			var previous := _graph.get_point_ids()
-			_graph.add_point(id, corner)
-			for other in previous:
-				_connect_corners(id, other, corner)
+## Launch dirty bakes together after the simulation's obstacle mutations.
+func update() -> void:
+	if _map.is_valid() and (_pending_tasks > 0 or (_dirty and not _ready_to_publish)):
+		_update_chunks(false)
+	for routes in _clearance_routes.values():
+		routes.update()
 
 
-func _connect_corners(a: int, b: int, corner: Vector2) -> void:
-	var other := _graph.get_point_position(b)
-	# Match the visibility direction of a full build for newly exposed corners.
-	var blocker := _first_blocker(corner, other) if a > b else _first_blocker(other, corner)
-	if blocker == -1:
-		_graph.connect_points(a, b)
-	else:
-		var links: PackedInt64Array = _blocked_links.get_or_add(blocker, PackedInt64Array())
-		links.append(a)
-		links.append(b)
+func _ensure_map() -> void:
+	if _map.is_valid():
+		return
+	_map = NavigationServer2D.map_create()
+	NavigationServer2D.map_set_cell_size(_map, MESH_CELL)
+	NavigationServer2D.map_set_use_async_iterations(_map, false)
+	NavigationServer2D.map_set_edge_connection_margin(_map, MESH_MARGIN * 0.5)
+	NavigationServer2D.map_set_active(_map, true)
+	_walkable = corners_of(_bounds)
+	if not _boundary.is_empty():
+		_walkable = PackedVector2Array()
+		for i in _boundary.size():
+			var point := _boundary[i]
+			var before := (point - _boundary[posmod(i - 1, _boundary.size())]).normalized()
+			var after := (_boundary[(i + 1) % _boundary.size()] - point).normalized()
+			var tangent := before + after
+			var inward := Vector2(-tangent.y, tangent.x).normalized()
+			_walkable.append(point + inward * ((_boundary_clearance + MESH_MARGIN)
+				/ inward.dot(Vector2(-after.y, after.x))))
+	var columns := ceili(_bounds.size.x / CHUNK_SIZE)
+	var rows := ceili(_bounds.size.y / CHUNK_SIZE)
+	var size := _bounds.size / Vector2(columns, rows)
+	for y in rows:
+		for x in columns:
+			var chunk := Chunk.new()
+			chunk.bounds = Rect2(_bounds.position + size * Vector2(x, y), size)
+			var outlines := Geometry2D.intersect_polygons(_walkable, corners_of(chunk.bounds))
+			if not outlines.is_empty():
+				chunk.outline = outlines[0]
+				_chunks.append(chunk)
+	_dirty = true
+
+
+func _chunk_source(chunk: Chunk) -> MeshBuild:
+	var source := MeshBuild.new()
+	source.outline = chunk.outline
+	for obstacle in _obstacles.values():
+		if chunk.bounds.grow(MESH_MARGIN * 2).intersects(obstacle.bounds, true):
+			source.obstructions.append(obstacle.transform *
+				corners_of(obstacle.rect.grow(MESH_MARGIN)))
+	return source
+
+
+func _update_chunks(immediate: bool) -> void:
+	var all_ready := true
+	for chunk in _chunks:
+		if chunk.task != -1 and WorkerThreadPool.is_task_completed(chunk.task):
+			WorkerThreadPool.wait_for_task_completion(chunk.task)
+			chunk.task = -1
+			_pending_tasks -= 1
+		if not chunk.dirty:
+			if chunk.task == -1:
+				chunk.pending = null
+			continue
+		if chunk.task == -1 and chunk.pending != null and chunk.pending_generation == chunk.generation:
+			continue
+		if not immediate:
+			all_ready = false
+			if chunk.task == -1:
+				chunk.pending = _chunk_source(chunk)
+				chunk.pending_generation = chunk.generation
+				chunk.task = WorkerThreadPool.add_task(chunk.pending.build.bind(MESH_CELL),
+					false, "Battle navigation chunk")
+				_pending_tasks += 1
+	if not immediate:
+		# Godot synchronizes connectivity for the whole map. Defer that work
+		# until a detour actually needs the new regions.
+		_ready_to_publish = all_ready
+		return
+	if not _dirty:
+		return
+
+	for chunk in _chunks:
+		if not chunk.dirty:
+			continue
+		if chunk.task == -1 and chunk.pending != null and chunk.pending_generation == chunk.generation:
+			_publish(chunk, chunk.pending.polygon)
+			chunk.pending = null
+		else:
+			# Commands and blocked movement need an answer in this fixed step.
+			# Supersede any in-flight snapshot without waiting for its worker.
+			var source := _chunk_source(chunk)
+			source.build(MESH_CELL)
+			_publish(chunk, source.polygon)
+	_dirty = false
+	_ready_to_publish = false
+	NavigationServer2D.map_force_update(_map)
+
+
+func _publish(chunk: Chunk, polygon: NavigationPolygon) -> void:
+	if not chunk.region.is_valid():
+		chunk.region = NavigationServer2D.region_create()
+		NavigationServer2D.region_set_use_async_iterations(chunk.region, false)
+		NavigationServer2D.region_set_map(chunk.region, _map)
+	NavigationServer2D.region_set_navigation_polygon(chunk.region, polygon)
+	chunk.dirty = false
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and _map.is_valid():
+		for chunk in _chunks:
+			if chunk.task != -1:
+				WorkerThreadPool.wait_for_task_completion(chunk.task)
+			if chunk.region.is_valid():
+				NavigationServer2D.free_rid(chunk.region)
+		NavigationServer2D.free_rid(_map)
 
 
 static func corners_of(rect: Rect2) -> PackedVector2Array:

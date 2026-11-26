@@ -31,7 +31,6 @@ const BASE_ATTACK_RANGE := 1.8
 const DEFAULT_BOUNDS := Rect2(-15.0, -9.0, 30.0, 18.0)
 const DEFAULT_AGGRO_RADIUS := 4.0
 const DEFAULT_THREAT_WEIGHTS := Vector2(2.0, 0.25)
-const COMBAT_CELL_SIZE := 4.0
 const MILITARY_UNIT_CAP := 48
 const LOCAL_REPATH_INTERVAL := 0.12
 const LOCAL_ROUTE_PROBES := 4
@@ -60,7 +59,16 @@ class Unit:
 	var type_id: StringName
 	var definition: Dictionary
 	var side: MatchRegion.Owner
-	var position: Vector2
+	var position: Vector2:
+		set(value):
+			if _grid != null and not _cell_bounds.has_point(value):
+				_grid.erase(id, _cell, side)
+				_set_cell(value)
+				_grid.insert(id, _cell, side)
+			position = value
+	var _grid: BattleSpatialGrid
+	var _cell: Vector2i
+	var _cell_bounds: Rect2
 	var heading := Vector2.RIGHT
 	var stance := Stance.SEEK_NEAREST
 	var order := Order.AUTONOMOUS
@@ -73,12 +81,14 @@ class Unit:
 	var strategic_target := BASE_TARGET
 	var strategic_base := MatchRegion.Owner.NEUTRAL
 	var strategic_revision := -1
+	var strategic_sites_revision := -1
 	var chase_target := NO_TARGET
 	var chase_repath_at := 0.0
 	var blocked_revision := -1
 	var blocked_objective := Vector2.INF
 	var wall_approach: Dictionary
 	var hp: float
+	var step_distance: float
 	var target := NO_TARGET
 	var target_base := MatchRegion.Owner.NEUTRAL
 	var can_attack_target := false
@@ -93,8 +103,15 @@ class Unit:
 		definition = UnitCatalog.DEFINITIONS[type_id]
 		hp = definition.hp
 		attack_interval = definition.cooldown
+		step_distance = definition.speed * STEP
 		side = owner
 		position = spawn_position
+
+
+	func _set_cell(point: Vector2) -> void:
+		_cell = BattleSpatialGrid.cell_at(point)
+		_cell_bounds = Rect2(Vector2(_cell) * BattleSpatialGrid.CELL_SIZE,
+			Vector2.ONE * BattleSpatialGrid.CELL_SIZE)
 
 
 ## Position snapshots are in map coordinates at the attack step, before movement.
@@ -186,7 +203,12 @@ var _base_health: Dictionary[MatchRegion.Owner, BuildingHealth] = {}
 var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
 var _military_count: Dictionary[MatchRegion.Owner, int] = {}
+var _unit_grid := BattleSpatialGrid.new()
+var _structure_grid := BattleSpatialGrid.new()
+var _structure_extent := OUTPOST_ATTACK_RANGE - UNIT_ATTACK_RANGE
+var _candidate_ids: Array[int] = []
 var _nearby_cache: Dictionary[Vector4i, Array] = {}
+var _hold_targets: Dictionary[Vector4, int] = {}
 var _outposts: Dictionary[int, Outpost] = {}
 var _fortifications: Dictionary[int, Fortification] = {}
 var _landmark_footprints: Array[Rect2] = []
@@ -195,6 +217,7 @@ var _next_unit_id := 1
 var _pending_time := 0.0
 var _elapsed_time := 0.0
 var _combat_step := 0
+var _strategic_sites_revision := 0
 var _outcome := Outcome.IN_PROGRESS
 
 
@@ -261,6 +284,8 @@ func add_outpost(region_id: StringName, side: MatchRegion.Owner, position: Vecto
 	outpost.position = position
 	outpost.obstacle = _add_footprint(position, OUTPOST_FOOTPRINT)
 	_outposts[outpost.id] = outpost
+	_strategic_sites_revision += 1
+	_structure_grid.insert(outpost.id, BattleSpatialGrid.cell_at(position), 0)
 	return outpost
 
 
@@ -290,6 +315,8 @@ func _register_structure(fort: Fortification, kind: StringName, profile: Diction
 	fort.angle = angle
 	fort.source_id = StringName("fortification/%d" % fort.id)
 	_fortifications[fort.id] = fort
+	_structure_extent = maxf(_structure_extent, profile.size.length() * 0.5)
+	_structure_grid.insert(fort.id, BattleSpatialGrid.cell_at(position), 0)
 	set_fortification_active(fort, true)
 
 
@@ -418,10 +445,18 @@ func _spawn_unit(side: MatchRegion.Owner, position: Vector2, type_id: StringName
 	unit.heading = position.direction_to(_bases[nearest_hostile_base(side, position)])
 	if type_id != UnitCatalog.SCOUT:
 		_military_count[side] += 1
+	_index_unit(unit)
 	_units[unit.id] = unit
 	_next_unit_id += 1
 	unit_produced.emit(unit)
 	return unit
+
+
+func _index_unit(unit: Unit) -> void:
+	unit.step_distance = stats.value(unit.side, FactionStats.UNIT_SPEED, unit.definition.speed) * STEP
+	unit._grid = _unit_grid
+	unit._set_cell(unit.position)
+	_unit_grid.insert(unit.id, unit._cell, unit.side)
 
 
 func get_unit(id: int) -> Unit:
@@ -576,6 +611,9 @@ func unit_attack_stat(unit: Unit) -> Dictionary:
 
 
 func _on_stat_changed(stat: StringName) -> void:
+	if stat == FactionStats.UNIT_SPEED:
+		for unit in _units.values():
+			unit.step_distance = stats.value(unit.side, stat, unit.definition.speed) * STEP
 	if stat == FactionStats.UNIT_MAX_HP:
 		for unit in _units.values():
 			unit.hp = minf(unit.hp, _unit_max_hp(unit))
@@ -670,18 +708,21 @@ func _spawn_position(timer: ProductionTimer, direction: Vector2) -> Vector2:
 func _step_combat(economy: MatchEconomy) -> void:
 	# Plan against the same positions before either side moves or takes damage.
 	var units := active_units()
-	var cells: Dictionary[Vector3i, Array] = {}
-	for unit in units:
-		var cell := Vector2i((unit.position / COMBAT_CELL_SIZE).floor())
-		var occupants: Array = cells.get_or_add(Vector3i(cell.x, cell.y, unit.side), [])
-		occupants.append(unit)
-
 	var attacks: Array[Unit] = []
 	_combat_step += 1
 	var stagger_pursuit := _bases.size() > 2
+	if _unit_grid.count != units.size():
+		for unit in units:
+			if unit._grid == null:
+				_index_unit(unit)
 	for unit in units:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
 		if unit.hp <= 0.0:
+			continue
+		if unit.order == Order.MOVE and unit.target == NO_TARGET \
+				and unit.route_revision == navigation.revision \
+				and unit.movement_destination == unit.ordered_destination \
+				and not unit.waypoints.is_empty():
 			continue
 		# Established autonomous targets can reuse their last plan for one step.
 		# Movement still steps at 60 Hz and every shot rechecks range and sight.
@@ -690,12 +731,13 @@ func _step_combat(economy: MatchEconomy) -> void:
 				and unit.route_revision == navigation.revision \
 				and (not unit.can_attack_target or unit.cooldown > TIME_EPSILON):
 			continue
-		unit.can_attack_target = _plan_turn(unit, units, cells)
+		unit.can_attack_target = _plan_turn(unit, units)
 		if unit.can_attack_target and unit.cooldown <= TIME_EPSILON:
 			attacks.append(unit)
 
-	_fire_fortifications(units, cells)
+	_fire_fortifications(units)
 	_nearby_cache.clear()
+	_hold_targets.clear()
 	# Attacks committed while alive still resolve if the attacker falls this step.
 	# Resolve against the same positions used to authorize range and facing.
 	var report_attacks := attack_resolved.has_connections()
@@ -706,6 +748,10 @@ func _step_combat(economy: MatchEconomy) -> void:
 			continue
 		if unit.target > NO_TARGET and _units[unit.target].hp <= 0.0:
 			continue
+		# A placement callback can run between planning and movement.
+		if unit.route_revision != navigation.revision \
+				and not unit.waypoints.is_empty() and not _retain_route(unit):
+			continue
 		_move(unit)
 
 	var eliminated: Array[MatchRegion.Owner] = []
@@ -714,6 +760,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 			continue
 		navigation.remove_obstacle(_base_obstacles[side])
 		_base_obstacles.erase(side)
+		_strategic_sites_revision += 1
 		economy.eliminate(side)
 		stats.remove_source(base_source_id(side))
 		eliminated.append(side)
@@ -725,6 +772,8 @@ func _step_combat(economy: MatchEconomy) -> void:
 	# A fallen faction immediately loses its army, outposts, and structures.
 	for unit in units:
 		if unit.hp <= 0.0 or not is_side_active(unit.side):
+			_unit_grid.erase(unit.id, unit._cell, unit.side)
+			unit._grid = null
 			_units.erase(unit.id)
 			if unit.type_id != UnitCatalog.SCOUT:
 				_military_count[unit.side] -= 1
@@ -733,7 +782,9 @@ func _step_combat(economy: MatchEconomy) -> void:
 	var destroyed_outposts: Array[Outpost] = []
 	for outpost in _outposts.values():
 		if outpost.hp == 0 or not is_side_active(outpost.side):
+			_structure_grid.erase(outpost.id, BattleSpatialGrid.cell_at(outpost.position), 0)
 			_outposts.erase(outpost.id)
+			_strategic_sites_revision += 1
 			navigation.remove_obstacle(outpost.obstacle)
 			stats.remove_source(outpost.source_id)
 			destroyed_outposts.append(outpost)
@@ -741,6 +792,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 	for fort: Fortification in _fortifications.values():
 		if fort.hp <= 0.0 or not is_side_active(fort.side):
 			set_fortification_active(fort, false)
+			_structure_grid.erase(fort.id, BattleSpatialGrid.cell_at(fort.position), 0)
 			_fortifications.erase(fort.id)
 			if fort is ProductionTimer:
 				_timers.erase(fort)
@@ -759,6 +811,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 	for outpost in destroyed_outposts:
 		outpost_destroyed.emit(outpost)
 
+	navigation.update()
 	for side in eliminated:
 		base_destroyed.emit(side)
 
@@ -803,34 +856,52 @@ func _resolve_attack(unit: Unit, report_attack: bool) -> void:
 		attack_resolved.emit(AttackResolved.new(unit, target_side, impact, _elapsed_time))
 
 
-func _nearby_enemies(units: Array[Unit], cells: Dictionary[Vector3i, Array], position: Vector2,
+## Broad-phase candidates for a strategic threat scan. Callers test exact range.
+func nearby_units(units: Array[Unit], position: Vector2, radius: float) -> Array[Unit]:
+	if not is_finite(radius):
+		return units
+	var reach := ceili(radius / BattleSpatialGrid.CELL_SIZE)
+	var width := 2 * reach + 1
+	if width * width * MatchRegion.Owner.size() >= units.size():
+		return units
+	_candidate_ids.clear()
+	var cell := BattleSpatialGrid.cell_at(position)
+	for group in MatchRegion.Owner.values():
+		_unit_grid.append_ids(cell, reach, group, _candidate_ids)
+	# Strategic callers retain the original unit-ID order across bucket moves.
+	_candidate_ids.sort()
+	var nearby: Array[Unit] = []
+	for id in _candidate_ids:
+		nearby.append(_units[id])
+	return nearby
+
+
+func _nearby_enemies(units: Array[Unit], position: Vector2,
 		side: MatchRegion.Owner, radius: float) -> Array[Unit]:
 	# Cache each cell/side search for this snapshot. The callers filter the
 	# exact radius from the cached neighborhood before using a target.
 	if not is_finite(radius) or side == MatchRegion.Owner.NEUTRAL:
 		return units
-	var reach := ceili(radius / COMBAT_CELL_SIZE)
+	var reach := ceili(radius / BattleSpatialGrid.CELL_SIZE)
 	var width := 2 * reach + 1
 	if width * width * (_base_obstacles.size() - 1) >= units.size():
 		return units
-	var cell := Vector2i((position / COMBAT_CELL_SIZE).floor())
+	var cell := BattleSpatialGrid.cell_at(position)
 	var key := Vector4i(cell.x, cell.y, side, reach)
 	if _nearby_cache.has(key):
 		return _nearby_cache[key]
 	var nearby: Array[Unit] = []
-	for hostile in _base_obstacles:
-		if hostile == side:
-			continue
-		for y in range(cell.y - reach, cell.y + reach + 1):
-			for x in range(cell.x - reach, cell.x + reach + 1):
-				var bucket := Vector3i(x, y, hostile)
-				if cells.has(bucket):
-					nearby.append_array(cells[bucket])
+	_candidate_ids.clear()
+	for hostile in MatchRegion.Owner.values():
+		if hostile != side:
+			_unit_grid.append_ids(cell, reach, hostile, _candidate_ids)
+	for id in _candidate_ids:
+		nearby.append(_units[id])
 	_nearby_cache[key] = nearby
 	return nearby
 
 
-func _fire_fortifications(units: Array[Unit], cells: Dictionary[Vector3i, Array]) -> void:
+func _fire_fortifications(units: Array[Unit]) -> void:
 	for fort: Fortification in _fortifications.values():
 		if not fort.active or fort.profile.get("range", 0.0) <= 0.0:
 			continue
@@ -841,7 +912,7 @@ func _fire_fortifications(units: Array[Unit], cells: Dictionary[Vector3i, Array]
 		var target: Unit
 		var range_squared := float(fort.profile.range) ** 2
 		var nearest := range_squared
-		var nearby := _nearby_enemies(units, cells, fort.position, fort.side, fort.profile.range)
+		var nearby := _nearby_enemies(units, fort.position, fort.side, fort.profile.range)
 		for unit in nearby:
 			var distance := fort.position.distance_squared_to(unit.position)
 			if unit.side == fort.side or unit.hp <= 0.0 or distance > nearest:
@@ -868,7 +939,7 @@ func _fire_fortifications(units: Array[Unit], cells: Dictionary[Vector3i, Array]
 		fortification_fired.emit(fort, target.position)
 
 
-func _plan_turn(unit: Unit, units: Array[Unit], cells: Dictionary[Vector3i, Array]) -> bool:
+func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 	unit.target = NO_TARGET
 	match unit.order:
 		Order.MOVE:
@@ -894,8 +965,19 @@ func _plan_turn(unit: Unit, units: Array[Unit], cells: Dictionary[Vector3i, Arra
 	var radius := absf(aggro_radius)
 	if holding:
 		radius = minf(radius, unit.definition.range + RANGE_EPSILON)
-	var nearby := _nearby_enemies(units, cells, unit.position, unit.side, radius)
-	if _plan_local_engagement(unit, nearby, radius, holding):
+	var nearby := _nearby_enemies(units, unit.position, unit.side, radius)
+	if holding:
+		var key := Vector4(unit.position.x, unit.position.y, unit.side, radius)
+		if _hold_targets.has(key):
+			var target := get_unit(_hold_targets[key])
+			if target != null:
+				return _aim_at(unit, target.id, target.position)
+		else:
+			var can_fire := _plan_local_engagement(unit, nearby, radius, true)
+			_hold_targets[key] = unit.target
+			if can_fire:
+				return true
+	elif _plan_local_engagement(unit, nearby, radius, false):
 		return unit.waypoints.is_empty()
 	unit.chase_target = NO_TARGET
 
@@ -914,25 +996,57 @@ func _plan_turn(unit: Unit, units: Array[Unit], cells: Dictionary[Vector3i, Arra
 	if target_base != MatchRegion.Owner.NEUTRAL:
 		unit.target_base = target_base
 		return _aim_at(unit, BASE_TARGET, _bases[target_base])
-	for outpost in _outposts.values():
-		if outpost.side != unit.side and _can_attack_structure(unit.position, outpost.position,
-				outpost.obstacle, weapon_range + OUTPOST_ATTACK_RANGE - UNIT_ATTACK_RANGE):
-			return _aim_at(unit, outpost.id, outpost.position)
-	for fort: Fortification in _fortifications.values():
-		if fort.side != unit.side and _can_attack_structure(unit.position, fort.position,
-				fort.obstacle, fort.unit_attack_range(weapon_range)):
-			return _aim_at(unit, fort.id, fort.position)
+	var structure := _nearby_structure_target(unit, weapon_range)
+	if structure != null:
+		return _aim_at(unit, structure.id, structure.position)
 
 	if holding:
 		return false
-	if unit.strategic_revision != navigation.revision:
+	return _plan_strategic_turn(unit)
+
+
+func _plan_strategic_turn(unit: Unit) -> bool:
+	var target_exists := is_side_active(unit.strategic_base) if unit.strategic_target == BASE_TARGET \
+		else _outposts.has(unit.strategic_target)
+	if unit.strategic_revision < 0 or not target_exists or (
+			unit.strategic_sites_revision != _strategic_sites_revision
+			and (unit.waypoints.is_empty() or (unit.id + _combat_step) % 8 == 0)):
 		_plan_strategic_approach(unit)
 	_route_to(unit, unit.strategic_destination)
+	if unit.strategic_revision != navigation.revision:
+		if unit.waypoints.is_empty():
+			_plan_strategic_approach(unit)
+			_route_to(unit, unit.strategic_destination)
+		else:
+			unit.strategic_revision = navigation.revision
 	if not unit.waypoints.is_empty():
 		unit.target = unit.strategic_target
 		unit.target_base = unit.strategic_base
 		return false
 	return _plan_breach(unit, _bases[unit.strategic_base], false)
+
+
+func _nearby_structure_target(unit: Unit, weapon_range: float) -> BuildingHealth:
+	var reach := ceili((weapon_range + _structure_extent + RANGE_EPSILON)
+		/ BattleSpatialGrid.CELL_SIZE)
+	_candidate_ids.clear()
+	_structure_grid.append_ids(unit._cell, reach, 0, _candidate_ids)
+	var best_outpost: Outpost
+	var best_fort: Fortification
+	for id in _candidate_ids:
+		var outpost := get_outpost(id)
+		if outpost != null:
+			if outpost.side != unit.side and (best_outpost == null or id > best_outpost.id) \
+					and _can_attack_structure(unit.position, outpost.position, outpost.obstacle,
+						weapon_range + OUTPOST_ATTACK_RANGE - UNIT_ATTACK_RANGE):
+				best_outpost = outpost
+			continue
+		var fort := get_fortification(id)
+		if fort.side != unit.side and (best_fort == null or id > best_fort.id) \
+				and _can_attack_structure(unit.position, fort.position, fort.obstacle,
+					fort.unit_attack_range(weapon_range)):
+			best_fort = fort
+	return best_outpost if best_outpost != null else best_fort
 
 
 func _aim_at(unit: Unit, target: int, position: Vector2) -> bool:
@@ -1021,8 +1135,8 @@ func _plan_local_engagement(unit: Unit, units: Array[Unit], radius: float, holdi
 		if holding or (best_distance <= fire_range_squared
 				and navigation.line_clear(unit.position, selected.position)):
 			return _aim_at(unit, selected.id, selected.position)
-		if multi_cpu and unit.chase_target == selected.id and _elapsed_time < unit.chase_repath_at \
-				and unit.route_revision == navigation.revision and not unit.waypoints.is_empty():
+		if unit.chase_target == selected.id and _elapsed_time < unit.chase_repath_at \
+				and not unit.waypoints.is_empty() and _retain_route(unit):
 			unit.target = selected.id
 			return true
 		var route := _unit_navigation(unit).path(unit.position, selected.position)
@@ -1043,6 +1157,7 @@ func _plan_local_engagement(unit: Unit, units: Array[Unit], radius: float, holdi
 func _plan_strategic_approach(unit: Unit) -> void:
 	var weapon_range: float = unit.definition.range
 	unit.strategic_revision = navigation.revision
+	unit.strategic_sites_revision = _strategic_sites_revision
 	unit.strategic_target = BASE_TARGET
 	unit.strategic_base = nearest_hostile_base(unit.side, unit.position)
 	var nearest := INF
@@ -1121,8 +1236,18 @@ func _unit_navigation(unit: Unit) -> BattleNavigation:
 
 
 func _route_to(unit: Unit, destination: Vector2) -> void:
-	if unit.movement_destination != destination or unit.route_revision != navigation.revision:
+	if unit.movement_destination != destination or not _retain_route(unit):
 		_set_route(unit, destination, _unit_navigation(unit).path(unit.position, destination))
+
+
+func _retain_route(unit: Unit) -> bool:
+	if unit.route_revision == navigation.revision:
+		return true
+	if _unit_navigation(unit).route_affected(unit.position, unit.movement_destination,
+			unit.waypoints, unit.route_revision):
+		return false
+	unit.route_revision = navigation.revision
+	return true
 
 
 func _set_route(unit: Unit, destination: Vector2, route: PackedVector2Array) -> void:
@@ -1138,7 +1263,7 @@ func _clear_route(unit: Unit) -> void:
 func _move(unit: Unit) -> void:
 	if unit.waypoints.is_empty() and unit.order != Order.MOVE:
 		return
-	var remaining := stats.value(unit.side, FactionStats.UNIT_SPEED, unit.definition.speed) * STEP
+	var remaining := unit.step_distance
 	while remaining > 0.0 and not unit.waypoints.is_empty():
 		var waypoint := unit.waypoints[0]
 		var distance := unit.position.distance_to(waypoint)

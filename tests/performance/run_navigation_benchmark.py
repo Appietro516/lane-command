@@ -13,9 +13,10 @@ RESOURCE = "res://tests/performance/navigation_benchmark.tscn"
 PREFIX = "NAV_BENCH "
 PROBE = 'var _nav_probe := Engine.get_singleton(&"LaneNavigationProbe")'
 
-# Signatures are taken from the baseline. Fail loudly when its source changes.
+# Both backends share the scenario and common probes.
 NAV_METHODS = [
     ("_rebuild_graph", "", False),
+    ("_refresh_graph_after_removals", "", False),
     ("_visible_corners", "point, is_start, cache", True),
     ("line_clear", "start, end, ignored_obstacle, allow_exit", True),
     ("path", "start, end", True),
@@ -26,7 +27,8 @@ NAV_METHODS = [
     ("reachable_without_obstacle", "start, end, clearance, ignored_id", True),
 ]
 BATTLE_METHODS = [
-    ("_step_combat", "", False),
+    ("_step_combat", "economy", False),
+    ("_move", "unit", False),
     ("_plan_turn", "unit, units, cells", True),
     ("_nearby_enemies", "units, cells, position, side, radius", True),
     ("_plan_local_engagement", "unit, units, radius, holding", True),
@@ -45,10 +47,10 @@ def wrap(source, name, args, returns):
     signature = re.search(rf"^func {name}\([^)]*\)[^\n]*:\n", source, re.MULTILINE)[0]
     call = f"_probe_impl{name}({args})"
     key = f'"{name}"'
-    if name == "line_clear":
-        key = '"line_clear/" + _nav_probe.caller()'
+    if name in {"line_clear", "_first_blocker"}:
+        key = f'"{name}/" + _nav_probe.caller()'
     if name == "path":
-        key = '"path/%.2f" % _probe_clearance'
+        key = '"path"'
     body = f"\tif not _nav_probe.active:\n\t\t{'return ' if returns else ''}{call}\n"
     if not returns:
         body += "\t\treturn\n"
@@ -74,21 +76,60 @@ NATIVE_METHODS = [
 ]
 
 
+def instrument_native_navigation(source):
+    source = replace_once(source, "var revision := 0", PROBE + "\n\nvar revision := 0")
+    source = replace_once(source, "class Chunk:\n", "class Chunk:\n\tvar probe_submitted := 0\n")
+    source = replace_once(
+        source, "\t\t\t_pending_tasks -= 1\n",
+        "\t\t\t_pending_tasks -= 1\n"
+        "\t\t\tif _nav_probe.active and chunk.probe_submitted > 0 and chunk.pending_generation == chunk.generation:\n"
+        '\t\t\t\t_nav_probe.record("async_ready_latency", '
+        'Time.get_ticks_usec() - chunk.probe_submitted)\n')
+    source = replace_once(
+        source, "\t\t\t\tchunk.pending = _chunk_source(chunk)\n",
+        "\t\t\t\tchunk.pending = _chunk_source(chunk)\n"
+        "\t\t\t\tchunk.probe_submitted = Time.get_ticks_usec() if _nav_probe.active else 0\n"
+        '\t\t\t\t_nav_probe.count("async_chunks_submitted")\n')
+    source = replace_once(
+        source, "\t\t\tsource.build(MESH_CELL)\n",
+        '\t\t\tif _nav_probe.active:\n\t\t\t\t_nav_probe.begin("sync_chunk_bake")\n'
+        "\t\t\tsource.build(MESH_CELL)\n"
+        "\t\t\tif _nav_probe.active:\n\t\t\t\t_nav_probe.end()\n")
+    source = source.replace("NavigationServer2D.map_get_path(", "_probe_map_get_path(")
+    source += """
+func _probe_map_get_path(map: RID, start: Vector2, end: Vector2, optimize: bool) -> PackedVector2Array:
+	if not _nav_probe.active:
+		return NavigationServer2D.map_get_path(map, start, end, optimize)
+	_nav_probe.begin("native_map_get_path")
+	var result := NavigationServer2D.map_get_path(map, start, end, optimize)
+	_nav_probe.end()
+	return result
+"""
+    for spec in NAV_METHODS[3:] + [
+        ("_native_path", "start, end", True),
+        ("_update_chunks", "immediate", False),
+        ("_publish", "chunk, polygon", False),
+    ]:
+        source = wrap(source, *spec)
+    return source
+
+
 def instrument_navigation(source):
-    source = replace_once(source, "var revision := 0", PROBE + "\nvar _probe_clearance := 0.0\n\nvar revision := 0")
+    if "func _native_path(" in source:
+        return instrument_native_navigation(source)
+    source = replace_once(source, "var revision := 0", PROBE + "\n\nvar revision := 0")
     anchors = [
         ("\tif clearance == 0.0:\n", '\tif clearance == 0.0:\n\t\t_nav_probe.count("clearance_bypass")\n'),
         ("\tif routes == null:\n", '\tif routes != null:\n\t\t_nav_probe.count("clearance_hit")\n'
          '\tif routes == null:\n\t\t_nav_probe.count("clearance_miss")\n'),
-        ("\t\t_clearance_routes[clearance] = routes", "\t\troutes._probe_clearance = clearance\n"
-         "\t\t_clearance_routes[clearance] = routes"),
         ("\tif cache.has(point):\n", '\tif cache.has(point):\n\t\t_nav_probe.count("endpoint_hit")\n'),
         ("\tvar links := PackedInt64Array()", '\t_nav_probe.count("endpoint_miss")\n\tvar links := PackedInt64Array()'),
-        ("\treturn id\n", '\t_nav_probe.count("footprint_add_including_clearance_copies")\n\treturn id\n'),
+        ("\t_next_obstacle_id = id + 1\n", "\t_next_obstacle_id = id + 1\n"
+         '\t_nav_probe.count("footprint_add_including_clearance_copies")\n'),
         ("\tif _obstacles.erase(id):\n", '\tif _obstacles.erase(id):\n\t\t_nav_probe.count("revision_remove")\n'),
-        ("\tif line_clear(start, end, -1, true):\n", '\tif line_clear(start, end, -1, true):\n'
+        ("\tif _first_blocker(start, end, -1, true) == -1:\n", '\tif _first_blocker(start, end, -1, true) == -1:\n'
          '\t\t_nav_probe.count("direct_path")\n'),
-        ("\tif _graph_revision != revision:", '\t_nav_probe.count("blocked_direct_path")\n\tif _graph_revision != revision:'),
+        ("\tif _graph_revision < 0:", '\t_nav_probe.count("blocked_direct_path")\n\tif _graph_revision < 0:'),
     ]
     for before, after in anchors:
         source = replace_once(source, before, after)
@@ -103,7 +144,7 @@ def instrument_navigation(source):
         source += f"\t{'var result := ' if result != 'void' else ''}{call}\n\t_nav_probe.end()\n"
         if result != "void":
             source += "\treturn result\n"
-    for spec in NAV_METHODS:
+    for spec in NAV_METHODS + [("_first_blocker", "start, end, ignored_obstacle, allow_exit", True)]:
         source = wrap(source, *spec)
     return source
 
@@ -119,8 +160,10 @@ def instrument(project):
         '\t\tif unit.route_revision >= 0 and unit.route_revision != navigation.revision:\n'
         '\t\t\t_nav_probe.count("revision_repath")\n'
         "\t\t_set_route(unit, destination, _unit_navigation(unit).path(unit.position, destination))")
-    for spec in BATTLE_METHODS:
-        source = wrap(source, *spec)
+    for name, args, returns in BATTLE_METHODS:
+        if "func _retain_route(" in source:
+            args = args.replace(", cells", "")
+        source = wrap(source, name, args, returns)
     battle.write_text(source)
     match = project / "match/match.gd"
     source = replace_once(match.read_text(), "const Fortifications", PROBE + "\n\nconst Fortifications")
@@ -157,16 +200,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path, help="Fresh scratch directory")
     parser.add_argument("--mode", choices=["both", "baseline", "probes"], default="both")
-    parser.add_argument("--suite", choices=["all", "matrix", "match", "normal", "ownership"], default="all")
+    parser.add_argument("--suite", choices=["all", "matrix", "match", "normal", "ownership", "targeting"], default="all")
     parser.add_argument("--display", choices=["headless", "native"], default="headless")
     parser.add_argument("--obstacles", default="20,40,60")
+    parser.add_argument("--units", default="12,48")
+    parser.add_argument("--cases", default="",
+                        help="Optional comma-separated obstacle:unit pairs")
     args = parser.parse_args()
     try:
-        populations = [int(value) for value in args.obstacles.split(",")]
+        obstacles = [int(value) for value in args.obstacles.split(",")]
+        units = [int(value) for value in args.units.split(",")]
+        cases = [tuple(map(int, pair.split(":"))) for pair in args.cases.split(",")] if args.cases else []
     except ValueError:
-        parser.error("--obstacles takes comma-separated integers")
-    if any(count < 6 or count > 126 for count in populations):
-        parser.error("--obstacles populations must fit the 6 to 126 footprint fixture")
+        parser.error("Provide integer populations and obstacle:unit pairs.")
+    if any(len(pair) != 2 for pair in cases):
+        parser.error("--cases needs comma-separated obstacle:unit pairs.")
+    if any(count < 6 or count > 126 for count in obstacles + [pair[0] for pair in cases]):
+        parser.error("Obstacle populations must fit the 6 to 126 footprint fixture.")
+    if any(count < 1 for count in units + [pair[1] for pair in cases]):
+        parser.error("Unit populations must be positive.")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -176,7 +228,7 @@ def main():
         project = output / mode
         for folder in ("match", "tests/performance"):
             shutil.copytree(ROOT / folder, project / folder, ignore=shutil.ignore_patterns("__pycache__"))
-        for name in ("project.godot", "main.tscn", "game.tscn"):
+        for name in ("project.godot", "main.tscn", "game.tscn", "game.gd", "game.gd.uid"):
             shutil.copy2(ROOT / name, project)
         if mode == "probes":
             instrument(project)
@@ -185,7 +237,7 @@ def main():
         display = ["--headless"] if args.display == "headless" else [
             "--resolution", "1280x800", "--disable-vsync", "--audio-driver", "Dummy"]
         rows = run([godot, *display, "--path", str(project), "--fixed-fps", "60", "--quit-after", "6000",
-                    RESOURCE, "--", args.suite, mode, sha, args.obstacles], output / f"{mode}.log")
+                    RESOURCE, "--", args.suite, mode, sha, args.obstacles, args.units, args.cases], output / f"{mode}.log")
         if not rows or json.loads(rows[-1]) != {"complete": True}:
             raise RuntimeError(f"Incomplete benchmark: {output / f'{mode}.log'}")
         (output / f"{mode}.jsonl").write_text("".join(rows))

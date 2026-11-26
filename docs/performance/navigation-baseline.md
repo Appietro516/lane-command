@@ -114,3 +114,74 @@ The raw desktop normal row comes from the completed opening window before the fi
 3. **Reuse safe engagement work and benchmark endpoint setup.** Test bounded reuse of line-of-sight and local routes across stable targets and nearby endpoints. Quantized or reused routes must pass a clearance check before use. Aim for at most 6,579 path calls across the 48-unit engagement window and a headless frame P95 at or below 1,062 ms on this host, half the measured 2,124 ms. Keep the 60-footprint, 48-unit retained-order P95 at or below 5 ms and bring its warm 48-order burst below 16.67 ms.
 
 Keep native `AStar2D` for the first follow-up because visibility and route preparation have the largest measured costs. A spatial grid used as a lookup for footprint bounds is a smaller experiment than replacing navigation with a traversable grid. Compare a traversable grid or polygon/navmesh only if this graph still misses the budget after those experiments. The comparison should cover rotated walls, obstacle additions and removals, multiple clearances, route quality and deterministic ties. Shared flow fields are a candidate for armies with a common goal and stable geometry. This benchmark includes changing engagement destinations and clearance groups that would require multiple fields. Treat all three alternatives as hypotheses until profiled on the same scenarios.
+
+## Late-game native navigation follow-up
+
+The late-game comparison uses the original implementation at `c9e96b7fea5101f106c57ffe6da4324074e7544e`. The tables above describe the earlier benchmark and use its original fixture populations.
+
+### Runtime architecture
+
+- Each requested catalog clearance owns a private NavigationServer2D map. The map uses independent region RIDs on a roughly 12-unit grid, which gives 5 × 3 regions at 60 × 36. Each region starts with its intersection with the inset playable polygon. Rotated footprints are subtracted locally, and matching edges are inserted at junctions between convex pieces. Godot's convex partitioner failed on overlapping wall outlines in the stress matrix, so worker jobs produce explicit NavigationPolygon faces from deterministic cuts. NavigationServer2D connects the regions and solves detours. [Godot 4.6 navigation mesh documentation](https://docs.godotengine.org/en/4.6/tutorials/navigation/navigation_using_navigationmeshes.html)
+- Construction and destruction record the expanded footprint bounds. The simulation submits dirty chunks after the combat step. Each worker operates on a private snapshot. Publication checks generations and synchronizes batches when a detour next needs the mesh. Commands and immediately blocked movement can finish missing chunks synchronously to get a result in the current fixed step. They supersede in-flight snapshots without waiting on those workers. Teardown joins outstanding jobs and releases map and region RIDs.
+- Direct routes and all native route segments are checked against the live footprint index. A post-planning obstacle change can also stop movement in the current step. Existing orders retain unaffected routes, while a blocked order or a detour with a newly clear straight line can replan. Changes to strategic targets refresh established approaches across up to eight ticks. Ordinary geometry changes revisit an approach when its route becomes unusable. Exact detour requests have a bounded per-clearance cache that invalidates on a geometry change.
+- The combat grid indexes units by cell and faction and updates on cell crossings, spawn, and removal. The fixed-step selection snapshot uses the same range, faction, health, and line-of-sight rules. Units with identical Hold search origins and radii share a selection in that snapshot. A structure grid handles nearby attackable outposts and fortifications. CPU hub threat scans use the unit index when it is cheaper than a full scan.
+
+### Reproduce the follow-up
+
+Run the same harness and scenarios against both source trees. The harness instruments the visibility graph at the comparison SHA and the native regions in the optimized tree. Use separate output directories. The targeting suite holds combat units at fixed positions, while the matrix includes move bursts, retained movement, construction, destruction, and the 100-unit path-heavy engagement. Stress deployment bypasses the production cap only in the fixture.
+
+```sh
+python3 tests/performance/run_navigation_benchmark.py --output /tmp/lane-matrix --suite matrix --cases 20:100,60:250,100:500
+python3 tests/performance/run_navigation_benchmark.py --output /tmp/lane-targeting --suite targeting --cases 20:100,60:250,100:500
+python3 tests/performance/run_navigation_benchmark.py --output /tmp/lane-match --suite match
+```
+
+### Frame results
+
+Same Raspberry Pi 4, Godot 4.6.3, headless, seed 17, with 60 Hz simulation steps. Each row uses one uninstrumented run. Frame times are actual elapsed engine iterations in milliseconds. The matrix totals include the cold and warm command frames. Percentiles use nearest rank. The 30-frame event p99 is the maximum.
+
+| Units / starting footprints | Old mean / p95 / p99 (ms) | Native mean / p95 / p99 (ms) | p95 reduction | p99 reduction |
+|---|---:|---:|---:|---:|
+| 100 / 20 | 302.55 / 1838.76 / 3215.41 | 7.49 / 37.53 / 52.56 | 98.0% | 98.4% |
+| 250 / 60 | 429.65 / 26.56 / 24298.74 | 9.14 / 10.20 / 116.96 | 61.6% | 99.5% |
+| 500 / 100 | 1107.08 / 51.19 / 70801.35 | 39.54 / 24.77 / 594.53 | 51.6% | 99.2% |
+
+| Units / starting footprints | Cold orders (ms) | Retained movement p95 (ms) | Construction p99 (ms) | Single demolition p99 (ms) | Batch demolition p99 (ms) |
+|---|---:|---:|---:|---:|---:|
+| 100 / 20 | 2637.02 → 77.16 | 9.13 → 1.71 | 3215.41 → 26.96 | 894.52 → 11.62 | 886.75 → 11.51 |
+| 250 / 60 | 24298.74 → 325.26 | 26.51 → 4.33 | 26739.87 → 116.96 | 4165.54 → 42.83 | 6512.28 → 67.03 |
+| 500 / 100 | 70801.35 → 1832.98 | 46.83 → 21.79 | 73894.94 → 594.53 | 6907.21 → 230.59 | 10610.00 → 139.49 |
+
+The 100-unit path-heavy engagement fell from 1540.62 / 3083.82 / 3331.85 ms mean / p95 / p99 to 32.67 / 51.57 / 52.56 ms. The stationary targeting workload produced identical end-of-phase battle state across backends at all three populations.
+
+| Units / starting footprints | Old Hold mean / p95 / p99 (ms) | New Hold mean / p95 / p99 (ms) |
+|---|---:|---:|
+| 100 / 20 | 52.19 / 53.44 / 67.90 | 47.31 / 65.78 / 68.11 |
+| 250 / 60 | 176.47 / 189.98 / 256.38 | 111.29 / 132.24 / 159.70 |
+| 500 / 100 | 541.05 / 751.17 / 935.71 | 161.45 / 239.09 / 278.75 |
+
+In a separate 100-unit Hold repeat, mean time fell from 52.57 to 48.15 ms, p95 rose from 53.57 to 55.95 ms, and p99 rose from 68.64 to 69.27 ms. The smaller stationary workload has fewer coincident target searches to reuse. At 500 units, Hold p95 and p99 fell by 68.2% and 70.2%.
+
+### Profiling
+
+The probe run measures wall time at script and engine API boundaries. Probe overhead can inflate those totals. Rates divide logical `path()` calls by elapsed wall time over the instrumented matrix. Timing columns overlap with the inclusive `path()` totals. The rebuild column compares old graph construction and refresh with new synchronous geometry generation. Native map activation also contributes to the new path total.
+
+| Units / footprints | Path calls | Inclusive path time (ms) | Paths/s | Native solver time (ms) | Endpoint visibility time (ms) | Synchronous rebuild time (ms) |
+|---|---:|---:|---:|---:|---:|---:|
+| 100 / 20 | 4565 → 1909 | 166054 → 1363 | 26.1 → 441.3 | 514 → 182 | 143291 → 0 | 5629 → 107 |
+| 250 / 60 | 1250 → 677 | 93228 → 1267 | 12.4 → 167.6 | 99 → 24 | 22144 → 0 | 67089 → 699 |
+| 500 / 100 | 2500 → 1355 | 306195 → 3546 | 7.8 → 139.5 | 245 → 26 | 37170 → 0 | 260925 → 2295 |
+
+Across each case's 90 mutation ticks, revision-triggered replans fell from 3.33 to 0.77 per tick at 100 units, 8.33 to 1.97 at 250, and 16.67 to 3.94 at 500. Each destruction fixture completed six worker builds across the three clearances. Submission-to-ready averages were 47, 320, and 626 ms, with maxima of 75, 577, and 950 ms respectively in the instrumented fixed-step runs. This includes worker scheduling and the wait for a simulation poll. Idle activation stays deferred until a detour.
+
+For the 30-tick stationary workload, targeting planning inclusive time fell from 6.91 to 2.61 s at 100 units, 15.58 to 4.69 s at 250, and 41.58 to 7.83 s at 500 in the probes. The nearby-enemy lookup portion fell from 224 to 115 ms, 540 to 249 ms, and 919 to 454 ms. The probe and uninstrumented runs agreed on ending phase states within each backend.
+
+### Remaining limits
+
+A cold detour still builds its clearance map on demand. When a command or blocked route needs unfinished chunks, the fixed step finishes those chunks synchronously. The 500-unit construction event still took 595 ms at p99, and 500-unit retained movement took 21.79 ms at p95 on the Pi. Detour meshes use a 0.02-world-unit obstacle margin beyond unit clearance to accommodate edge matching. A valid direct segment uses exact live geometry. Timings cover the headless Linux host. Native Compatibility smoke tests covered all three map shapes, without a hardware-rendered late-game frame comparison.
+
+### Verification
+
+Godot 4.6.3 imported the project and loaded the production scene. The focused headless checks covered path safety, all map shapes, clearance corridors, rotated seam-spanning footprints, blocked-order recovery after demolition, stale worker results, placement during an attack callback, and RID cleanup. Combat, targeting tie-breaks, seeded CPU strategy, and multi-CPU checks ran through the match code. The old and new matrix and stationary targeting workloads completed at 100, 250, and 500 units. The real-match fixture also completed its normal run, claim, wall purchase, and outpost destruction.
+
+The broader headless run reproduced four diagnostics on the original checkout and optimized tree. The affected suites were camera, wall-placement UI, attack effects, and economy. The native map smoke run captured all three shapes with the Compatibility renderer.

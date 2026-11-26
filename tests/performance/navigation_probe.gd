@@ -36,3 +36,11 @@ func end() -> void:
 	total[3] = maxi(total[3], elapsed)
 	if not stack.is_empty():
 		stack[-1][2] += elapsed
+
+
+# Async jobs are measured from submission until the simulation can publish.
+func record(key: String, elapsed: int) -> void:
+	var total: Array = timings.get_or_add(key, [0, 0, 0, 0])
+	total[0] += 1
+	total[1] += elapsed
+	total[3] = maxi(total[3], elapsed)
