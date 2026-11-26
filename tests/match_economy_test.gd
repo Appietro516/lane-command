@@ -37,6 +37,8 @@ func _run() -> void:
 
 func _test_rules(side: MatchRegion.Owner, other_side: MatchRegion.Owner) -> void:
 	var economy := MatchEconomy.new()
+	var battle := MatchBattle.new(Vector2(-11, 0), Vector2(11, 0))
+	var timer := battle.add_barracks(side, Vector2(-8, -4))
 	_check_state(economy, side, [50.0, 0, 3.5], "Initial state")
 	economy.advance(-20.0)
 	_check_state(economy, side, [50.0, 0, 3.5], "Negative elapsed time")
@@ -45,7 +47,7 @@ func _test_rules(side: MatchRegion.Owner, other_side: MatchRegion.Owner) -> void
 	economy.advance(0.5)
 	_check_state(economy, side, [53.0, 0, 3.5], "Income after one second")
 
-	_check(not economy.try_upgrade(side), "Reject an unaffordable upgrade.")
+	_check(not battle.upgrade_producer(side, timer.id, economy), "Reject an unaffordable upgrade.")
 	_check_state(economy, side, [53.0, 0, 3.5], "Unaffordable upgrade")
 	_check(economy.try_build(side, MatchEconomy.BARRACKS_COST), "Accept the first barracks.")
 	_check_state(economy, side, [13.0, 1, 3.5], "First barracks")
@@ -61,16 +63,19 @@ func _test_rules(side: MatchRegion.Owner, other_side: MatchRegion.Owner) -> void
 		and economy.stockpile(side, MATERIALS) == 30.0, "A third barracks costs the normal price.")
 	_check_state(economy, side, [20.0, 3, 3.5], "Third barracks")
 	economy.advance(40.0 / 3.0)
-	_check(economy.try_upgrade(side), "Accept an upgrade at the exact price.")
-	_check_state(economy, side, [0.0, 3, 2.5], "Production upgrade at the exact price")
+	_check(battle.upgrade_producer(side, timer.id, economy), "Accept an upgrade at the exact price.")
+	_check_state(economy, side, [0.0, 3, 3.5], "Production upgrade at the exact price")
+	_check(timer.interval(economy) == 2.5, "The paid building uses the shorter cycle.")
 	economy.advance(20.0)
-	_check(not economy.try_upgrade(side), "Reject a repeat upgrade with sufficient energy.")
-	_check_state(economy, side, [60.0, 3, 2.5], "Repeat upgrade")
+	_check(not battle.upgrade_producer(side, timer.id, economy), "Reject a repeat upgrade with sufficient energy.")
+	_check_state(economy, side, [60.0, 3, 3.5], "Repeat upgrade")
 	_check_state(economy, other_side, [240.0, 0, 3.5], "Other side after all purchases")
 
 
 func _test_atomic_purchases(side: MatchRegion.Owner, other_side: MatchRegion.Owner) -> void:
 	var economy := MatchEconomy.new()
+	var battle := MatchBattle.new(Vector2(-11, 0), Vector2(11, 0))
+	var timer := battle.add_barracks(side, Vector2(-8, -4))
 	_check(economy.cost_block_reason(side, {ENERGY: 40, MATERIALS: 31}) == "Need more materials"
 		and not economy.try_build(side, {ENERGY: 40, MATERIALS: 31}),
 		"Enough Energy alone cannot buy a building when Materials are short.")
@@ -92,12 +97,12 @@ func _test_atomic_purchases(side: MatchRegion.Owner, other_side: MatchRegion.Own
 	_check(economy.stockpile(side, ENERGY) == 1.5 and economy.stockpile(side, MATERIALS) == 1.0
 		and economy.stockpile(side, FOOD) == 0.5, "Purchases leave baseline income rates intact.")
 	economy.advance(20.0)
-	_check(economy.try_spend(side, {FOOD: 6}) and not economy.try_upgrade(side)
+	_check(economy.try_spend(side, {FOOD: 6}) and not battle.upgrade_producer(side, timer.id, economy)
 		and economy.energy(side) == 61.5 and economy.stockpile(side, FOOD) == 14.5
-		and not economy.has_upgrade(side), "A Food shortage prevents a production upgrade.")
+		and timer.level == 1, "A Food shortage prevents a production upgrade.")
 	economy.advance(0.5)
-	_check(economy.try_upgrade(side) and economy.energy(side) == 3.0
-		and economy.stockpile(side, FOOD) == 0.0 and economy.has_upgrade(side),
+	_check(battle.upgrade_producer(side, timer.id, economy) and economy.energy(side) == 3.0
+		and economy.stockpile(side, FOOD) == 0.0 and timer.level == 2,
 		"An upgrade spends Energy and Food together.")
 
 
@@ -132,7 +137,7 @@ func _test_match_controls() -> void:
 	await process_frame
 
 	var build: Button = match_scene.get_node("%Build")
-	var upgrade: Button = match_scene.get_node("%Upgrade")
+	var upgrade: Button = match_scene.get_node("%ProductionUpgrade")
 	var energy_label: Label = match_scene.get_node("%Resources/energy/Stockpile")
 	var income_label := match_scene.get_node("%Resources/energy/Rate") as Label
 	var materials_label := match_scene.get_node("%Resources/materials/Stockpile") as Label
@@ -151,7 +156,7 @@ func _test_match_controls() -> void:
 			income_label.text, match_scene.get_node("%Resources/materials/Rate").text,
 			match_scene.get_node("%Resources/food/Rate").text,
 		])
-	_check(not build.disabled and upgrade.disabled, "Only Build is affordable at startup.")
+	_check(not build.disabled and upgrade.disabled, "Build is available and no producer is selected at startup.")
 	var food_readout := food_label.get_parent() as Control
 	match_scene.economy.set_income_source(PLAYER, FOOD, &"bonus", "Supply bonus", 0.5)
 	match_scene._process(0.0)
@@ -202,13 +207,20 @@ func _test_match_controls() -> void:
 		"Placement updates the HUD immediately and exits placement mode.")
 
 	match_scene._process(17.0)
+	var first := ScoutFixture.barracks(match_scene._battle, PLAYER)
+	match_scene._select_fortification(first.id)
+	await process_frame
+	await process_frame
+	var context := match_scene.get_node("%ContextScroll") as ScrollContainer
+	context.ensure_control_visible(upgrade)
+	await process_frame
 	_check(energy_label.text == "Energy 61" and materials_label.text == "Materials 44"
 		and food_label.text == "Food 21" and not upgrade.disabled,
 		"Income and unit costs refresh the HUD and enable Upgrade.")
 	_click(upgrade)
-	_check_state(match_scene.economy, PLAYER, [1.0, 1, 2.5], "Upgrade button")
+	_check_state(match_scene.economy, PLAYER, [1.0, 1, 3.5], "Upgrade button")
 	_check(energy_label.text == "Energy 1" and food_label.text == "Food 6"
-		and upgrade.disabled and upgrade.text == "Barracks upgraded",
+		and upgrade.disabled and upgrade.text == "Production upgrade installed" and first.level == 2,
 		"Upgrade updates the HUD immediately.")
 
 	_check(cpu_buildings.get_child_count() >= 2 and match_scene.economy.barracks_count(CPU) >= 1,
@@ -217,7 +229,7 @@ func _test_match_controls() -> void:
 	await _choose_barracks(build)
 	var second_position := Vector3(-12.73, 0.0, 5.0)
 	await _click_world(second_position)
-	_check_state(match_scene.economy, PLAYER, [0.0, 2, 2.5], "Second placed barracks")
+	_check_state(match_scene.economy, PLAYER, [0.0, 2, 3.5], "Second placed barracks")
 	_check(_building_at(player_buildings, second_position)
 		and not build.disabled
 		and match_scene._build_options[&"barracks"].disabled and upgrade.disabled,
@@ -435,11 +447,12 @@ func _test_build_navigation() -> void:
 	var generator: Button = scene._build_options[&"generator"]
 	var wall: Button = scene._build_options[&"wall"]
 	_check(list.get_child(0).name == &"economy" and list.get_child(1).name == &"military"
-		and list.get_child(2).name == &"fortifications" and list.get_child_count() == 3
+		and list.get_child(2).name == &"fortifications" and list.get_child(3).name == &"strategic"
+		and list.get_child_count() == 4
 		and root.gui_get_focus_owner() == generator
 		and scroll.get_global_rect().encloses(generator.get_global_rect()),
-		"The ordered sections omit empty Other and focus the first eligible entry.")
-	for step in 8:
+		"The ordered sections include Strategic and focus the first eligible entry.")
+	for step in scene._build_options.values().filter(func(option: Button) -> bool: return not option.disabled).size() - 1:
 		_press_key(KEY_DOWN)
 		await process_frame
 	var offset := scroll.scroll_vertical
@@ -488,7 +501,7 @@ func _choose_barracks(build: Button) -> void:
 	var option: Button = scene._build_options[&"barracks"]
 	await process_frame
 	await process_frame
-	_check(list.is_visible_in_tree() and list.get_child_count() == 3 and scene._build_options.size() == scene.BUILDINGS.size()
+	_check(list.is_visible_in_tree() and list.get_child_count() == 4 and scene._build_options.size() == scene.BUILDINGS.size()
 		and option.text.begins_with("Barracks · 40 Energy + 20 Materials\nInfantry every ")
 		and option.text.ends_with("s · 4 Food per unit"),
 		"Build opens the catalog menu with the configured price.")
@@ -600,10 +613,13 @@ func _test_symmetric_production() -> void:
 			match_scene, TerritoryLayout.CPU_START, &"farm", CPU)),
 		"Both sides add Food income at 16 seconds.")
 	match_scene._process(14.0)
-	_check(match_scene.try_upgrade(PLAYER) and match_scene.try_upgrade(CPU),
-		"Both factions can buy the same upgrade at 30 seconds.")
-	match_scene._process(0.0)
-	_check(produced.size() == 28, "Both upgrades preserve elapsed production time.")
+	for side in [PLAYER, CPU]:
+		match_scene.economy.grant_resource(side, ENERGY, 80)
+		for timer: MatchBattle.ProductionTimer in match_scene._battle._timers:
+			if timer.side == side:
+				_check(match_scene.try_upgrade(side, timer.id), "Both factions can upgrade each building individually.")
+	match_scene._advance_simulation(0.0)
+	_check(produced.size() == 28, "All purchased upgrades preserve elapsed production time.")
 	match_scene._process(2.25)
 	_check(produced.size() == 28, "Upgraded barracks wait for the 2.5-second interval.")
 	match_scene._process(0.25)
@@ -652,7 +668,11 @@ func _test_expanded_production() -> void:
 		_check(scene.owns_region(timer.side, scene.region_at_world_position(scene._world_position(timer.position))),
 			"Every barracks belongs to the faction that owns its placement point.")
 
-	_check(scene.try_upgrade(PLAYER) and scene.try_upgrade(CPU), "Both factions fund their upgrade.")
+	for side in [PLAYER, CPU]:
+		economy.grant_resource(side, ENERGY, 100)
+		for timer: MatchBattle.ProductionTimer in battle._timers:
+			if timer.side == side:
+				_check(scene.try_upgrade(side, timer.id), "Both factions fund each Barracks upgrade.")
 	var deployments := {PLAYER: 0, CPU: 0}
 	var unit_ids := {}
 	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
@@ -679,7 +699,7 @@ func _test_expanded_production() -> void:
 	scene.set_process(false)
 	for side in [PLAYER, CPU]:
 		_check(scene.economy.barracks_count(side) == 0 and scene._battle.active_barracks_count(side) == 0
-			and not scene.economy.has_upgrade(side)
+			and scene._battle._timers.is_empty()
 			and _stockpiles(scene.economy, side) == {ENERGY: 50.0, MATERIALS: 30.0, FOOD: 20.0}
 			and scene._buildings[side].get_child_count() == 0,
 			"Restart clears expanded production and restores the starting economy for both factions.")

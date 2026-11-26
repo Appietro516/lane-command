@@ -6,6 +6,7 @@ const Probe := preload("res://tests/performance/navigation_probe.gd")
 const MATCH := preload("res://main.tscn")
 const Fortifications := preload("res://match/fortification_rules.gd")
 const SEED := 17
+const ORIGINAL_ROSTER := [UnitCatalog.INFANTRY, UnitCatalog.RANGED, UnitCatalog.HEAVY]
 const BOUNDS := Rect2(-30, -18, 60, 36)
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
@@ -90,7 +91,7 @@ func _run_matrix_case(obstacles: int, unit_count: int, targeting_only: bool) -> 
 		if battle._military_count[side] >= MatchBattle.MILITARY_UNIT_CAP:
 			battle._military_count[side] = 0
 		var unit := battle.spawn_unit(side, Vector2(-18 * direction, lane),
-			UnitCatalog.COMBAT_TYPES[floori(i / 2.0) % UnitCatalog.COMBAT_TYPES.size()])
+			ORIGINAL_ROSTER[floori(i / 2.0) % ORIGINAL_ROSTER.size()])
 		_expect(unit != null, "Matrix unit spawn")
 		units.append(unit)
 

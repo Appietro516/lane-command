@@ -235,7 +235,7 @@ func _prepare_expansion(scene: Node) -> void:
 	var point := region.interior_point(func(site: Vector2) -> bool:
 		return scene._placement_block_reason(CPU, &"barracks", scene._world_position(site)).is_empty())
 	_check(point.is_finite() and scene.try_place_building(CPU, &"barracks", scene._world_position(point))
-		and scene.try_upgrade(CPU), "The scout fixture buys production and the upgrade at the shared prices.")
+		and scene.try_upgrade(CPU, ScoutFixture.barracks(scene._battle, CPU).id), "The scout fixture buys production and the upgrade at the shared prices.")
 	var battle: MatchBattle = scene._battle
 	battle.spawn_unit(CPU, battle._bases[CPU] + Vector2(2.0, 1.0), Catalog.INFANTRY)
 

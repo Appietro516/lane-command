@@ -61,6 +61,8 @@ var revision := 0
 var _bounds: Rect2
 var _boundary: PackedVector2Array
 var _boundary_clearance: float
+var _boundary_center: Vector2
+var _inner_radius_squared := -1.0
 var _obstacles: Dictionary[int, Obstacle] = {}
 var _next_obstacle_id := 0
 var _obstacle_tree: ObstacleBranch
@@ -79,6 +81,15 @@ func _init(bounds: Rect2, boundary := PackedVector2Array(), boundary_clearance :
 	_bounds = bounds
 	_boundary = boundary
 	_boundary_clearance = boundary_clearance
+	if not _boundary.is_empty():
+		_boundary_center = bounds.get_center()
+		var radius := INF
+		for i in _boundary.size():
+			var edge := _boundary[(i + 1) % _boundary.size()] - _boundary[i]
+			if not edge.is_zero_approx():
+				radius = minf(radius, edge.cross(_boundary_center - _boundary[i]) / edge.length())
+		if is_finite(radius) and radius > boundary_clearance:
+			_inner_radius_squared = (radius - boundary_clearance) ** 2
 
 
 func add_obstacle(footprint: Rect2, angle := 0.0) -> int:
@@ -139,6 +150,8 @@ func reachable_without_obstacle(start: Vector2, end: Vector2, clearance: float,
 func contains(point: Vector2) -> bool:
 	if _boundary.is_empty():
 		return point.is_finite() and _bounds.has_point(point)
+	if _boundary_center.distance_squared_to(point) <= _inner_radius_squared:
+		return true
 	return MapSettings.contains_in(_boundary, point, _boundary_clearance)
 
 

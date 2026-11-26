@@ -20,6 +20,9 @@ const WALL_BYPASS := Vector2(0.45, 0.18)
 const MIN_MORTAR_TARGETS := 2
 const MIN_WALL_TARGETS := 2
 const CLAIM_INTERRUPTION_RETRY := 24.0
+const SILO_MIN_TIME := 100.0
+const SILO_MIN_VALUE := 12.0
+const SILO_SITE_BUDGET := 18
 
 
 class Production:
@@ -29,9 +32,10 @@ class Production:
 	var opposition := {}
 	var food_per_cycle := 0
 	var food_per_second := 0.0
-	var upgraded_food_per_second := 0.0
+	var upgraded := 0
+	var upgrade_candidate: MatchBattle.ProductionTimer
 
-	func _init(battle: MatchBattle, economy: MatchEconomy, upgraded_interval: float, side: MatchRegion.Owner) -> void:
+	func _init(battle: MatchBattle, economy: MatchEconomy, side: MatchRegion.Owner) -> void:
 		for timer in battle._timers:
 			if timer.hp <= 0.0:
 				continue
@@ -48,7 +52,11 @@ class Production:
 			var interval := timer.interval(economy)
 			food_per_cycle += food
 			food_per_second += food / interval
-			upgraded_food_per_second += food / (upgraded_interval if timer.kind == BARRACKS else interval)
+			if timer.level == 2:
+				upgraded += 1
+			if timer.level == 1 and (upgrade_candidate == null or (timer.kind == BARRACKS
+					and upgrade_candidate.kind != BARRACKS)):
+				upgrade_candidate = timer
 
 
 var side: MatchRegion.Owner
@@ -98,7 +106,7 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 			claims += 1
 		for id in region.neighbor_ids:
 			var neighbor: MatchRegion = scene.get_region(id)
-			if neighbor.region_owner == NEUTRAL:
+			if neighbor.region_owner == NEUTRAL and not neighbor.ruined:
 				frontiers[id] = neighbor
 
 	var sites := owned.duplicate()
@@ -106,12 +114,7 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 		return _site(a).distance_squared_to(base) < _site(b).distance_squared_to(base))
 
 	var catalog: Dictionary = scene.BUILDINGS
-	var upgrade := not economy.has_upgrade(side)
-	var upgraded_interval := economy.production_interval(side)
-	if upgrade:
-		upgraded_interval = economy.stats.value(side, FactionStats.BARRACKS_INTERVAL,
-			MatchEconomy.UPGRADED_PRODUCTION_INTERVAL)
-	var production := Production.new(battle, economy, upgraded_interval, side)
+	var production := Production.new(battle, economy, side)
 	var food_rate := economy.income_rate(side, FOOD)
 	var food_stock := economy.stockpile(side, FOOD)
 	var allies := {}
@@ -153,17 +156,25 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 			and _build_military(scene, options, food_producer, sites, now)):
 		return
 
-	if upgrade and production.active >= opening_goal and production.counts.has(BARRACKS):
-		if (food_rate < production.upgraded_food_per_second and production.active > 1
-				and _want_build(scene, food_producer, sites, now)):
+	var upgrade := production.upgrade_candidate
+	if upgrade != null and production.active >= opening_goal:
+		var food: int = UnitCatalog.DEFINITIONS[upgrade.unit_type].food
+		var upgraded_demand := production.food_per_second + food * (
+			1.0 / upgrade.cycle_interval(economy, 2) - 1.0 / upgrade.interval(economy))
+		var first_upgrade := production.upgraded == 0
+		if first_upgrade and food_rate < upgraded_demand and production.active > 1 \
+				and _want_build(scene, food_producer, sites, now):
 			return
-		if (food_rate >= production.upgraded_food_per_second
-				and food_stock >= MatchEconomy.UPGRADE_COST[FOOD] + production.food_per_cycle):
-			if scene.try_upgrade(side):
+		if (first_upgrade or (now >= 65.0 and production.active >= scene.cpu_production_target)) \
+				and food_rate >= upgraded_demand and food_stock >= MatchEconomy.UPGRADE_COST[FOOD] + production.food_per_cycle:
+			if scene.try_upgrade(side, upgrade.id):
 				return
 			# Accumulate the upgrade's Energy before competing purchases.
-			if not is_inf(_save_time(economy, MatchEconomy.UPGRADE_COST)):
+			if first_upgrade and not is_inf(_save_time(economy, MatchEconomy.UPGRADE_COST)):
 				return
+
+	if _try_strategic_strike(scene, sites, units, production, under_pressure, now):
+		return
 
 	var production_goal: int = maxi(scene.cpu_production_target, owned.size() + 1)
 	# Reserve an extra slot under pressure for numerical or matchup disadvantages.
@@ -203,6 +214,81 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 		_build_military(scene, options, food_producer, sites, now)
 
 
+func _try_strategic_strike(scene: Node3D, sites: Array[MatchRegion], units: Array[MatchBattle.Unit],
+		production: Production, under_pressure: bool, now: float) -> bool:
+	var battle: MatchBattle = scene._battle
+	var ready: MatchBattle.MissileSilo
+	for structure in battle._fortifications.values():
+		var silo := structure as MatchBattle.MissileSilo
+		if silo == null or silo.side != side or silo.hp <= 0.0:
+			continue
+		match silo.missile_state:
+			MatchBattle.MissileState.CHARGING:
+				return false
+			MatchBattle.MissileState.READY:
+				if silo.active:
+					ready = silo
+	if ready == null:
+		if now < SILO_MIN_TIME or under_pressure or production.active < 3 \
+				or now < _retry_at.get(Rules.SILO, 0.0) or not scene._has_building_capacity(side, Rules.SILO):
+			return false
+		var reserve: Dictionary = Rules.PROFILES[Rules.SILO].cost.duplicate()
+		reserve[FOOD] += production.food_per_cycle * 2
+		reserve[ENERGY] += 40
+		reserve[MATERIALS] += 25
+		if not scene.economy.cost_block_reason(side, reserve).is_empty():
+			return false
+	var best := _missile_target(battle, units)
+	if not best.is_finite():
+		return false
+	if ready != null:
+		return battle.prepare_missile(side, ready.id, best)
+	return _want_build(scene, Rules.SILO, sites, now)
+
+
+func _missile_target(battle: MatchBattle, units: Array[MatchBattle.Unit]) -> Vector2:
+	var candidates := PackedVector2Array()
+	for owner in battle._base_obstacles:
+		if owner != side:
+			candidates.append(battle._bases[owner])
+	for outpost in battle._outposts.values():
+		if candidates.size() >= SILO_SITE_BUDGET:
+			break
+		if outpost.side != side and outpost.hp > 0.0:
+			candidates.append(outpost.position)
+	for unit in units:
+		if candidates.size() >= SILO_SITE_BUDGET:
+			break
+		if unit.side != side and unit.hp > 0.0 and unit.type_id != UnitCatalog.SCOUT:
+			candidates.append(unit.position)
+	var best := Vector2.INF
+	var best_score := SILO_MIN_VALUE
+	for target in candidates:
+		var score := 0.0
+		var loses_base := false
+		for owner in battle._base_obstacles:
+			if not Rules.blast_hits(target, battle._bases[owner], MatchBattle.BASE_FOOTPRINT * 2.0):
+				continue
+			loses_base = loses_base or owner == side
+			score += 16.0 + battle.base_hp(owner) * 0.08
+		if loses_base:
+			continue
+		for outpost in battle._outposts.values():
+			if Rules.blast_hits(target, outpost.position, MatchBattle.OUTPOST_FOOTPRINT * 2.0):
+				score += -8.0 if outpost.side == side else 4.0
+		for fort in battle._fortifications.values():
+			if fort.hp > 0.0 and Rules.blast_hits(target, fort.position, fort.profile.size, fort.angle):
+				score += -6.0 if fort.side == side else 2.5
+		for unit in battle.nearby_units(units, target, Rules.MISSILE_RADIUS):
+			if unit.hp <= 0.0 or unit.position.distance_squared_to(target) > Rules.MISSILE_RADIUS ** 2:
+				continue
+			score += -2.0 if unit.side == side else 1.0
+		if score > best_score:
+			best = target
+			best_score = score
+	return best
+
+
 func _build_military(scene: Node3D, options: Array[Dictionary], food_producer: StringName,
 		sites: Array[MatchRegion], now: float) -> bool:
 	var can_feed_more := false
@@ -237,7 +323,12 @@ func _military_options(scene: Node3D, production: Production, allies: Dictionary
 		if not profile.has("unit_type"):
 			continue
 		var type: StringName = profile.unit_type
-		var matchup := _matchup(UnitCatalog.DEFINITIONS[type], opposition, covered)
+		var unit: Dictionary = UnitCatalog.DEFINITIONS[type]
+		var matchup := _matchup(unit, opposition, covered)
+		if unit.has("support"):
+			var healers: int = allies.get(type, 0)
+			var supported := army - healers
+			matchup = 0.3 * minf(1.0, supported / 10.0) - 0.24 * healers
 		scores[kind] = matchup
 		if production.active > 0:
 			installed_matchup += matchup * production.counts.get(kind, 0) / production.active
@@ -255,6 +346,12 @@ func _military_options(scene: Node3D, production: Production, allies: Dictionary
 			continue
 		var profile: Dictionary = scene.BUILDINGS[kind]
 		var unit: Dictionary = UnitCatalog.DEFINITIONS[profile.unit_type]
+		var deployed: int = allies.get(profile.unit_type, 0)
+		if unit.has("support") and (army < 8 or production.counts.has(kind) or deployed * 6 >= army):
+			continue
+		if profile.unit_type == UnitCatalog.RAIDER and (not opposition.has(UnitCatalog.INFANTRY)
+				or production.counts.get(kind, 0) >= 2):
+			continue
 		var interval: float = economy.production_interval(side) if kind == BARRACKS else profile.interval
 		var wait := _save_time(economy, profile.cost)
 		if is_inf(wait):
@@ -295,13 +392,18 @@ func _save_time(economy: MatchEconomy, cost: Dictionary) -> float:
 
 
 func _matchup(unit: Dictionary, opposition: Dictionary, covered: bool) -> float:
-	var total := 0
+	var total := 0.0
 	var score := 0.0
-	var dps: float = unit.damage / unit.cooldown
+	if unit.damage <= 0.0:
+		return 0.0
 	for type: StringName in opposition:
 		var enemy: Dictionary = UnitCatalog.DEFINITIONS[type]
-		var count: int = opposition[type]
-		var enemy_dps: float = enemy.damage / enemy.cooldown
+		if enemy.damage <= 0.0:
+			continue
+		var count: float = opposition[type]
+		var class_bonus := UnitCatalog.damage_multiplier(unit, enemy)
+		var dps: float = unit.damage * class_bonus / unit.cooldown
+		var enemy_dps: float = enemy.damage * UnitCatalog.damage_multiplier(enemy, unit) / enemy.cooldown
 		# Estimate time to defeat each other, including time spent closing to weapon range.
 		var reach: float = unit.range - enemy.range
 		var attack_time: float = enemy.hp / dps + maxf(0.0, -reach) / unit.speed
@@ -312,9 +414,10 @@ func _matchup(unit: Dictionary, opposition: Dictionary, covered: bool) -> float:
 			# attack from behind the front.
 			survival_time += reach / enemy.speed
 			support = reach / (unit.range + enemy.range)
-		score += count * ((survival_time - attack_time) / (survival_time + attack_time) + support)
+		score += count * ((survival_time - attack_time) / (survival_time + attack_time)
+			+ support + (class_bonus - 1.0) * 0.6)
 		total += count
-	return score / maxi(1, total)
+	return score / maxf(1.0, total)
 
 
 func _producer_for(catalog: Dictionary, resource: StringName) -> StringName:
@@ -347,6 +450,10 @@ func _want_build(scene: Node3D, kind: StringName, regions: Array[MatchRegion], n
 	for i in range(mini(available.size(), REGION_SITE_BUDGET)):
 		var region := available[(start + i) % available.size()]
 		var center := _site(region)
+		if kind == Rules.SILO:
+			if _place_large_structure(scene, kind, region, size):
+				return true
+			continue
 		for attempt in range(difficulty.site_samples):
 			var edge := _rng.randi_range(0, region.polygon.size() - 1)
 			var rim := region.polygon[edge].lerp(
@@ -362,6 +469,14 @@ func _want_build(scene: Node3D, kind: StringName, regions: Array[MatchRegion], n
 				return true
 	_retry_at[kind] = now + scene.cpu_placement_retry
 	return false
+
+
+func _place_large_structure(scene: Node3D, kind: StringName, region: MatchRegion, size: Vector2) -> bool:
+	if region.map_bounds.size.x < size.x or region.map_bounds.size.y < size.y:
+		return false
+	var point := region.interior_point(func(candidate: Vector2) -> bool:
+		return scene._placement_block_reason(side, kind, scene._world_position(candidate)).is_empty())
+	return point.is_finite() and scene.try_place_building(side, kind, scene._world_position(point))
 
 
 func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle.Unit]) -> Array[CpuTactics.Threat]:
@@ -416,6 +531,8 @@ func _defend(scene: Node3D, threats: Array[CpuTactics.Threat], unit_buffer: int,
 			if fort.side == side and fort.active and threat.region.region_id in placed.regions:
 				counts[fort.kind] = counts.get(fort.kind, 0) + 1
 		var kinds: Array[StringName] = [Rules.NEST]
+		if threat.composition.get(UnitCatalog.HEAVY, 0) >= 2:
+			kinds.push_front(Rules.ANTI_TANK)
 		if threat.enemies.size() >= maxi(MIN_WALL_TARGETS, threat.allies) and counts.has(Rules.NEST):
 			kinds.append(Rules.WALL)
 		if threat.enemies.size() >= MIN_MORTAR_TARGETS:
@@ -462,7 +579,7 @@ func _try_gun(scene: Node3D, kind: StringName, threat: CpuTactics.Threat) -> boo
 				targets_checked += 1
 				if targets_checked > GUN_TARGET_BUDGET:
 					break
-				if kind == Rules.NEST and not scene._battle.navigation.line_clear(point, enemy):
+				if profile.splash == 0.0 and not battle.navigation.line_clear(point, enemy):
 					continue
 				score += 1.0 + (1.0 - point.distance_to(enemy) / profile.range) * 0.15
 			if score <= 0.0:

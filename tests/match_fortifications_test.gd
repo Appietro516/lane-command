@@ -160,10 +160,15 @@ func _test_catalog_and_drag(scene: Node) -> void:
 	_check(wall.is_visible_in_tree() and not wall.disabled and mortar.disabled,
 		"The minimum-cost wall stays available while an unaffordable mortar is disabled.")
 	var before := _stock(scene.economy)
+	var scroll := scene.get_node("%BuildScroll") as ScrollContainer
+	scroll.ensure_control_visible(mortar)
+	await process_frame
 	_click(mortar.get_global_rect().get_center())
 	_check(menu.visible and scene._placement_id == &"" and _stock(scene.economy) == before
 		and scene._selected_region_id == TerritoryLayout.PLAYER_START,
 		"A disabled tile consumes input and leaves placement, resources and map selection alone.")
+	scroll.ensure_control_visible(wall)
+	await process_frame
 	_click(wall.get_global_rect().get_center())
 	var start := Vector3(-13, 0, -4)
 	var too_long := Vector3(-13, 0, -0.5)

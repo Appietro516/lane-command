@@ -296,7 +296,7 @@ func _prepare(scene: Node) -> void:
 	var point := base.interior_point(func(site: Vector2) -> bool:
 		return scene._placement_block_reason(CPU, &"barracks", scene._world_position(site)).is_empty())
 	_check(point.is_finite() and scene.try_place_building(CPU, &"barracks", scene._world_position(point))
-		and scene.try_upgrade(CPU), "The fixture buys the opening producer and upgrade.")
+		and scene.try_upgrade(CPU, Scouts.barracks(scene._battle, CPU).id), "The fixture buys the opening producer and upgrade.")
 	var battle: MatchBattle = scene._battle
 	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
 		unit.order = MatchBattle.Order.HOLD

@@ -18,7 +18,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_test_deployment_and_buffs()
-	for type_id: StringName in Catalog.COMBAT_TYPES:
+	for type_id: StringName in Catalog.OFFENSIVE_TYPES:
 		_test_attack_range_and_cooldown(type_id)
 		_test_structures(type_id)
 		_test_orders_and_wall(type_id)
@@ -49,6 +49,7 @@ func _test_deployment_and_buffs() -> void:
 		stats.set_modifier(&"training", side, FactionStats.UNIT_DPS, 1.0)
 		stats.set_modifier(&"training", side, FactionStats.UNIT_SPEED, 0.5)
 		stats.set_modifier(&"training", side, FactionStats.UNIT_MAX_HP, 4.0)
+		economy.grant_resource(side, MatchEconomy.FOOD, 11)
 		var stock := economy.stockpile(side, MatchEconomy.FOOD)
 		var base := PLAYER_BASE if side == PLAYER else CPU_BASE
 		_check(battle.spawn_unit(side, base, Catalog.INFANTRY, economy) == null
@@ -78,7 +79,7 @@ func _test_deployment_and_buffs() -> void:
 			if unit.side == side:
 				_check(unit.hp == unit.definition.hp, "Removing a HP buff clamps %s." % unit.type_id)
 
-	_check(deployed.size() == 6 and battle.active_units() == deployed,
+	_check(deployed.size() == Catalog.COMBAT_TYPES.size() * 2 and battle.active_units() == deployed,
 		"Only successful spawns register and emit deployment.")
 
 
@@ -208,7 +209,7 @@ func _test_delta_partition() -> void:
 		for type_id: StringName in Catalog.COMBAT_TYPES:
 			battle.spawn_unit(PLAYER, Vector2(-4.0, lane), type_id)
 			battle.spawn_unit(CPU, Vector2(4.0, lane), type_id)
-			lane += 5.0
+			lane += 2.5
 	var economy := MatchEconomy.new()
 	whole.advance(3.51, economy)
 	for delta in [0.13, 1.83, 0.21, 1.34]:
@@ -241,14 +242,15 @@ func _test_selection_and_restart() -> void:
 		var stats: Label = scene.get_node("%UnitStats")
 		_check(scene.selected_unit() == unit and scene.get_node("%UnitInspection").visible
 			and scene.get_node("%UnitName").text == "Player %s #%d" % [profile.label, unit.id]
-			and stats.text.contains("Range  %s" % profile.range)
-			and stats.text.contains("Cooldown  %ss" % String.num(profile.cooldown, 2).trim_suffix(".0")),
+			and ("Heal  " in stats.text if type_id == Catalog.MEDIC else (
+				stats.text.contains("Range  %s" % profile.range)
+				and stats.text.contains("Cooldown  %ss" % String.num(profile.cooldown, 2).trim_suffix(".0")))),
 			"Clicking %s identifies its type and weapon stats." % type_id)
 		_click(camera.unproject_position(Vector3(x, 0.0, 1.0)), MOUSE_BUTTON_RIGHT)
 		_check(unit.order == MatchBattle.Order.MOVE and
 			scene.get_node("%UnitIntent").text.contains("Order  Move"),
 			"The selected %s accepts a move order through the scene." % type_id)
-		x += 3.0
+		x += 2.0
 	scene.restart_match()
 	scene.set_process(false)
 	_check(scene.selected_unit() == null and scene.get_node("Units").get_child_count() == 4

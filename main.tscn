@@ -151,7 +151,15 @@ theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
 theme_override_font_sizes/font_size = 14
 horizontal_alignment = 1
 
+[node name="MissileWarning" type="Label" parent="HUD/TopBar/MatchPanel/StatusAndRestart/MatchControls"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.69, 0.43, 1)
+theme_override_font_sizes/font_size = 15
+
 [node name="ScoutRoster" type="PanelContainer" parent="HUD/TopBar"]
+mouse_force_pass_scroll_events = false
 layout_mode = 2
 size_flags_horizontal = 0
 theme_override_styles/panel = SubResource("StyleBox_hud")
@@ -179,6 +187,7 @@ theme_override_font_sizes/font_size = 14
 autowrap_mode = 3
 
 [node name="Overview" type="Button" parent="HUD/TopBar/ScoutRoster/ScoutAndCamera"]
+mouse_force_pass_scroll_events = false
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 4
@@ -287,6 +296,18 @@ tooltip_text = "Clear unit or building selection (Esc)"
 unique_name_in_owner = true
 layout_mode = 2
 autowrap_mode = 3
+
+[node name="ProductionUpgrade" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="TargetMissile" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+text = "Target missile"
 
 [node name="Divider" type="HSeparator" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 layout_mode = 2
@@ -454,12 +475,6 @@ custom_minimum_size = Vector2(108, 52)
 layout_mode = 2
 theme_override_font_sizes/font_size = 18
 text = "Build"
-
-[node name="Upgrade" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls/Actions"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(164, 52)
-layout_mode = 2
-theme_override_font_sizes/font_size = 15
 
 [node name="IncomeSources" type="PanelContainer" parent="HUD"]
 unique_name_in_owner = true

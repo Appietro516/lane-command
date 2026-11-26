@@ -96,6 +96,8 @@ func eligibility(side: MatchRegion.Owner, region_id: StringName) -> String:
 	var region := _regions.get(region_id) as MatchRegion
 	if region == null:
 		return "Select a region"
+	if region.ruined:
+		return "Permanently ruined"
 	if region.region_owner != MatchRegion.Owner.NEUTRAL:
 		return MatchRegion.side_label(region.region_owner, slots.size() > 2) + "-owned"
 	if _battle.is_finished():

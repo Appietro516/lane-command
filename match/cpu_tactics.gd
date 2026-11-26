@@ -12,7 +12,7 @@ const RESERVE_TIME := 12.0
 const ROUTE_RETRY := 6.0
 const ORDER_ANGLES := [0.0, PI / 4.0, -PI / 4.0, PI / 2.0, -PI / 2.0]
 
-enum Role { RESERVE, DEFEND, ASSAULT }
+enum Role { RESERVE, DEFEND, ASSAULT, INTERCEPT }
 
 
 class Threat:
@@ -104,6 +104,7 @@ func decide(scene: Node3D, side: MatchRegion.Owner, difficulty: Dictionary, owne
 		var post := Assignment.new(Role.RESERVE, rally.region_id, anchor)
 		_staff_post(battle, side, available, post, rally, goal, reserve_size, false, now)
 
+	_intercept_launches(battle, side, available)
 	_attack(scene, side, difficulty, available, enemies, objective, now)
 
 
@@ -185,6 +186,56 @@ func _find_post(battle: MatchBattle, side: MatchRegion.Owner, unit: MatchBattle.
 			if battle.order_hold(side, unit.id, point):
 				return point
 	return Vector2.INF
+
+
+func _intercept_launches(battle: MatchBattle, side: MatchRegion.Owner,
+		available: Array[MatchBattle.Unit]) -> void:
+	if battle._charging_silos.is_empty():
+		return
+	var assigned := 0
+	var candidates := available.duplicate()
+	for unit in candidates:
+		var previous: Assignment = _assignments.get(unit.id)
+		if previous != null and previous.role == Role.INTERCEPT and _order_progresses(battle, unit):
+			var target: MatchBattle.MissileSilo = battle._charging_silos.get(previous.objective)
+			if target != null and target.side != side:
+				available.erase(unit)
+				assigned += 1
+	if assigned >= ASSAULT_SIZE:
+		return
+	for unit in available.duplicate():
+		if _orders_left <= 0 or assigned >= ASSAULT_SIZE:
+			break
+		if unit.definition.damage <= 0.0:
+			continue
+		var nearest: MatchBattle.MissileSilo
+		var best_time := INF
+		for silo: MatchBattle.MissileSilo in battle._charging_silos.values():
+			if silo.side == side or silo.hp <= 0.0:
+				continue
+			var reach := silo.unit_attack_range(unit.definition.range)
+			var eta: float = maxf(0.0, unit.position.distance_to(silo.position) - reach) / unit.definition.speed
+			if eta < best_time and eta + 1.0 < silo.launches_at - battle.elapsed_time():
+				nearest = silo
+				best_time = eta
+		if nearest == null:
+			continue
+		var reach := nearest.unit_attack_range(unit.definition.range)
+		var direction := nearest.position.direction_to(unit.position)
+		for angle: float in ORDER_ANGLES:
+			var point := nearest.position + direction.rotated(angle) * (reach - 0.02)
+			if not battle.navigation.line_clear(point, nearest.position, nearest.obstacle):
+				continue
+			_orders_left -= 1
+			if battle.order_hold(side, unit.id, point):
+				var assignment := Assignment.new(Role.INTERCEPT, &"", nearest.position)
+				assignment.objective = nearest.id
+				_assignments[unit.id] = assignment
+				available.erase(unit)
+				assigned += 1
+				break
+			if _orders_left <= 0:
+				break
 
 
 func _attack(scene: Node3D, side: MatchRegion.Owner, difficulty: Dictionary,

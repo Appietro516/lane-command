@@ -1,0 +1,28 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://match/unit.tscn" id="1_unit"]
+
+[sub_resource type="StandardMaterial3D" id="Dark"]
+shading_mode = 0
+albedo_color = Color(0.055, 0.09, 0.1, 1)
+
+[sub_resource type="PrismMesh" id="Outline"]
+material = SubResource("Dark")
+size = Vector3(0.78, 1.06, 0.14)
+
+[sub_resource type="PrismMesh" id="Dart"]
+size = Vector3(0.59, 0.87, 0.22)
+
+[sub_resource type="BoxMesh" id="Stripe"]
+material = SubResource("Dark")
+size = Vector3(0.38, 0.08, 0.04)
+
+[node name="Raider" instance=ExtResource("1_unit")]
+mesh = SubResource("Dart")
+
+[node name="Outline" parent="." index="0"]
+mesh = SubResource("Outline")
+
+[node name="Stripe" type="MeshInstance3D" parent="." index="1"]
+position = Vector3(0, -0.18, -0.12)
+mesh = SubResource("Stripe")

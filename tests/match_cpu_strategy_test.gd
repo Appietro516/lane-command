@@ -55,9 +55,13 @@ func _run() -> void:
 	_test_threat_opening(scene, Catalog.RANGED, true, &"heavy_factory")
 	_test_threat_opening(scene, Catalog.HEAVY, false, &"heavy_factory")
 	_test_threat_opening(scene, Catalog.HEAVY, true, &"training_range")
+	_test_threat_opening(scene, Catalog.INFANTRY, false, &"raider_camp")
+	_test_threat_opening(scene, Catalog.RAIDER, true, &"training_range")
 	_test_existing_force(scene, Catalog.INFANTRY, &"heavy_factory")
 	_test_existing_force(scene, Catalog.HEAVY, &"barracks")
+	_test_existing_force(scene, Catalog.INFANTRY, &"aid_station", 10)
 	_test_military_recovery(scene)
+	_test_anti_tank_response(scene)
 	scene.free()
 	if _failures == 0:
 		print("Seeded CPU economy, mixed production, claims, defenses, recovery and restart passed.")
@@ -96,7 +100,7 @@ func _economy_match(scene: Node) -> Array:
 		var count := _structures(scene, kind).size()
 		_check(count >= 1 and count <= (1 if kind == &"mine" else 2),
 			"Resource demand results in enough %s without runaway duplication. Found %d." % [kind, count])
-	_check(battle.active_barracks_count(CPU) >= 1 and scene.economy.has_upgrade(CPU)
+	_check(battle.active_barracks_count(CPU) >= 1 and ScoutFixture.barracks(scene._battle, CPU).level == 2
 		and deployments.size() >= 24, "The CPU upgrades its Barracks and sustains deployments under normal income.")
 	_check(not scene._outposts_by_region.is_empty(), "The CPU buys an outpost on the expanded map.")
 	_check(_structures(scene, Rules.NEST).is_empty() and _structures(scene, Rules.MORTAR).is_empty()
@@ -104,8 +108,9 @@ func _economy_match(scene: Node) -> Array:
 	_check(scene._outposts_by_region.size() <= scene.cpu_expansion_limit, "The expansion limit bounds claims.")
 	# Larger producers need the next round of economic investment and a clear site.
 	scene._process(40.0)
-	_check(deployed_types.size() == Catalog.COMBAT_TYPES.size(),
-		"The seeded CPU deploys every roster type through construction. Deployed %s." % [deployed_types.keys()])
+	_check(deployed_types.has(Catalog.INFANTRY) and deployed_types.has(Catalog.RANGED)
+		and deployed_types.has(Catalog.HEAVY) and not deployed_types.has(Catalog.RAIDER),
+		"A peaceful economy deploys its original combined-arms roster and saves Raiders for infantry threats.")
 	var food_demand := 0.0
 	for timer in battle._timers:
 		if timer.side == CPU and timer.active:
@@ -159,7 +164,7 @@ func _test_losses(scene: Node) -> void:
 
 
 func _test_defense(scene: Node) -> void:
-	var shots := Pressure.exercise(scene)
+	var shots := Pressure.exercise(scene, 14)
 	for kind in [Rules.NEST, Rules.MORTAR]:
 		_check(_structures(scene, kind).size() == 1 and shots.has(kind)
 			and (shots.get(kind, []) as Array).has(true),
@@ -248,13 +253,13 @@ func _test_threat_opening(scene: Node, enemy_type: StringName, covered: bool, ex
 			- scene.BUILDINGS[expected].cost.get(resource, 0), "The specialized opening pays the shared price.")
 
 
-func _test_existing_force(scene: Node, allied_type: StringName, expected: StringName) -> void:
+func _test_existing_force(scene: Node, allied_type: StringName, expected: StringName, reinforcements := 5) -> void:
 	_prepare_military_case(scene)
 	_check(_place_cpu(scene, &"barracks") and _place_cpu(scene, &"training_range"),
 		"The existing force fixture starts with two kinds of producers.")
-	_check(scene.try_upgrade(CPU), "The existing force fixture has an upgraded Barracks.")
+	_check(scene.try_upgrade(CPU, ScoutFixture.barracks(scene._battle, CPU).id), "The existing force fixture has an upgraded Barracks.")
 	_seed_force(scene, CPU, Catalog.RANGED, 1)
-	_seed_force(scene, CPU, allied_type, 5)
+	_seed_force(scene, CPU, allied_type, reinforcements)
 	var count := _structures(scene, expected).size()
 	scene._try_cpu_purchase()
 	_check(_structures(scene, expected).size() == count + 1,
@@ -267,7 +272,7 @@ func _test_military_recovery(scene: Node) -> void:
 	scene.cpu_production_target = 2
 	scene.cpu_production_limit = 3
 	_check(_place_cpu(scene, &"barracks") and _place_cpu(scene, &"training_range")
-		and scene.try_upgrade(CPU), "The recovery fixture starts at its peacetime cap without Heavy production.")
+		and scene.try_upgrade(CPU, ScoutFixture.barracks(scene._battle, CPU).id), "The recovery fixture starts at its peacetime cap without Heavy production.")
 	_seed_force(scene, PLAYER, Catalog.RANGED, 4)
 	scene._process(2.0)
 	var factories := _structures(scene, &"heavy_factory")
@@ -289,6 +294,16 @@ func _test_military_recovery(scene: Node) -> void:
 		return unit.side == CPU and unit.type_id == Catalog.HEAVY),
 		"The replacement factory completes a normal Heavy deployment.")
 	_check_ownership(scene)
+
+
+func _test_anti_tank_response(scene: Node) -> void:
+	_prepare_military_case(scene)
+	_check(_place_cpu(scene, &"barracks"), "The armor-defense fixture can support a military opening.")
+	scene._cpu_strategy._next_defense = 0.0
+	_seed_force(scene, PLAYER, Catalog.HEAVY, 3)
+	scene._try_cpu_purchase()
+	_check(_structures(scene, Rules.ANTI_TANK).size() == 1,
+		"Several visible Heavy attackers prompt an anti-tank emplacement.")
 
 
 func _prepare_military_case(scene: Node) -> void:
@@ -315,6 +330,11 @@ func _seed_force(scene: Node, side: MatchRegion.Owner, type: StringName, count: 
 	for index in range(count):
 		var position := base + Vector2(distance, 3.0 + index * 0.35)
 		var unit := battle.spawn_unit(side, position, type)
+		if unit == null:
+			for offset: float in [0.5, 1.0, 1.5, 2.0, -0.5, -1.0]:
+				unit = battle.spawn_unit(side, position + Vector2(offset, 0), type)
+				if unit != null:
+					break
 		_check(unit != null, "The scenario can position its starting force.")
 		if unit != null:
 			unit.order = MatchBattle.Order.HOLD

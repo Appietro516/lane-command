@@ -28,7 +28,7 @@ func _run() -> void:
 	_test_orders_and_defense()
 	_test_routes()
 	for side: MatchRegion.Owner in [PLAYER, CPU]:
-		for type_id: StringName in Catalog.COMBAT_TYPES:
+		for type_id: StringName in Catalog.OFFENSIVE_TYPES:
 			_test_stances(side, type_id)
 	_test_threat_ranking()
 	_test_blocked_targets()
@@ -671,7 +671,7 @@ func _test_match_end_and_restart() -> void:
 	var cpu_hp := scene.get_node("%CPUHP") as Label
 	var outcome := scene.get_node("%Outcome") as Label
 	var build := scene.get_node("%Build") as Button
-	var upgrade := scene.get_node("%Upgrade") as Button
+	var upgrade := scene.get_node("%ProductionUpgrade") as Button
 	var restart := scene.get_node("%Restart") as Button
 	var units := scene.get_node("Units")
 	_check_full_reset(scene, initial_owners)
@@ -686,10 +686,10 @@ func _test_match_end_and_restart() -> void:
 	_check(scene.try_place_building(PLAYER, &"farm", Vector3(-12.8, 0, -5.2)),
 		"A Farm funds the player's upgraded barracks.")
 	scene._process(14.0)
-	_check(scene.try_upgrade(PLAYER), "The player upgrades before the deciding attack.")
+	_check(scene.try_upgrade(PLAYER, ScoutFixture.barracks(scene._battle, PLAYER).id), "The player upgrades before the deciding attack.")
 	var battle: MatchBattle = scene._battle
 	scene.economy.advance(30.0)
-	_check(scene.economy.has_upgrade(CPU) or scene.try_upgrade(CPU),
+	_check(ScoutFixture.barracks(scene._battle, CPU).level == 2 or scene.try_upgrade(CPU, ScoutFixture.barracks(scene._battle, CPU).id),
 		"The CPU has a paid upgrade to clear on restart.")
 	# Give the player a clear victory fixture independent of CPU build priorities.
 	scene._time_until_cpu_decision = 120.0
@@ -708,7 +708,7 @@ func _test_match_end_and_restart() -> void:
 	_check(units.get_child_count() > 0 and battle.elapsed_time() > 30.0,
 		"The finished match still has units and elapsed time to clear.")
 	_check(not scene.is_processing() and build.disabled and upgrade.disabled
-		and not scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -2.4)) and not scene.try_upgrade(PLAYER)
+		and not scene.try_place_building(PLAYER, &"barracks", Vector3(-10.2, 0, -2.4)) and not scene.try_upgrade(PLAYER, -999)
 		and restart.visible and not restart.disabled,
 		"Ending a match stops simulation and purchases while leaving Restart available.")
 
@@ -775,7 +775,7 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 		_check(economy.energy(side) == MatchEconomy.STARTING_ENERGY
 			and economy.stockpile(side, MatchEconomy.MATERIALS) == 30.0
 			and economy.stockpile(side, MatchEconomy.FOOD) == 20.0
-			and economy.barracks_count(side) == 0 and not economy.has_upgrade(side),
+			and economy.barracks_count(side) == 0 and scene._battle._timers.is_empty(),
 			"Restart restores all starting stockpiles and clears barracks and upgrades for each side.")
 	_check(scene.get_node("Buildings/Player").get_child_count() == 0
 		and scene.get_node("Buildings/CPU").get_child_count() == 0,
@@ -788,7 +788,7 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 		and scene.get_node("%Resources/energy/Stockpile").text == "Energy 50"
 		and not scene.has_node("%BarracksCount")
 		and not scene.get_node("%Outcome").visible and not scene.get_node("%Build").disabled
-		and scene.get_node("%Upgrade").disabled and scene.get_node("%Upgrade").text == "Upgrade Barracks\n60 Energy + 15 Food",
+		and scene.get_node("%ProductionUpgrade").disabled and not scene.get_node("%ProductionUpgrade").visible,
 		"The HUD refreshes to its starting readouts and purchase controls.")
 
 

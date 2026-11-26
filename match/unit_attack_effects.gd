@@ -102,6 +102,17 @@ func _draw_cue(attack: MatchBattle.AttackResolved, style: StringName, progress: 
 			_arc(impact, radius * 0.66, 0.0, TAU, 0.08, height, core, 12)
 			_spark(impact, direction, lerpf(0.28, 0.45, progress), height, core)
 
+		&"heal":
+			var mint := Color(0.55, 1.0, 0.69, tint.a)
+			_stroke(start, impact, 0.05, height, mint)
+			_arc(impact, lerpf(0.22, 0.72, progress), 0.0, TAU, 0.075, height, mint, 12)
+			_spark(impact, Vector2.from_angle(PI * 0.25), 0.15, height + 0.01, core)
+		&"slash":
+			var angle := direction.angle() + lerpf(-0.8, 0.75, progress)
+			_arc(impact, 0.39, angle - 0.9, 1.8, 0.10, height, core, 7)
+			_arc(impact - direction * 0.13, 0.58, angle - 0.6, 1.35, 0.08, height, tint, 6)
+			_spark(impact, direction, 0.25, height, tint)
+
 
 func _spark(center: Vector2, direction: Vector2, radius: float, height: float, tint: Color) -> void:
 	var axis := direction.rotated(PI * 0.25)

@@ -22,6 +22,18 @@ const BUILDINGS := {
 		"hp": 40, "size": Vector2(2.9, 2.1),
 		"unit_type": UnitCatalog.HEAVY, "interval": 6.0,
 	},
+	&"aid_station": {
+		"label": "Aid Station", "cost": {MatchEconomy.ENERGY: 52, MatchEconomy.MATERIALS: 28},
+		"scene": preload("res://match/producers/aid_station.tscn"),
+		"hp": 30, "size": Vector2(2.6, 1.8),
+		"unit_type": UnitCatalog.MEDIC, "interval": 6.5,
+	},
+	&"raider_camp": {
+		"label": "Raider Camp", "cost": {MatchEconomy.ENERGY: 48, MatchEconomy.MATERIALS: 25},
+		"scene": preload("res://match/producers/raider_camp.tscn"),
+		"hp": 29, "size": Vector2(2.65, 1.8),
+		"unit_type": UnitCatalog.RAIDER, "interval": 4.6,
+	},
 	&"generator": {
 		"label": "Generator", "cost": {MatchEconomy.MATERIALS: 26},
 		"scene": preload("res://match/producers/generator.tscn"),
@@ -48,6 +60,13 @@ const BUILDINGS := {
 		"scene": preload("res://match/fortifications/mortar.tscn"),
 		"icon": preload("res://match/fortifications/mortar.svg"),
 	},
+	Fortifications.ANTI_TANK: {
+		"scene": preload("res://match/fortifications/anti_tank_gun.tscn"),
+		"accent_node": ^"Turret/Marking",
+	},
+	Fortifications.SILO: {
+		"scene": preload("res://match/fortifications/missile_silo.tscn"),
+	},
 	Fortifications.WALL: {
 		"scene": preload("res://match/fortifications/wall.tscn"),
 		"icon": preload("res://match/fortifications/wall.svg"),
@@ -56,11 +75,12 @@ const BUILDINGS := {
 # Order within each section is part of the menu layout.
 const BUILD_SECTIONS := [
 	{ "id": &"economy", "label": "Economy", "entries": [&"generator", &"mine", &"farm"] },
-	{ "id": &"military", "label": "Military", "entries": [&"barracks", &"training_range", &"heavy_factory"] },
+	{ "id": &"military", "label": "Military", "entries": [&"barracks", &"training_range", &"heavy_factory",
+		&"aid_station", &"raider_camp"] },
 	{ "id": &"fortifications", "label": "Fortifications", "entries": [
-		Fortifications.NEST, Fortifications.MORTAR, Fortifications.WALL,
+		Fortifications.NEST, Fortifications.MORTAR, Fortifications.ANTI_TANK, Fortifications.WALL,
 	] },
-	{ "id": &"other", "label": "Other", "entries": [] },
+	{ "id": &"strategic", "label": "Strategic", "entries": [Fortifications.SILO] },
 ]
 const HUD_MARGIN := 16.0
 const HUD_GAP := 8.0
@@ -214,10 +234,18 @@ var _selected_units: Dictionary[int, bool] = {}
 var _group_rings: Array[MeshInstance3D] = []
 var _selection_origin := Vector2.INF
 var _selection_dragged := false
+var _selection_gesture := 0
 @onready var _selection_box := Panel.new()
 var _ground_target := GroundTarget.NONE
 var _ground_target_hint := ""
 var _rally_ring: MeshInstance3D
+var _missile_ring: MeshInstance3D
+var _missile_notice := ""
+var _missile_notice_until := 0.0
+var _missile_models: Dictionary[MatchBattle.MissileFlight, MeshInstance3D] = {}
+var _missile_mesh := CylinderMesh.new()
+var _ruin_material := StandardMaterial3D.new()
+@onready var _ruins := Node3D.new()
 var _pending_unit_order := MatchBattle.Order.AUTONOMOUS
 var _order_hint := ""
 var _route_mesh := ImmediateMesh.new()
@@ -285,7 +313,7 @@ var _barracks_menu_interval := -1.0
 @onready var _economy_row: BoxContainer = _economy_panel.get_node(^"ReadoutsAndControls")
 @onready var _placement_panel: PanelContainer = %PlacementPanel
 @onready var _placement_label: Label = %PlacementStatus
-@onready var _upgrade_button: Button = %Upgrade
+@onready var _upgrade_button: Button = %ProductionUpgrade
 @onready var _claim_button: Button = %Claim
 @onready var _scout_count: Label = %ScoutCount
 @onready var _scout_notice: Label = %ScoutNotice
@@ -331,6 +359,7 @@ func _ready() -> void:
 	$HUD.add_child(_selection_box)
 	get_window().focus_exited.connect(_cancel_selection_drag)
 	get_window().mouse_exited.connect(_cancel_selection_drag)
+	%TargetMissile.pressed.connect(_begin_ground_target.bind(GroundTarget.MISSILE))
 	%SetRally.pressed.connect(_begin_ground_target.bind(GroundTarget.RALLY))
 	%ClearRally.pressed.connect(_clear_rally)
 	_unit_route.global_transform = _regions.global_transform
@@ -357,13 +386,23 @@ func _ready() -> void:
 	add_child(_splash_ring)
 	_rally_ring = _create_radius_ring(Color("#9de8ff"), 0.12)
 	add_child(_rally_ring)
+	_missile_ring = _create_radius_ring(Color("#ff674f"), 0.035)
+	add_child(_missile_ring)
+	_missile_mesh.top_radius = 0.035
+	_missile_mesh.bottom_radius = 0.19
+	_missile_mesh.height = 1.3
+	_missile_mesh.radial_segments = 8
+	_missile_mesh.rings = 0
+	_missile_mesh.material = _tracer_material
 	add_child(_shot_effects)
+	add_child(_ruins)
+	_ruin_material.albedo_color = Color("#4d484c")
 	add_child(_unit_attack_effects)
 	_unit_attack_effects.global_transform = _regions.global_transform
 	_tracer_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_tracer_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tracer_material.albedo_color = Color("#fff0b8")
-	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
+	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER, _selected_fortification))
 	_claim_button.pressed.connect(_claim_selected_region)
 	_recall_button.pressed.connect(func() -> void:
 		if _expeditions.recall(PLAYER, _selected_unit_id):
@@ -394,6 +433,7 @@ func _ready() -> void:
 	_economy_panel.resized.connect(_queue_hud_layout)
 	_economy_panel.minimum_size_changed.connect(_queue_hud_layout)
 	_context_cards.minimum_size_changed.connect(_queue_hud_layout)
+	_context_cards.resized.connect(_queue_hud_layout)
 	_build_list.minimum_size_changed.connect(_queue_hud_layout)
 	_income_sources.minimum_size_changed.connect(_queue_hud_layout)
 	_placement_panel.minimum_size_changed.connect(_queue_hud_layout)
@@ -612,11 +652,21 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 		_battle.unit_produced.disconnect(_spawn_unit)
 		_battle.unit_removed.disconnect(_remove_unit)
 		_battle.attack_resolved.disconnect(_unit_attack_effects.record)
+		_battle.healing_resolved.disconnect(_unit_attack_effects.record)
 		_battle.base_destroyed.disconnect(_hide_base)
 		_battle.outpost_destroyed.disconnect(_lose_region)
 		_battle.fortification_destroyed.disconnect(_remove_fortification)
 		_battle.fortification_fired.disconnect(_show_fortification_shot)
+		_battle.missile_launched.disconnect(_show_missile_launch)
+		_battle.missile_cancelled.disconnect(_show_missile_cancelled)
+		_battle.missile_impact.disconnect(_ruin_strike_regions)
 	_unit_attack_effects.clear()
+	_missile_models.clear()
+	_missile_notice = ""
+	_missile_notice_until = 0.0
+	for rubble in _ruins.get_children():
+		_ruins.remove_child(rubble)
+		rubble.queue_free()
 	for shot in _shot_effects.get_children():
 		_shot_effects.remove_child(shot)
 		shot.queue_free()
@@ -649,6 +699,7 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	_camera.reset_view(true)
 	_refresh_cpu_status_controls()
 	for region_id in _initial_owners:
+		_regions_by_id[region_id].ruined = false
 		_regions_by_id[region_id].region_owner = _initial_owners[region_id]
 	_select_region(&"")
 
@@ -678,16 +729,21 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	_battle = MatchBattle.new(positions[PLAYER], positions[CPU], unit_aggro_radius,
 		_layout.bounds, faction_stats, positions, _navigation_boundary())
 	for landmark in _landmarks.values():
+		landmark.show()
 		_battle.add_landmark_footprint(landmark.footprint)
 	_battle.target_priority = unit_target_priority
 	_battle.threat_weights = unit_threat_weights
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
 	_battle.attack_resolved.connect(_unit_attack_effects.record)
+	_battle.healing_resolved.connect(_unit_attack_effects.record)
 	_battle.base_destroyed.connect(_hide_base)
 	_battle.outpost_destroyed.connect(_lose_region)
 	_battle.fortification_destroyed.connect(_remove_fortification)
 	_battle.fortification_fired.connect(_show_fortification_shot)
+	_battle.missile_launched.connect(_show_missile_launch)
+	_battle.missile_cancelled.connect(_show_missile_cancelled)
+	_battle.missile_impact.connect(_ruin_strike_regions)
 	_battle.step_finished.connect(_advance_narrative_time)
 	_expeditions = ScoutExpeditions.new(_battle, economy, _regions_by_id, {
 		"claim_energy": claim_energy,
@@ -736,6 +792,7 @@ func _process(delta: float) -> void:
 		set_process(false)
 
 	_unit_attack_effects.render_at(_battle.elapsed_time())
+	_update_missile_models()
 	for unit in _battle.active_units():
 		_update_unit_view(unit, _unit_views[unit.id])
 	_refresh_hud()
@@ -799,6 +856,9 @@ func _building_site_block_reason(side: MatchRegion.Owner, building_id: StringNam
 		return "Choose a spot in your territory"
 	if not _battle.navigation.contains_footprint(polygon):
 		return "Keep the entire footprint on the map"
+	for region_id in covered:
+		if get_region(region_id).ruined:
+			return "Permanently ruined terrain"
 	if Fortifications.PROFILES.has(building_id) and not _owns_footprint(side, polygon, covered):
 		return "Keep the footprint in your territory"
 	var slot_reason := building_slot_block_reason(building_id, covered)
@@ -828,8 +888,12 @@ func _minimum_build_cost(building_id: StringName) -> Dictionary:
 
 func _footprint_regions(polygon: PackedVector2Array) -> Array[StringName]:
 	var covered: Array[StringName] = []
+	var bounds := Rect2(polygon[0], Vector2.ZERO)
+	for point in polygon:
+		bounds = bounds.expand(point)
 	for region_id in _regions_by_id:
-		if not Geometry2D.intersect_polygons(polygon, get_region(region_id).polygon).is_empty():
+		var region := get_region(region_id)
+		if bounds.intersects(region.map_bounds) and not Geometry2D.intersect_polygons(polygon, region.polygon).is_empty():
 			covered.append(region_id)
 	return covered
 
@@ -848,7 +912,7 @@ func _owns_footprint(side: MatchRegion.Owner, polygon: PackedVector2Array,
 
 
 static func _building_slot_cost(kind: StringName) -> int:
-	return 0 if kind == Fortifications.WALL else 1
+	return 0 if kind == Fortifications.WALL else Fortifications.PROFILES.get(kind, {}).get("slots", 1)
 
 
 func _register_region_structure(id: StringName, kind: StringName, covered: Array[StringName],
@@ -886,6 +950,8 @@ func building_slot_block_reason(kind: StringName, covered: Array,
 	if cost == 0:
 		return ""
 	for region_id: StringName in covered:
+		if get_region(region_id).ruined:
+			return "Permanently ruined terrain"
 		var occupancy := region_occupancy(region_id)
 		var reserve := int(owns_region(MatchRegion.Owner.NEUTRAL, region_id) and region_id != claim_region)
 		if occupancy.free < cost + reserve:
@@ -993,13 +1059,31 @@ func _remove_fortification(defense: MatchBattle.Fortification) -> void:
 	_unregister_region_structure(defense.source_id)
 	_fortifications.erase(defense.id)
 	_fortification_ids.erase(placed.view)
-	placed.view.get_parent().remove_child(placed.view)
-	placed.view.queue_free()
+	if defense.destroyed_by_missile:
+		_leave_ruined_model(placed.view)
+	else:
+		placed.view.get_parent().remove_child(placed.view)
+		placed.view.queue_free()
 	if _selected_fortification == defense.id:
 		_select_fortification(MatchBattle.NO_TARGET)
 
 
 func _show_fortification_shot(fort: MatchBattle.Fortification, impact: Vector2) -> void:
+	if fort.kind == Fortifications.ANTI_TANK:
+		var placed := _fortifications.get(fort.id) as PlacedFortification
+		if placed != null:
+			var turret := placed.view.get_node(^"Turret") as Node3D
+			var direction := fort.position.direction_to(impact)
+			turret.rotation.y = atan2(direction.x, direction.y) + fort.angle
+			var barrel := turret.get_node(^"Barrel") as MeshInstance3D
+			barrel.position.z = 0.37
+			barrel.create_tween().tween_property(barrel, "position:z", 0.64, 0.22)
+		var flash := MeshInstance3D.new()
+		flash.mesh = _splash_ring.mesh
+		_shot_effects.add_child(flash)
+		flash.global_position = _world_position(impact) + Vector3.UP * 0.5
+		flash.scale = Vector3.ONE * 0.38
+		flash.create_tween().tween_callback(flash.queue_free).set_delay(0.20)
 	var effect := MeshInstance3D.new()
 	effect.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_shot_effects.add_child(effect)
@@ -1010,7 +1094,8 @@ func _show_fortification_shot(fort: MatchBattle.Fortification, impact: Vector2) 
 		effect.scale = Vector3.ONE * float(fort.profile.splash)
 	else:
 		var start := Vector3(fort.position.x, 0.46, fort.position.y)
-		var perpendicular := fort.position.direction_to(impact).orthogonal() * 0.035
+		var shot_width := 0.08 if fort.kind == Fortifications.ANTI_TANK else 0.035
+		var perpendicular := fort.position.direction_to(impact).orthogonal() * shot_width
 		var width := Vector3(perpendicular.x, 0.0, perpendicular.y)
 		var tracer := ImmediateMesh.new()
 		tracer.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP, _tracer_material)
@@ -1022,6 +1107,129 @@ func _show_fortification_shot(fort: MatchBattle.Fortification, impact: Vector2) 
 		effect.mesh = tracer
 	effect.global_transform = _regions.global_transform * effect.transform
 	effect.create_tween().tween_callback(effect.queue_free).set_delay(0.16)
+
+
+func _refresh_structure_accent(placed: PlacedFortification) -> void:
+	var fort := placed.defense
+	var silo := fort as MatchBattle.MissileSilo
+	var exhausted := silo != null and silo.missile_state == MatchBattle.MissileState.EXHAUSTED
+	_structure_accent(placed.view, fort.kind).material_override = _faction_accent(fort.side) \
+		if fort.active and not exhausted else INACTIVE_ACCENT
+
+
+func _preview_missile_at(pointer: Vector2) -> void:
+	_missile_ring.hide()
+	if _camera.is_dragging() or get_viewport().gui_get_hovered_control() != null:
+		return
+	var point: Variant = _ground_point(pointer)
+	if point != null:
+		var target := _map_position(point)
+		_show_radius_ring(_missile_ring, Fortifications.MISSILE_RADIUS,
+			Vector3(target.x, 0.18, target.y), _layout.contains(target))
+
+
+func _show_missile_launch(silo: MatchBattle.MissileSilo, flight: MatchBattle.MissileFlight) -> void:
+	var placed := _fortifications.get(silo.id) as PlacedFortification
+	if placed != null:
+		_refresh_structure_accent(placed)
+		var hatch := placed.view.get_node(^"Hatch") as MeshInstance3D
+		hatch.position.x = 1.15
+	var model := MeshInstance3D.new()
+	model.mesh = _missile_mesh
+	model.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_shot_effects.add_child(model)
+	_missile_models[flight] = model
+	_missile_flash(flight.source, 2.4, 0.35)
+	_missile_notice = "%s missile in flight" % _side_label(flight.side)
+	_missile_notice_until = flight.impact_at
+	_update_missile_models()
+
+
+func _show_missile_cancelled(side: MatchRegion.Owner) -> void:
+	var label := _side_label(side)
+	_missile_notice = "%s missile launch cancelled" % label
+	_missile_notice_until = _battle.elapsed_time() + 2.5
+
+
+func _update_missile_models() -> void:
+	for flight in _missile_models.keys():
+		var model := _missile_models[flight]
+		var fraction := clampf((_battle.elapsed_time() - flight.started_at) / Fortifications.MISSILE_FLIGHT, 0.0, 1.0)
+		if fraction >= 1.0 - MatchBattle.TIME_EPSILON:
+			_missile_models.erase(flight)
+			model.hide()
+			model.queue_free()
+			continue
+		var next := _missile_flight_position(flight, minf(1.0, fraction + 0.01))
+		model.global_position = _missile_flight_position(flight, fraction)
+		var heading := model.global_position.direction_to(next)
+		if not heading.is_zero_approx():
+			model.quaternion = Quaternion(Vector3.UP, heading)
+
+
+func _missile_flight_position(flight: MatchBattle.MissileFlight, fraction: float) -> Vector3:
+	var ground := _world_position(flight.source.lerp(flight.target, smoothstep(0.12, 0.92, fraction)))
+	return ground + Vector3.UP * (0.75 + sin(PI * fraction) * 10.0)
+
+
+func _missile_flash(point: Vector2, radius: float, duration: float) -> void:
+	var flash := MeshInstance3D.new()
+	flash.mesh = _missile_ring.mesh
+	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_shot_effects.add_child(flash)
+	flash.global_position = _world_position(point) + Vector3.UP * 0.22
+	flash.scale = Vector3.ONE * minf(0.8, radius)
+	var tween := flash.create_tween()
+	tween.tween_property(flash, "scale", Vector3.ONE * radius, duration * 0.55)
+	tween.tween_callback(flash.queue_free).set_delay(duration * 0.45)
+
+
+func _update_missile_warning() -> void:
+	var warning := %MissileWarning as Label
+	var lines := PackedStringArray()
+	for silo in _battle._charging_silos.values():
+		lines.append("%s missile preparing · %.1fs" % [
+			_side_label(silo.side), maxf(0.0, silo.launches_at - _battle.elapsed_time())])
+	if lines.is_empty() and _missile_notice_until > _battle.elapsed_time():
+		lines.append(_missile_notice)
+	warning.visible = not lines.is_empty()
+	warning.text = "\n".join(lines)
+
+
+func _ruin_strike_regions(flight: MatchBattle.MissileFlight) -> void:
+	var target := flight.target
+	var area_squared := Fortifications.MISSILE_RADIUS ** 2
+	for cell in _layout.cells:
+		var region := get_region(cell.id)
+		var hub := cell.site
+		if _layout.base_positions.has(cell.id):
+			hub = _layout.base_positions[cell.id]
+		var outpost := _outposts_by_region.get(cell.id) as MatchBattle.Outpost
+		if outpost != null:
+			hub = outpost.position
+		if not region.ruined and hub.distance_squared_to(target) <= area_squared:
+			region.ruined = true
+			_set_region_owner(cell.id, MatchRegion.Owner.NEUTRAL, false)
+		var landmark := _landmarks.get(cell.id) as LegendaryLandmark
+		if landmark != null and (region.ruined or Fortifications.blast_hits(target,
+				landmark.footprint.get_center(), landmark.footprint.size)):
+			if _battle.remove_landmark_footprint(landmark.footprint):
+				faction_stats.remove_source(landmark.source_id)
+				var remains := landmark.duplicate() as Node3D
+				landmark.get_parent().add_child(remains)
+				_leave_ruined_model(remains)
+				landmark.hide()
+	_missile_flash(target, Fortifications.MISSILE_RADIUS, 1.1)
+	_missile_flash(target, Fortifications.MISSILE_RADIUS * 0.65, 0.7)
+	_missile_notice = "Strategic missile impact"
+	_missile_notice_until = _battle.elapsed_time() + 2.5
+
+
+func _leave_ruined_model(model: Node3D) -> void:
+	model.reparent(_ruins, true)
+	model.scale.y *= 0.55
+	for mesh: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
+		mesh.material_override = _ruin_material
 
 
 func _world_position(point: Vector2) -> Vector3:
@@ -1195,6 +1403,8 @@ func _cancel_placement() -> void:
 
 
 func _update_placement_preview(pointer: Vector2) -> void:
+	if _preview == null:
+		return
 	if _placement_id == Fortifications.WALL:
 		_update_wall_preview(pointer)
 		return
@@ -1256,8 +1466,8 @@ func _update_wall_preview(pointer: Vector2) -> void:
 
 
 
-func try_upgrade(side: MatchRegion.Owner) -> bool:
-	if _battle.is_finished() or not economy.try_upgrade(side):
+func try_upgrade(side: MatchRegion.Owner, building_id: int) -> bool:
+	if not _battle.upgrade_producer(side, building_id, economy):
 		return false
 
 	_refresh_hud()
@@ -1279,6 +1489,8 @@ func _claim_selected_region() -> void:
 
 func _complete_claim(side: MatchRegion.Owner, region_id: StringName, scout_id: int,
 		point: Vector2) -> void:
+	if get_region(region_id).ruined:
+		return
 	var outpost := _battle.add_outpost(region_id, side, point, maxi(1, outpost_hp))
 	var footprint := Fortifications.footprint(point, MatchBattle.OUTPOST_FOOTPRINT * 2.0)
 	_register_region_structure(outpost.source_id, OUTPOST_KIND, _footprint_regions(footprint))
@@ -1305,16 +1517,22 @@ func _discover_on_claim(side: MatchRegion.Owner, region_id: StringName, _scout_i
 func _lose_region(outpost: MatchBattle.Outpost) -> void:
 	var region_id := outpost.region_id
 	var view := _outpost_views[region_id]
-	view.get_parent().remove_child(view)
-	view.queue_free()
+	if outpost.destroyed_by_missile:
+		_leave_ruined_model(view)
+	else:
+		view.get_parent().remove_child(view)
+		view.queue_free()
 	_outpost_views.erase(region_id)
 	_outposts_by_region.erase(region_id)
 	_unregister_region_structure(outpost.source_id)
 	_set_region_owner(region_id, MatchRegion.Owner.NEUTRAL)
 
 
-func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
-	get_region(region_id).region_owner = side
+func _set_region_owner(region_id: StringName, side: MatchRegion.Owner, refresh := true) -> void:
+	var region := get_region(region_id)
+	if region.ruined and side != MatchRegion.Owner.NEUTRAL:
+		return
+	region.region_owner = side
 	faction_stats.set_source_owner(region_source_id(region_id), side)
 	var landmark := _landmarks.get(region_id) as LegendaryLandmark
 	if landmark != null:
@@ -1328,11 +1546,11 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 				active = false
 				break
 		_battle.set_fortification_active(placed.defense, active)
-		_structure_accent(placed.view, placed.defense.kind).material_override = _faction_accent(placed.defense.side) \
-			if active else INACTIVE_ACCENT
-	_refresh_hud()
-	if _preview != null:
-		_refresh_placement_preview()
+		_refresh_structure_accent(placed)
+	if refresh:
+		_refresh_hud()
+		if _preview != null:
+			_refresh_placement_preview()
 
 
 ## Use this ID for contributions that follow control of a region.
@@ -1343,7 +1561,7 @@ static func region_source_id(region_id: StringName) -> StringName:
 func set_region_modifier(region_id: StringName, stat: StringName, magnitude: float,
 		source_name: String, source_type := &"landmark", description := "") -> bool:
 	var region := get_region(region_id)
-	return region != null and faction_stats.set_modifier(region_source_id(region_id),
+	return region != null and not region.ruined and faction_stats.set_modifier(region_source_id(region_id),
 		region.region_owner, stat, magnitude, source_type, source_name, description, true, 0, region_id)
 
 
@@ -1378,7 +1596,7 @@ func _input(event: InputEvent) -> void:
 				_cancel_selection_drag()
 			elif event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
 				# If the HUD consumes the release, cancel rather than issue an order.
-				_cancel_selection_drag.call_deferred()
+				_finish_consumed_selection_release.call_deferred(_selection_gesture)
 	if _ground_target != GroundTarget.NONE and (event.is_action_pressed("ui_cancel")
 			or event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed):
 		_clear_ground_target()
@@ -1415,6 +1633,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			and not _battle.is_finished() and _placement_id.is_empty():
 		if event.pressed:
 			_selection_origin = event.position
+			_selection_gesture += 1
 			_selection_dragged = false
 		elif _selection_origin.is_finite():
 			_update_selection_drag(event.position)
@@ -1484,6 +1703,11 @@ func _update_selection_drag(pointer: Vector2) -> void:
 		_selection_box.show()
 
 
+func _finish_consumed_selection_release(gesture: int) -> void:
+	if gesture == _selection_gesture:
+		_cancel_selection_drag()
+
+
 func _cancel_selection_drag() -> void:
 	_selection_origin = Vector2.INF
 	_selection_dragged = false
@@ -1517,13 +1741,15 @@ func _select_in_rectangle(rectangle: Rect2, extend: bool, subtract: bool) -> voi
 func _begin_ground_target(mode: GroundTarget) -> void:
 	_clear_pending_unit_order()
 	_ground_target = mode
-	_ground_target_hint = "Click ground to set rally point · Esc to cancel"
+	_ground_target_hint = "Click ground to set rally point · Esc to cancel" if mode == GroundTarget.RALLY \
+		else "Click to commit the strike · Esc to cancel"
 	_update_fortification_inspection()
 
 
 func _clear_ground_target() -> void:
 	_ground_target = GroundTarget.NONE
 	_ground_target_hint = ""
+	_missile_ring.hide()
 
 
 func _commit_ground_target(pointer: Vector2) -> void:
@@ -1533,7 +1759,13 @@ func _commit_ground_target(pointer: Vector2) -> void:
 			_clear_ground_target()
 		else:
 			_ground_target_hint = "Choose reachable ground · Esc to cancel"
+	elif _ground_target == GroundTarget.MISSILE:
+		if ground != null and _battle.prepare_missile(PLAYER, _selected_fortification, _map_position(ground)):
+			_clear_ground_target()
+		else:
+			_ground_target_hint = "Choose a point inside the battlefield · Esc to cancel"
 	_update_fortification_inspection()
+	_update_missile_warning()
 
 
 func _clear_rally() -> void:
@@ -1543,6 +1775,8 @@ func _clear_rally() -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if _ground_target == GroundTarget.MISSILE:
+		_preview_missile_at(get_viewport().get_mouse_position())
 	var click := _pending_pick
 	_pending_pick = Vector2.INF
 	if _preview != null:
@@ -1694,6 +1928,11 @@ func _update_unit_selection() -> void:
 		_stat_number(speed.total), _stat_number(unit.definition.range),
 		_stat_number(unit.attack_interval),
 	]
+	if unit.definition.has("support"):
+		var support: Dictionary = unit.definition.support
+		_unit_stats.text = "HP  %s / %s · Speed  %s units/s\nHeal  %s every %ss · Radius  %s" % [
+			_stat_number(unit.hp), _stat_number(health.total), _stat_number(speed.total),
+			_stat_number(support.heal), _stat_number(unit.attack_interval), _stat_number(support.radius)]
 	var sources := PackedStringArray([
 		_breakdown_text("Damage per second", _battle.unit_dps_stat(unit)),
 		_breakdown_text("Maximum HP", health),
@@ -1785,21 +2024,33 @@ func _select_fortification(id: int) -> void:
 	_selected_fortification = id
 	_update_fortification_inspection()
 	_update_context_visibility()
+	_queue_hud_layout()
 
 
 func _update_fortification_inspection() -> void:
-	%RallyControls.hide()
-	_rally_ring.hide()
 	var placed: PlacedFortification = _fortifications.get(_selected_fortification)
 	if placed == null or not _placement_id.is_empty():
 		_producer_stance.hide()
+		_upgrade_button.hide()
+		_upgrade_button.disabled = true
+		%TargetMissile.hide()
+		%RallyControls.hide()
+		_rally_ring.hide()
 		if _placement_id.is_empty():
 			_hide_ranges()
 		if _selected_units.is_empty() or not _placement_id.is_empty():
 			_unit_panel.hide()
 		return
 	var fort := placed.defense
-	_producer_stance.visible = fort is MatchBattle.ProductionTimer
+	var military := fort is MatchBattle.ProductionTimer
+	var silo := fort as MatchBattle.MissileSilo
+	%TargetMissile.visible = silo != null and silo.side == PLAYER and silo.hp > 0.0 \
+		and silo.active and silo.missile_state == MatchBattle.MissileState.READY and not _battle.is_finished()
+	_producer_stance.visible = military
+	if not military:
+		_upgrade_button.hide()
+		%RallyControls.hide()
+		_rally_ring.hide()
 	_unit_panel.show()
 	_tactical_orders.hide()
 	_stance_label.hide()
@@ -1810,8 +2061,16 @@ func _update_fortification_inspection() -> void:
 	_unit_stats.text = _health_text(fort)
 	var details := _breakdown_text("Maximum HP", fort.health_stat())
 	_unit_intent.text = "Active" if fort.active else "Inactive · territory lost"
+	if silo != null:
+		match silo.missile_state:
+			MatchBattle.MissileState.READY:
+				_unit_intent.text += "\nMissile ready · Blast radius %s" % _stat_number(Fortifications.MISSILE_RADIUS)
+			MatchBattle.MissileState.CHARGING:
+				_unit_intent.text += "\nPreparing launch · %.1fs" % maxf(0.0, silo.launches_at - _battle.elapsed_time())
+			MatchBattle.MissileState.EXHAUSTED:
+				_unit_intent.text += "\nExhausted · Missile expended"
 	if fort is MatchBattle.ProductionTimer:
-		var production := _production_stat(fort)
+		var production: Dictionary = fort.production_stat(economy)
 		var unit: Dictionary = UnitCatalog.DEFINITIONS[fort.unit_type]
 		_unit_intent.text += "\nNext unit  %s · %s per unit\nCapacity  %s units/s" % [
 			unit.label, MatchEconomy.cost_text({MatchEconomy.FOOD: unit.food}),
@@ -1820,7 +2079,17 @@ func _update_fortification_inspection() -> void:
 		var remaining: float = fort.interval(economy) - fort.elapsed
 		_unit_intent.text += "\nProduction  " + ("%.1fs remaining" % remaining
 			if remaining > MatchBattle.TIME_EPSILON else "Cycle complete")
-		var can_configure := fort.side == PLAYER and not _battle.is_finished()
+		_unit_intent.text += "\nLevel %d / 2 · %ss per cycle" % [fort.level, _stat_number(fort.interval(economy))]
+		var can_configure := fort.side == PLAYER and not _battle.is_finished() and fort.hp > 0.0
+		_upgrade_button.visible = can_configure
+		if can_configure:
+			var reason := economy.cost_block_reason(PLAYER, MatchEconomy.UPGRADE_COST)
+			_upgrade_button.disabled = fort.level == 2 or not reason.is_empty()
+			_upgrade_button.text = "Production upgrade installed" if fort.level == 2 else \
+				"Upgrade to level 2 · %s\nCycle %ss → %ss" % [
+					MatchEconomy.cost_text(MatchEconomy.UPGRADE_COST), _stat_number(fort.interval(economy)),
+					_stat_number(fort.cycle_interval(economy, 2))]
+			_upgrade_button.tooltip_text = reason
 		%RallyControls.visible = can_configure
 		%ClearRally.disabled = not fort.rally_point.is_finite()
 		_show_radius_ring(_rally_ring, 0.42, Vector3(fort.rally_point.x, 0.17, fort.rally_point.y),
@@ -1842,19 +2111,6 @@ func _update_fortification_inspection() -> void:
 	_unit_order_hint.visible = not _ground_target_hint.is_empty()
 	_unit_order_hint.text = _ground_target_hint
 	_show_ranges(fort.profile, fort.position, true)
-
-
-func _production_stat(timer: MatchBattle.ProductionTimer) -> Dictionary:
-	if timer.kind == &"barracks":
-		return economy.production_stat(timer.side, timer.active)
-	var rate := 1.0 / timer.interval(economy)
-	var breakdown: Array[Dictionary] = [
-		{"source_name": "Base", "source_type": FactionStats.BASELINE_TYPE, "magnitude": rate, "active": true},
-	]
-	if not timer.active:
-		breakdown.append({"source_name": "Territory lost", "source_type": &"rule",
-			"magnitude": -rate, "active": true})
-	return {"total": rate if timer.active else 0.0, "breakdown": breakdown}
 
 
 func _refresh_stat_sources(details: String) -> void:
@@ -2183,7 +2439,12 @@ func _remove_unit(unit_id: int) -> void:
 
 func _hide_base(side: MatchRegion.Owner) -> void:
 	_unregister_region_structure(_base_structure_id(side))
-	_bases[side].hide()
+	var base := _bases[side]
+	if _battle._base_health[side].destroyed_by_missile:
+		var remains := base.duplicate() as Node3D
+		base.get_parent().add_child(remains)
+		_leave_ruined_model(remains)
+	base.hide()
 	_cpu_strategies.erase(side)
 	for region_id in _regions_by_id:
 		if owns_region(side, region_id):
@@ -2426,20 +2687,13 @@ func _refresh_hud() -> void:
 		label.tooltip_text = details
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
+	_update_missile_warning()
 	_refresh_resource_readouts()
 	_refresh_build_options()
 	_build_button.disabled = _battle.is_finished()
 	if not _selected_units.is_empty():
 		_update_unit_selection()
 	_update_fortification_inspection()
-	var upgraded := economy.has_upgrade(PLAYER)
-	var upgrade_reason := economy.cost_block_reason(PLAYER, MatchEconomy.UPGRADE_COST)
-	_upgrade_button.disabled = _battle.is_finished() or upgraded or not upgrade_reason.is_empty()
-	_upgrade_button.text = "Barracks upgraded" if upgraded \
-		else "Upgrade Barracks\n%s" % MatchEconomy.cost_text(MatchEconomy.UPGRADE_COST)
-	_upgrade_button.tooltip_text = "Shortens the Barracks production cycle."
-	if not upgraded and not upgrade_reason.is_empty():
-		_upgrade_button.tooltip_text += "\n" + upgrade_reason
 	_refresh_claim_control()
 	_refresh_scout_roster()
 	_refresh_claim_markers()
@@ -2456,7 +2710,7 @@ func _refresh_claim_control() -> void:
 	var reason := _expeditions.block_reason(PLAYER, _selected_region_id)
 	var expedition := _expeditions.assignments.get(_selected_region_id) as ScoutExpeditions.Scout
 	_claim_button.visible = region.region_owner == MatchRegion.Owner.NEUTRAL and expedition == null \
-		and not _battle.is_finished()
+		and not region.ruined and not _battle.is_finished()
 	_claim_button.disabled = not reason.is_empty()
 	_claim_button.tooltip_text = reason
 	_update_claim_progress(_region_claim_progress, expedition)
@@ -2475,11 +2729,13 @@ func _refresh_claim_control() -> void:
 	if outpost != null:
 		_region_status.text = "Outpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(outpost.max_hp)]
 		_region_label.tooltip_text = _breakdown_text("Maximum HP", outpost.health_stat())
+	if region.ruined:
+		_region_status.text = "Permanently ruined · Passable terrain"
 	_region_status.visible = not _region_status.text.is_empty()
 
 	var landmark := _landmarks.get(_selected_region_id) as LegendaryLandmark
-	_landmark_details.visible = landmark != null
-	if landmark != null:
+	_landmark_details.visible = landmark != null and landmark.visible
+	if _landmark_details.visible:
 		var contribution := faction_stats.inspect_source(landmark.stat, landmark.source_id)
 		var side := get_region(landmark.region_id).region_owner
 		var active: bool = not contribution.breakdown.is_empty() and contribution.breakdown[0].active

@@ -1,0 +1,60 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Dark"]
+albedo_color = Color(0.16, 0.21, 0.23, 1)
+
+[sub_resource type="StandardMaterial3D" id="Concrete"]
+albedo_color = Color(0.53, 0.57, 0.55, 1)
+
+[sub_resource type="BoxMesh" id="Footing"]
+material = SubResource("Dark")
+size = Vector3(4.8, 0.2, 4.4)
+
+[sub_resource type="CylinderMesh" id="Bunker"]
+material = SubResource("Concrete")
+top_radius = 1.72
+bottom_radius = 2.12
+height = 0.7
+radial_segments = 8
+rings = 0
+
+[sub_resource type="CylinderMesh" id="Hatch"]
+material = SubResource("Dark")
+top_radius = 1.09
+bottom_radius = 1.2
+height = 0.2
+radial_segments = 12
+rings = 0
+
+[sub_resource type="BoxMesh" id="Stripe"]
+size = Vector3(2.98, 0.05, 0.22)
+
+[sub_resource type="BoxMesh" id="Vent"]
+material = SubResource("Dark")
+size = Vector3(0.48, 0.22, 0.75)
+
+[node name="MissileSilo" type="Node3D"]
+
+[node name="Footing" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.1, 0)
+mesh = SubResource("Footing")
+
+[node name="Bunker" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.53, 0)
+mesh = SubResource("Bunker")
+
+[node name="Hatch" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.99, 0)
+mesh = SubResource("Hatch")
+
+[node name="Marking" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.9, 0)
+mesh = SubResource("Stripe")
+
+[node name="VentLeft" type="MeshInstance3D" parent="."]
+position = Vector3(-1.65, 0.38, 1.42)
+mesh = SubResource("Vent")
+
+[node name="VentRight" type="MeshInstance3D" parent="."]
+position = Vector3(1.65, 0.38, 1.42)
+mesh = SubResource("Vent")

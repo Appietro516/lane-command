@@ -1,0 +1,46 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://match/unit.tscn" id="1_unit"]
+
+[sub_resource type="StandardMaterial3D" id="Dark"]
+shading_mode = 0
+albedo_color = Color(0.055, 0.09, 0.1, 1)
+
+[sub_resource type="CylinderMesh" id="Outline"]
+material = SubResource("Dark")
+top_radius = 0.47
+bottom_radius = 0.47
+height = 0.14
+radial_segments = 6
+rings = 0
+
+[sub_resource type="CylinderMesh" id="Token"]
+top_radius = 0.37
+bottom_radius = 0.37
+height = 0.21
+radial_segments = 6
+rings = 0
+
+[sub_resource type="StandardMaterial3D" id="Mint"]
+shading_mode = 0
+albedo_color = Color(0.76, 1, 0.83, 1)
+
+[sub_resource type="BoxMesh" id="Cross"]
+material = SubResource("Mint")
+size = Vector3(0.4, 0.035, 0.11)
+
+[node name="Medic" instance=ExtResource("1_unit")]
+mesh = SubResource("Token")
+rotation_degrees = Vector3(0, 0, 0)
+
+[node name="Outline" parent="." index="0"]
+mesh = SubResource("Outline")
+
+[node name="CrossHorizontal" type="MeshInstance3D" parent="." index="1"]
+position = Vector3(0, 0.115, 0)
+mesh = SubResource("Cross")
+
+[node name="CrossVertical" type="MeshInstance3D" parent="." index="2"]
+position = Vector3(0, 0.115, 0)
+rotation_degrees = Vector3(0, 90, 0)
+mesh = SubResource("Cross")

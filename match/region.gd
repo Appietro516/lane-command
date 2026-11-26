@@ -19,6 +19,7 @@ const OWNER_COLORS := {
 	Owner.CPU_3: Color("#63477d"),
 	Owner.CPU_4: Color("#756226"),
 }
+const RUIN_COLOR := Color("#494146")
 const BORDER_COLOR := Color("#728487")
 const SELECTED_BORDER_COLOR := Color("#ffe5a5")
 const EDGE_GAP := 0.10
@@ -30,7 +31,13 @@ var region_owner: Owner = Owner.NEUTRAL:
 	set(value):
 		region_owner = value
 		if is_node_ready():
-			_fill_material.albedo_color = OWNER_COLORS[value]
+			_fill_material.albedo_color = RUIN_COLOR if ruined else OWNER_COLORS[value]
+var ruined := false:
+	set(value):
+		ruined = value
+		if is_node_ready():
+			_fill_material.albedo_color = RUIN_COLOR if ruined else OWNER_COLORS[region_owner]
+var map_bounds: Rect2
 var neighbor_ids: Array[StringName]
 var polygon: PackedVector2Array
 
@@ -65,6 +72,9 @@ func _init(cell: TerritoryLayout.Cell) -> void:
 	region_id = cell.id
 	neighbor_ids = cell.neighbor_ids
 	polygon = cell.polygon
+	map_bounds = Rect2(polygon[0], Vector2.ZERO)
+	for point in polygon:
+		map_bounds = map_bounds.expand(point)
 	position = Vector3(cell.site.x, 0.0, cell.site.y)
 
 
@@ -105,7 +115,7 @@ func interior_point(is_clear: Callable = Callable()) -> Vector2:
 			var fraction := Vector2((x + 0.5) / columns, (y + 0.5) / rows)
 			var candidate := bounds.position + fraction * bounds.size
 			var distance := preferred.distance_squared_to(candidate)
-			if distance < best_distance and is_clear.call(candidate) and _contains_interior(candidate):
+			if distance < best_distance and _contains_interior(candidate) and is_clear.call(candidate):
 				best = candidate
 				best_distance = distance
 	return best

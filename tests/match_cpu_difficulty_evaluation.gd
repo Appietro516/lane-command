@@ -1,6 +1,7 @@
 extends SceneTree
 ## Paired seeded trials against scripted opponents using shared match APIs.
 
+const ScoutFixture := preload("res://tests/scout_fixture.gd")
 const MatchScene := preload("res://main.tscn")
 const Profiles := preload("res://match/difficulty_profile.gd")
 const CPU := MatchRegion.Owner.CPU
@@ -108,7 +109,7 @@ func _play(level: int, map_seed: int, index: int) -> Trial:
 				if _place(scene, PLAYER, kind):
 					trial.player_builds += 1
 		if tick == 45:
-			scene.try_upgrade(PLAYER)
+			scene.try_upgrade(PLAYER, ScoutFixture.barracks(scene._battle, PLAYER).id)
 		scene._process(TICK)
 		for placed in scene._fortifications.values():
 			var fort: MatchBattle.Fortification = placed.defense

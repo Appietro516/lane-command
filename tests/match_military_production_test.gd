@@ -81,12 +81,12 @@ func _test_concurrent_production(scene: Node) -> void:
 	_check(not battle.set_producer_stance(CPU, duplicate.id, Stance.IDLE)
 		and not battle.set_producer_stance(PLAYER, duplicate.id, -1 as Stance)
 		and duplicate.default_stance == Stance.SEEK_NEAREST, "Foreign and invalid settings are rejected.")
-	_check(scene.try_upgrade(PLAYER) and scene.try_upgrade(CPU), "Both factions can fund the Barracks upgrade.")
+	_check(scene.try_upgrade(PLAYER, ScoutFixture.barracks(scene._battle, PLAYER).id) and scene.try_upgrade(CPU, ScoutFixture.barracks(scene._battle, CPU).id), "Both factions can fund the Barracks upgrade.")
 	var barracks_option: Button = scene._build_options[&"barracks"]
 	var heavy_option: Button = scene._build_options[&"heavy_factory"]
-	_check(barracks_option.text.contains("Infantry every 2.5s · 4 Food")
+	_check(barracks_option.text.contains("Infantry every 3.5s · 4 Food")
 		and heavy_option.text.contains("55 Energy + 35 Materials\nHeavy every 6s · 8 Food"),
-		"The menu displays the effective cadence, build price, unit and Food cost.")
+		"The menu displays the new buildings’ baseline cadence, build price, unit and Food cost.")
 	var food_before := {PLAYER: economy.stockpile(PLAYER, FOOD), CPU: economy.stockpile(CPU, FOOD)}
 	battle.advance(1.5 - STEP, economy)
 	_check(deployments.is_empty(), "Production waits for the first completed cycle.")
@@ -246,7 +246,7 @@ func _test_lifecycle(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	_check(scene._battle._timers.is_empty() and scene._fortifications.is_empty()
-		and ScoutFixture.combat_units(scene._battle).is_empty() and not scene.economy.has_upgrade(PLAYER)
+		and ScoutFixture.combat_units(scene._battle).is_empty() and scene._battle._timers.is_empty()
 		and scene.economy.stockpile(PLAYER, FOOD) == 20.0, "Restart restores starting production state.")
 
 

@@ -17,7 +17,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	for type_id: StringName in Catalog.COMBAT_TYPES:
+	for type_id: StringName in Catalog.OFFENSIVE_TYPES:
 		_test_cadence(type_id)
 		_test_structure(type_id, &"base")
 		_test_structure(type_id, &"outpost")
@@ -63,7 +63,7 @@ func _test_structure(type_id: StringName, kind: StringName) -> void:
 	battle.attack_resolved.connect(events.append)
 	var target_id := MatchBattle.BASE_TARGET
 	var position := CPU_BASE
-	var offset := 1.78 if type_id == Catalog.INFANTRY else 1.92
+	var offset := minf(1.92, float(Catalog.DEFINITIONS[type_id].range) + 0.88)
 	var building: MatchBattle.BuildingHealth
 	match kind:
 		&"outpost":
@@ -193,11 +193,11 @@ func _test_scene() -> void:
 	# Sustained mixed-unit combat, preceded by a burst beyond the retention limit.
 	battle.stats.set_modifier(&"stress", CPU, FactionStats.UNIT_MAX_HP, 1000000.0)
 	target = battle._spawn_unit(CPU, Vector2(0.55, 0.0), Catalog.SCOUT)
-	for index in 90:
-		var type_id: StringName = Catalog.COMBAT_TYPES[index % Catalog.COMBAT_TYPES.size()]
+	for index in MatchBattle.MILITARY_UNIT_CAP:
+		var type_id: StringName = Catalog.OFFENSIVE_TYPES[index % Catalog.OFFENSIVE_TYPES.size()]
 		var unit := battle.spawn_unit(PLAYER, Vector2(0.0, (index % 7 - 3) * 0.08), type_id)
 		unit.attack_interval = STEP
-	for index in 8:
+	for index in 12:
 		scene._process(STEP)
 	_check(effects._cues.size() == Effects.MAX_CUES and batch.get_surface_count() == 1
 		and effects.get_child_count() == 0, "A burst saturates the fixed capacity in one batched mesh.")

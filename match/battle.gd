@@ -4,15 +4,20 @@ extends RefCounted
 signal unit_produced(unit: Unit)
 signal unit_removed(unit_id: int)
 signal attack_resolved(attack: AttackResolved)
+signal healing_resolved(heal: AttackResolved)
 signal step_finished
 signal base_destroyed(side: MatchRegion.Owner)
 signal outpost_destroyed(outpost: Outpost)
 signal fortification_destroyed(fortification: Fortification)
 signal fortification_fired(fortification: Fortification, impact: Vector2)
+signal missile_launched(silo: MissileSilo, flight: MissileFlight)
+signal missile_cancelled(side: MatchRegion.Owner)
+signal missile_impact(flight: MissileFlight)
 
 const UnitCatalog := preload("res://match/unit_catalog.gd")
 const Fortifications := preload("res://match/fortification_rules.gd")
 
+enum MissileState { READY, CHARGING, EXHAUSTED }
 enum Outcome { IN_PROGRESS, VICTORY, DEFEAT }
 enum Order { AUTONOMOUS, MOVE, HOLD }
 enum Stance { SEEK_NEAREST, SEEK_STRONGEST, IDLE }
@@ -75,6 +80,9 @@ class Unit:
 	var order := Order.AUTONOMOUS
 	var resume_stance_on_arrival := false
 	var following_rally := false
+	var support_replan_at := 0.0
+	var next_healing_at := 0.0
+	var support_scan_at := 0.0
 	var ordered_destination := Vector2.INF
 	var movement_destination := Vector2.INF
 	var waypoints := PackedVector2Array()
@@ -144,6 +152,7 @@ class BuildingHealth:
 	var source_id: StringName
 	var hp: float
 	var base_max_hp: float
+	var destroyed_by_missile := false
 	var max_hp: float:
 		get:
 			return _stats.value(side, FactionStats.BUILDING_MAX_HP, base_max_hp)
@@ -180,14 +189,38 @@ class Fortification extends BuildingHealth:
 		return profile.size.length() * 0.5 + weapon_range * 0.65
 
 
+class MissileSilo extends Fortification:
+	var missile_state := MissileState.READY
+	var missile_target := Vector2.INF
+	var launches_at := 0.0
+
+
+class MissileFlight:
+	var source: Vector2
+	var target: Vector2
+	var side: MatchRegion.Owner
+	var started_at: float
+	var impact_at: float
+
+
 class ProductionTimer extends Fortification:
 	var elapsed := 0.0
 	var unit_type: StringName
 	var default_stance := Stance.SEEK_NEAREST
 	var rally_point := Vector2.INF
+	var level := 1
 
 	func interval(economy: MatchEconomy) -> float:
-		return economy.production_interval(side) if kind == &"barracks" else profile.interval
+		return cycle_interval(economy, level)
+
+	func cycle_interval(economy: MatchEconomy, production_level: int) -> float:
+		var base: float = profile.interval
+		if production_level == 2:
+			base *= MatchEconomy.PRODUCTION_UPGRADE_FACTOR
+		return economy.stats.value(side, FactionStats.BARRACKS_INTERVAL, base) if kind == &"barracks" else base
+
+	func production_stat(economy: MatchEconomy) -> Dictionary:
+		return economy.production_stat(side, active, profile.interval, kind == &"barracks", level == 2)
 
 	func spawn_extent() -> Vector2:
 		return MatchBattle.producer_spawn_extent(profile.size, unit_type)
@@ -205,6 +238,7 @@ var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
 var _base_health: Dictionary[MatchRegion.Owner, BuildingHealth] = {}
 var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
+var _support_units: Dictionary[int, Unit] = {}
 var _queued_orders: Dictionary[int, Dictionary] = {}
 var _military_count: Dictionary[MatchRegion.Owner, int] = {}
 var _unit_grid := BattleSpatialGrid.new()
@@ -215,7 +249,9 @@ var _nearby_cache: Dictionary[Vector4i, Array] = {}
 var _hold_targets: Dictionary[Vector4, int] = {}
 var _outposts: Dictionary[int, Outpost] = {}
 var _fortifications: Dictionary[int, Fortification] = {}
-var _landmark_footprints: Array[Rect2] = []
+var _landmark_footprints: Dictionary[Rect2, int] = {}
+var _charging_silos: Dictionary[int, MissileSilo] = {}
+var _missile_flights: Array[MissileFlight] = []
 var _next_structure_id := BASE_TARGET - 1
 var _next_unit_id := 1
 var _pending_time := 0.0
@@ -304,9 +340,77 @@ func add_fortification(kind: StringName, side: MatchRegion.Owner, position: Vect
 
 func add_structure(kind: StringName, profile: Dictionary, side: MatchRegion.Owner,
 		position: Vector2, angle := 0.0) -> Fortification:
-	var fort := Fortification.new(stats, side, profile.hp)
+	var fort: Fortification
+	if kind == Fortifications.SILO:
+		fort = MissileSilo.new(stats, side, profile.hp)
+	else:
+		fort = Fortification.new(stats, side, profile.hp)
 	_register_structure(fort, kind, profile, position, angle)
 	return fort
+
+
+func prepare_missile(side: MatchRegion.Owner, id: int, target: Vector2) -> bool:
+	var silo := get_fortification(id) as MissileSilo
+	if is_finished() or not is_side_active(side) or silo == null or silo.side != side \
+			or silo.hp <= 0.0 or not silo.active or silo.missile_state != MissileState.READY \
+			or not navigation.contains(target):
+		return false
+	silo.missile_state = MissileState.CHARGING
+	silo.missile_target = target
+	silo.launches_at = _elapsed_time + Fortifications.MISSILE_CHARGE
+	_charging_silos[id] = silo
+	return true
+
+
+func _advance_missiles() -> void:
+	while not _missile_flights.is_empty() and _elapsed_time + TIME_EPSILON >= _missile_flights[0].impact_at:
+		_resolve_missile(_missile_flights.pop_front())
+	for id in _charging_silos.keys():
+		var silo := _charging_silos[id]
+		if silo.hp <= 0.0 or base_hp(silo.side) <= 0.0 or not silo.active:
+			_charging_silos.erase(id)
+			silo.missile_state = MissileState.EXHAUSTED
+			missile_cancelled.emit(silo.side)
+		elif _elapsed_time + TIME_EPSILON >= silo.launches_at:
+			_charging_silos.erase(id)
+			silo.missile_state = MissileState.EXHAUSTED
+			var flight := MissileFlight.new()
+			flight.source = silo.position
+			flight.target = silo.missile_target
+			flight.side = silo.side
+			flight.started_at = _elapsed_time
+			flight.impact_at = _elapsed_time + Fortifications.MISSILE_FLIGHT
+			_missile_flights.append(flight)
+			missile_launched.emit(silo, flight)
+
+
+func _resolve_missile(flight: MissileFlight) -> void:
+	var target := flight.target
+	var reach := ceili(Fortifications.MISSILE_RADIUS / BattleSpatialGrid.CELL_SIZE)
+	var cell := BattleSpatialGrid.cell_at(target)
+	_candidate_ids.clear()
+	for side in _bases:
+		_unit_grid.append_ids(cell, reach, side, _candidate_ids)
+	for id in _candidate_ids:
+		var unit := get_unit(id)
+		if target.distance_squared_to(unit.position) <= Fortifications.MISSILE_RADIUS ** 2:
+			unit.hp = 0.0
+	for side in _base_obstacles:
+		if Fortifications.blast_hits(target, _bases[side], BASE_FOOTPRINT * 2.0):
+			_destroy_in_blast(_base_health[side])
+	for outpost in _outposts.values():
+		if Fortifications.blast_hits(target, outpost.position, OUTPOST_FOOTPRINT * 2.0):
+			_destroy_in_blast(outpost)
+	for fort: Fortification in _fortifications.values():
+		if Fortifications.blast_hits(target, fort.position, fort.profile.size, fort.angle):
+			_destroy_in_blast(fort)
+	missile_impact.emit(flight)
+
+
+static func _destroy_in_blast(building: BuildingHealth) -> void:
+	if building.hp > 0.0:
+		building.hp = 0.0
+		building.destroyed_by_missile = true
 
 
 func _register_structure(fort: Fortification, kind: StringName, profile: Dictionary,
@@ -335,6 +439,16 @@ func set_producer_stance(side: MatchRegion.Owner, id: int, stance: Stance) -> bo
 			or timer.hp <= 0.0 or not Stance.values().has(stance):
 		return false
 	timer.default_stance = stance
+	return true
+
+
+func upgrade_producer(side: MatchRegion.Owner, id: int, economy: MatchEconomy) -> bool:
+	var timer := get_fortification(id) as ProductionTimer
+	if is_finished() or timer == null or timer.side != side or timer.hp <= 0.0 or timer.level != 1:
+		return false
+	if not economy.try_spend(side, MatchEconomy.UPGRADE_COST):
+		return false
+	timer.level = 2
 	return true
 
 
@@ -368,8 +482,15 @@ func set_fortification_active(fort: Fortification, active: bool) -> void:
 
 
 func add_landmark_footprint(footprint: Rect2) -> void:
-	_landmark_footprints.append(footprint)
-	navigation.add_obstacle(footprint)
+	_landmark_footprints[footprint] = navigation.add_obstacle(footprint)
+
+
+func remove_landmark_footprint(footprint: Rect2) -> bool:
+	if not _landmark_footprints.has(footprint):
+		return false
+	navigation.remove_obstacle(_landmark_footprints[footprint])
+	_landmark_footprints.erase(footprint)
+	return true
 
 
 func fortification_site_clear(polygon: PackedVector2Array, include_hubs := true) -> bool:
@@ -478,6 +599,8 @@ func _index_unit(unit: Unit) -> void:
 	unit._grid = _unit_grid
 	unit._set_cell(unit.position)
 	_unit_grid.insert(unit.id, unit._cell, unit.side)
+	if unit.definition.has("support"):
+		_support_units[unit.id] = unit
 
 
 func get_unit(id: int) -> Unit:
@@ -509,7 +632,7 @@ func order_move(side: MatchRegion.Owner, id: int, destination: Vector2,
 	var route := routes.path(unit.position, destination)
 	var breach := {}
 	if route.is_empty():
-		if unit.type_id == UnitCatalog.SCOUT or not routes.is_passable(destination):
+		if unit.definition.damage <= 0.0 or not routes.is_passable(destination):
 			return false
 		breach = _find_wall_approach(unit, destination)
 		if breach.is_empty():
@@ -565,7 +688,7 @@ func order_formation(side: MatchRegion.Owner, ids: Array, destination: Vector2,
 		var across_b := b.position.dot(right)
 		return a.id < b.id if across_a == across_b else across_a < across_b)
 	var slots: Array[Vector2] = [destination]
-	var rings := ceili(sqrt(members.size())) + 1
+	var rings := maxi(3, ceili(sqrt(members.size() * 0.5)))
 	for ring in range(1, rings + 1):
 		for index in 8 * ring:
 			var angle := TAU * index / (8 * ring)
@@ -815,6 +938,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 	var attacks: Array[Unit] = []
 	_combat_step += 1
 	var stagger_pursuit := _bases.size() > 2
+	var stagger_garrisons := units.size() >= 96
 	if _unit_grid.count != units.size():
 		for unit in units:
 			if unit._grid == null:
@@ -822,6 +946,12 @@ func _step_combat(economy: MatchEconomy) -> void:
 	for unit in units:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
 		if unit.hp <= 0.0:
+			continue
+		# In large battles, refresh stationary target searches in four phases.
+		# A defender with a target still replans immediately when its weapon is ready.
+		if stagger_garrisons and unit.order == Order.HOLD and unit.position == unit.ordered_destination \
+				and (unit.id + _combat_step) % 4 != 0 \
+				and (unit.target == NO_TARGET or unit.cooldown > TIME_EPSILON):
 			continue
 		if unit.order == Order.MOVE and unit.target == NO_TARGET \
 				and unit.route_revision == navigation.revision \
@@ -847,6 +977,8 @@ func _step_combat(economy: MatchEconomy) -> void:
 	var report_attacks := attack_resolved.has_connections()
 	for unit in attacks:
 		_resolve_attack(unit, report_attacks)
+	if not _charging_silos.is_empty() or not _missile_flights.is_empty():
+		_advance_missiles()
 	for unit in units:
 		if unit.hp <= 0.0:
 			continue
@@ -857,6 +989,12 @@ func _step_combat(economy: MatchEconomy) -> void:
 				and not unit.waypoints.is_empty() and not _retain_route(unit):
 			continue
 		_move(unit)
+
+	if not _support_units.is_empty():
+		var report_heals := healing_resolved.has_connections()
+		for unit in _support_units.values():
+			if unit.hp > 0.0 and unit.cooldown <= TIME_EPSILON and unit.support_scan_at <= _elapsed_time:
+				_heal_ally(unit, report_heals)
 
 	var eliminated: Array[MatchRegion.Owner] = []
 	for side in _base_obstacles.keys():
@@ -879,6 +1017,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 			_unit_grid.erase(unit.id, unit._cell, unit.side)
 			unit._grid = null
 			_units.erase(unit.id)
+			_support_units.erase(unit.id)
 			_queued_orders.erase(unit.id)
 			if unit.type_id != UnitCatalog.SCOUT:
 				_military_count[unit.side] -= 1
@@ -933,7 +1072,7 @@ func _resolve_attack(unit: Unit, report_attack: bool) -> void:
 		var target := _units[unit.target]
 		if target.hp <= 0.0:
 			return
-		target.hp -= damage
+		target.hp -= damage * UnitCatalog.damage_multiplier(unit.definition, target.definition)
 		impact = target.position
 		target_side = target.side
 	else:
@@ -959,6 +1098,60 @@ func _resolve_attack(unit: Unit, report_attack: bool) -> void:
 	unit.cooldown = unit.attack_interval
 	if report_attack:
 		attack_resolved.emit(AttackResolved.new(unit, target_side, impact, _elapsed_time))
+
+
+func _heal_ally(medic: Unit, report_heal: bool) -> void:
+	var support: Dictionary = medic.definition.support
+	var radius_squared := float(support.radius) ** 2
+	_candidate_ids.clear()
+	_unit_grid.append_ids(medic._cell, ceili(support.radius / BattleSpatialGrid.CELL_SIZE),
+		medic.side, _candidate_ids)
+	var recipient: Unit
+	var best_recovery := 0.0
+	for id in _candidate_ids:
+		var ally := _units[id]
+		if ally == medic or ally.hp <= 0.0 or _elapsed_time < ally.next_healing_at \
+				or medic.position.distance_squared_to(ally.position) > radius_squared:
+			continue
+		var recovery := minf(support.heal, _unit_max_hp(ally) - ally.hp)
+		if recovery > best_recovery or (recipient != null and recovery == best_recovery and id < recipient.id):
+			recipient = ally
+			best_recovery = recovery
+	if recipient == null:
+		medic.support_scan_at = _elapsed_time + 0.12
+		return
+	recipient.hp += best_recovery
+	recipient.next_healing_at = _elapsed_time + float(support.recovery)
+	medic.cooldown = medic.attack_interval
+	if report_heal:
+		var cue := AttackResolved.new(medic, recipient.side, recipient.position, _elapsed_time)
+		cue.target_id = recipient.id
+		healing_resolved.emit(cue)
+
+
+func _plan_support(unit: Unit) -> void:
+	if _elapsed_time < unit.support_replan_at and _retain_route(unit):
+		return
+	unit.support_replan_at = _elapsed_time + 0.25
+	var follow_range: float = unit.definition.support.follow_range
+	_candidate_ids.clear()
+	_unit_grid.append_ids(unit._cell, ceili(follow_range / BattleSpatialGrid.CELL_SIZE),
+		unit.side, _candidate_ids)
+	var nearest := follow_range * follow_range
+	var leader: Unit
+	for id in _candidate_ids:
+		var ally := _units[id]
+		if ally.hp <= 0.0 or ally.definition.damage <= 0.0:
+			continue
+		var distance := unit.position.distance_squared_to(ally.position)
+		if distance < nearest or (leader != null and distance == nearest and id < leader.id):
+			nearest = distance
+			leader = ally
+	if leader == null or nearest <= float(unit.definition.support.radius * 0.65) ** 2:
+		_clear_route(unit)
+		return
+	var destination := leader.position.move_toward(unit.position, unit.definition.support.radius * 0.55)
+	_route_to(unit, destination)
 
 
 ## Broad-phase candidates for a strategic threat scan. Callers test exact range.
@@ -1008,7 +1201,7 @@ func _nearby_enemies(units: Array[Unit], position: Vector2,
 
 func _fire_fortifications(units: Array[Unit]) -> void:
 	for fort: Fortification in _fortifications.values():
-		if not fort.active or fort.profile.get("range", 0.0) <= 0.0:
+		if not fort.active or fort.hp <= 0.0 or fort.profile.get("range", 0.0) <= 0.0:
 			continue
 		fort.cooldown = maxf(0.0, fort.cooldown - STEP)
 		if fort.cooldown > TIME_EPSILON:
@@ -1017,22 +1210,27 @@ func _fire_fortifications(units: Array[Unit]) -> void:
 		var target: Unit
 		var range_squared := float(fort.profile.range) ** 2
 		var nearest := range_squared
+		var best_multiplier := -INF
+		var prefer_class: bool = fort.profile.get("prefer_damage_class", false)
 		var nearby := _nearby_enemies(units, fort.position, fort.side, fort.profile.range)
 		for unit in nearby:
 			var distance := fort.position.distance_squared_to(unit.position)
-			if unit.side == fort.side or unit.hp <= 0.0 or distance > nearest:
+			if unit.side == fort.side or unit.hp <= 0.0 or distance > range_squared:
 				continue
-			if target != null and distance == nearest and unit.id > target.id:
+			var multiplier := UnitCatalog.damage_multiplier(fort.profile, unit.definition) if prefer_class else 1.0
+			if multiplier < best_multiplier or (multiplier == best_multiplier and (
+					distance > nearest or (distance == nearest and target != null and unit.id > target.id))):
 				continue
 			if fort.profile.splash == 0.0 and not navigation.line_clear(
 					fort.position, unit.position, fort.obstacle):
 				continue
 			target = unit
 			nearest = distance
+			best_multiplier = multiplier
 		if target == null:
 			continue
 
-		target.hp -= fort.profile.damage
+		target.hp -= fort.profile.damage * UnitCatalog.damage_multiplier(fort.profile, target.definition)
 		if fort.profile.splash > 0.0:
 			var radius_squared := float(fort.profile.splash) ** 2
 			for unit in nearby:
@@ -1055,7 +1253,7 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 				if unit.waypoints.is_empty() and unit.position != unit.ordered_destination:
 					_resume_stance(unit)
 				return false
-			return unit.type_id != UnitCatalog.SCOUT and unit.waypoints.is_empty() \
+			return unit.definition.damage > 0.0 and unit.waypoints.is_empty() \
 				and unit.position != unit.ordered_destination \
 				and _plan_breach(unit, unit.ordered_destination, true)
 		Order.HOLD:
@@ -1067,7 +1265,9 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 				if unit.movement_destination.is_finite():
 					_clear_route(unit)
 				return false
-	if unit.type_id == UnitCatalog.SCOUT:
+	if unit.definition.damage <= 0.0:
+		if unit.definition.has("support") and unit.order == Order.AUTONOMOUS:
+			_plan_support(unit)
 		return false
 
 	var holding := unit.order == Order.HOLD
@@ -1151,9 +1351,12 @@ func _nearby_structure_target(unit: Unit, weapon_range: float) -> BuildingHealth
 				best_outpost = outpost
 			continue
 		var fort := get_fortification(id)
-		if fort.side != unit.side and (best_fort == null or id > best_fort.id) \
+		var urgent := not _charging_silos.is_empty() and _charging_silos.has(id)
+		if fort.side != unit.side and (urgent or best_fort == null or id > best_fort.id) \
 				and _can_attack_structure(unit.position, fort.position, fort.obstacle,
 					fort.unit_attack_range(weapon_range)):
+			if urgent:
+				return fort
 			best_fort = fort
 	return best_outpost if best_outpost != null else best_fort
 

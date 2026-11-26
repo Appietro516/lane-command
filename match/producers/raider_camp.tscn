@@ -1,0 +1,36 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Dark"]
+albedo_color = Color(0.18, 0.24, 0.25, 1)
+
+[sub_resource type="StandardMaterial3D" id="Canvas"]
+albedo_color = Color(0.67, 0.62, 0.51, 1)
+
+[sub_resource type="BoxMesh" id="Pad"]
+material = SubResource("Dark")
+size = Vector3(2.65, 0.14, 1.8)
+
+[sub_resource type="PrismMesh" id="Shelter"]
+material = SubResource("Canvas")
+size = Vector3(1.15, 0.82, 1.55)
+
+[sub_resource type="BoxMesh" id="Stripe"]
+size = Vector3(2.15, 0.07, 0.28)
+
+[node name="RaiderCamp" type="Node3D"]
+
+[node name="Pad" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.07, 0)
+mesh = SubResource("Pad")
+
+[node name="LeftShelter" type="MeshInstance3D" parent="."]
+position = Vector3(-0.63, 0.49, 0)
+mesh = SubResource("Shelter")
+
+[node name="RightShelter" type="MeshInstance3D" parent="."]
+position = Vector3(0.63, 0.49, 0)
+mesh = SubResource("Shelter")
+
+[node name="Marking" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.18, 0.75)
+mesh = SubResource("Stripe")

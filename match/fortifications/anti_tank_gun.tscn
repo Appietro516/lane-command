@@ -1,0 +1,54 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Dark"]
+albedo_color = Color(0.15, 0.22, 0.24, 1)
+
+[sub_resource type="StandardMaterial3D" id="Steel"]
+albedo_color = Color(0.59, 0.66, 0.66, 1)
+
+[sub_resource type="BoxMesh" id="Footing"]
+material = SubResource("Dark")
+size = Vector3(1.6, 0.18, 1.6)
+
+[sub_resource type="CylinderMesh" id="Rotator"]
+material = SubResource("Steel")
+top_radius = 0.55
+bottom_radius = 0.68
+height = 0.42
+radial_segments = 8
+rings = 0
+
+[sub_resource type="BoxMesh" id="Shield"]
+size = Vector3(0.95, 0.36, 0.16)
+
+[sub_resource type="BoxMesh" id="Cannon"]
+material = SubResource("Dark")
+size = Vector3(0.19, 0.19, 1.5)
+
+[sub_resource type="BoxMesh" id="Brake"]
+material = SubResource("Steel")
+size = Vector3(0.28, 0.25, 0.24)
+
+[node name="AntiTankGun" type="Node3D"]
+
+[node name="Footing" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.09, 0)
+mesh = SubResource("Footing")
+
+[node name="Turret" type="Node3D" parent="."]
+position = Vector3(0, 0.42, 0)
+
+[node name="Rotator" type="MeshInstance3D" parent="Turret"]
+mesh = SubResource("Rotator")
+
+[node name="Marking" type="MeshInstance3D" parent="Turret"]
+position = Vector3(0, 0.24, 0.17)
+mesh = SubResource("Shield")
+
+[node name="Barrel" type="MeshInstance3D" parent="Turret"]
+position = Vector3(0, 0.27, 0.64)
+mesh = SubResource("Cannon")
+
+[node name="Brake" type="MeshInstance3D" parent="Turret/Barrel"]
+position = Vector3(0, 0, 0.65)
+mesh = SubResource("Brake")

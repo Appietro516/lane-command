@@ -18,12 +18,11 @@ const UPGRADE_COST := {ENERGY: 60, FOOD: 15}
 const CLAIM_COST := {ENERGY: 50}
 const PRODUCTION_INTERVAL := 3.5
 const UPGRADED_PRODUCTION_INTERVAL := 2.5
-const PRODUCTION_UPGRADE := &"barracks_upgrade"
+const PRODUCTION_UPGRADE_FACTOR := UPGRADED_PRODUCTION_INTERVAL / PRODUCTION_INTERVAL
 
 class SideState:
 	var stockpiles: Dictionary[StringName, float] = {}
 	var barracks_count := 0
-	var upgraded := false
 
 	func _init() -> void:
 		for resource_id in RESOURCES:
@@ -164,39 +163,35 @@ func production_interval(side: MatchRegion.Owner) -> float:
 
 ## A shorter cycle increases production capacity. Paused barracks have zero capacity.
 ## Food is charged separately when a cycle deploys a unit.
-func production_stat(side: MatchRegion.Owner, active: bool) -> Dictionary:
-	var result := stats.inspect(side, FactionStats.BARRACKS_INTERVAL, PRODUCTION_INTERVAL)
-	var interval := PRODUCTION_INTERVAL
+func production_stat(side: MatchRegion.Owner, active: bool, base_interval := PRODUCTION_INTERVAL,
+		barracks := true, upgraded := false) -> Dictionary:
+	var interval := base_interval
 	var rate := 1.0 / interval
-	var breakdown: Array[Dictionary] = []
-	for entry: Dictionary in result.breakdown:
-		if entry.source_id == FactionStats.LIMIT:
-			continue # The marginal rates already respect the minimum cycle time.
-		entry.stat = &"barracks_rate"
-		if entry.source_id == FactionStats.BASELINE:
-			entry.magnitude = rate
+	var breakdown: Array[Dictionary] = [
+		{"source_name": "Base", "source_type": FactionStats.BASELINE_TYPE, "magnitude": rate, "active": true},
+	]
+	var minimum: float = FactionStats.STAT_DEFINITIONS[FactionStats.BARRACKS_INTERVAL].minimum
+	if barracks:
+		var result := stats.inspect(side, FactionStats.BARRACKS_INTERVAL, base_interval)
+		for entry: Dictionary in result.breakdown:
+			if entry.source_id == FactionStats.LIMIT or entry.source_id == FactionStats.BASELINE:
+				continue
+			entry.stat = &"barracks_rate"
+			entry.configured_magnitude = 1.0 / maxf(interval + entry.configured_magnitude, minimum) - rate
+			interval += entry.magnitude
+			var next_rate := 1.0 / maxf(interval, minimum)
+			entry.magnitude = next_rate - rate
+			rate = next_rate
 			breakdown.append(entry)
-			continue
-		# Attribute each change in throughput in the same order as the cycle modifiers.
-		var minimum: float = FactionStats.STAT_DEFINITIONS[FactionStats.BARRACKS_INTERVAL].minimum
-		entry.configured_magnitude = 1.0 / maxf(interval + entry.configured_magnitude, minimum) - rate
-		interval += entry.magnitude
-		var next_rate := 1.0 / maxf(interval, minimum)
-		entry.magnitude = next_rate - rate
-		rate = next_rate
-		breakdown.append(entry)
+	if upgraded:
+		var upgrade_rate := 1.0 / maxf(minimum, interval - base_interval * (1.0 - PRODUCTION_UPGRADE_FACTOR))
+		breakdown.append({"source_name": "Production upgrade", "source_type": &"upgrade",
+			"magnitude": upgrade_rate - rate, "active": true})
+		rate = upgrade_rate
 	if not active:
 		breakdown.append({"source_name": "Territory lost", "source_type": &"rule",
 			"magnitude": -rate, "active": true})
-	return {"total": 1.0 / result.total if active else 0.0, "breakdown": breakdown}
-
-
-func has_upgrade(side: MatchRegion.Owner) -> bool:
-	return _sides[side].upgraded
-
-
-func can_upgrade(side: MatchRegion.Owner) -> bool:
-	return _sides.has(side) and not has_upgrade(side) and cost_block_reason(side, UPGRADE_COST).is_empty()
+	return {"total": rate if active else 0.0, "breakdown": breakdown}
 
 
 func try_build(side: MatchRegion.Owner, cost: Dictionary) -> bool:
@@ -209,14 +204,3 @@ func try_build(side: MatchRegion.Owner, cost: Dictionary) -> bool:
 
 func remove_barracks(side: MatchRegion.Owner) -> void:
 	_sides[side].barracks_count -= 1
-
-
-func try_upgrade(side: MatchRegion.Owner) -> bool:
-	if not _sides.has(side) or has_upgrade(side) or not try_spend(side, UPGRADE_COST):
-		return false
-
-	_sides[side].upgraded = true
-	stats.set_modifier(StringName("%s/%d" % [PRODUCTION_UPGRADE, side]), side,
-		FactionStats.BARRACKS_INTERVAL, UPGRADED_PRODUCTION_INTERVAL - PRODUCTION_INTERVAL,
-		&"upgrade", "Barracks upgrade")
-	return true

@@ -137,8 +137,8 @@ func _test_lifecycle(scene: Node) -> void:
 		"The original barracks remains visible in place with production suspended.")
 	var paused_progress := timer.elapsed
 	cpu_unit.hp = 0
-	_check(scene.try_upgrade(PLAYER), "The faction can upgrade while its barracks is inactive.")
-	battle.advance(economy.production_interval(PLAYER) + MatchBattle.STEP, economy)
+	_check(scene.try_upgrade(PLAYER, timer.id), "The faction can upgrade while its barracks is inactive.")
+	battle.advance(timer.interval(economy) + MatchBattle.STEP, economy)
 	_check(is_equal_approx(timer.elapsed, paused_progress) and ScoutFixture.combat_units(battle).is_empty(),
 		"A lost-region barracks does not progress or deploy units.")
 
@@ -166,7 +166,7 @@ func _test_lifecycle(scene: Node) -> void:
 		and economy.barracks_count(PLAYER) == 1
 		and economy.energy(PLAYER) == energy - MatchEconomy.CLAIM_COST[MatchEconomy.ENERGY],
 		"The original owner pays only the claim cost and reactivates the same barracks.")
-	battle.advance(economy.production_interval(PLAYER) - paused_progress + MatchBattle.STEP, economy)
+	battle.advance(timer.interval(economy) - paused_progress + MatchBattle.STEP, economy)
 	_check(ScoutFixture.combat_units(battle).size() == 2, "Production resumes from the existing timer.")
 
 	scene.restart_match()

@@ -132,17 +132,17 @@ func _run() -> void:
 	scene._pick_map(camera.unproject_position(roof.global_position))
 	_check(scene.get_node("%UnitName").text == "Player Barracks" and sources.visible
 		and stat_text.text.contains("Base  0.285714 units/s"), "Clicking the barracks after a Scout exposes baseline capacity.")
-	_check(scene.try_upgrade(PLAYER), "The real production upgrade is affordable.")
-	var production := economy.production_stat(PLAYER, true)
-	_check(_matches(production, 1.0 / economy.production_interval(PLAYER))
-		and stat_text.text.contains("Barracks upgrade  +0.114286 units/s")
+	_check(scene.try_upgrade(PLAYER, timer.id), "The real production upgrade is affordable.")
+	var production := timer.production_stat(economy)
+	_check(_matches(production, 1.0 / timer.interval(economy))
+		and stat_text.text.contains("Production upgrade  +0.114286 units/s")
 		and stat_text.text.contains("Total  0.4 units/s")
 		and economy.income_stat(PLAYER, ENERGY) == income,
 		"The purchased upgrade explains the new production rate without altering income.")
 	if timer != null:
 		battle.set_barracks_active(timer, false)
 		scene._refresh_hud()
-		_check(_matches(economy.production_stat(PLAYER, timer.active), 0.0)
+		_check(_matches(timer.production_stat(economy), 0.0)
 			and stat_text.text.contains("Total  0 units/s"), "Paused barracks have zero production capacity.")
 
 	scene.restart_match()

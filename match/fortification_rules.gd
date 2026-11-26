@@ -2,6 +2,11 @@ extends RefCounted
 
 const NEST := &"machine_gun_nest"
 const MORTAR := &"mortar"
+const SILO := &"missile_silo"
+const MISSILE_RADIUS := 7.0
+const MISSILE_CHARGE := 12.0
+const MISSILE_FLIGHT := 2.4
+const ANTI_TANK := &"anti_tank_gun"
 const WALL := &"wall"
 const WALL_SEGMENT_LENGTH := 1.0
 const WALL_WIDTH := 0.44
@@ -18,6 +23,19 @@ const PROFILES := {
 		"cost": {MatchEconomy.ENERGY: 45, MatchEconomy.MATERIALS: 24, MatchEconomy.FOOD: 8},
 		"hp": 24, "size": Vector2(1.3, 1.3),
 		"range": 7.0, "interval": 2.4, "damage": 5.0, "splash": 1.35,
+	},
+	ANTI_TANK: {
+		"label": "Anti-Tank Gun", "description": "Slow, armor-piercing shots against Heavy units",
+		"cost": {MatchEconomy.ENERGY: 54, MatchEconomy.MATERIALS: 34},
+		"hp": 32, "size": Vector2(1.6, 1.6),
+		"range": 6.0, "interval": 1.85, "damage": 4.0, "splash": 0.0,
+		"damage_against": {MatchEconomy.UnitCatalog.HEAVY: 3.5, MatchEconomy.UnitCatalog.INFANTRY: 0.45},
+		"prefer_damage_class": true,
+	},
+	SILO: {
+		"label": "Missile Silo", "description": "One strategic strike · 4 building slots",
+		"cost": {MatchEconomy.ENERGY: 390, MatchEconomy.MATERIALS: 270, MatchEconomy.FOOD: 45},
+		"hp": 65, "size": Vector2(4.8, 4.4), "slots": 4,
 	},
 	WALL: {
 		"label": "Wall", "description": "Drag to build a line of barriers",
@@ -43,3 +61,10 @@ static func wall_cost(count: int) -> Dictionary:
 static func footprint(center: Vector2, size: Vector2, angle := 0.0) -> PackedVector2Array:
 	var corners := BattleNavigation.corners_of(Rect2(-size * 0.5, size))
 	return Transform2D(angle, center) * corners
+
+
+
+static func blast_hits(point: Vector2, center: Vector2, size: Vector2, angle := 0.0) -> bool:
+	var local := (point - center).rotated(-angle)
+	var closest := local.clamp(-size * 0.5, size * 0.5)
+	return local.distance_squared_to(closest) <= MISSILE_RADIUS ** 2
