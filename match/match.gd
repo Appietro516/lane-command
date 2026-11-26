@@ -73,6 +73,7 @@ const LEGENDARY_OUTPOST_SPACING := 2.0
 const INACTIVE_ACCENT := preload("res://match/inactive_accent.tres")
 const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
+const DifficultyProfile := preload("res://match/difficulty_profile.gd")
 const CpuStrategy := preload("res://match/cpu_strategy.gd")
 const ScoutExpeditions := preload("res://match/scout_expeditions.gd")
 const CLAIM_DISCOVERY := &"claim_completed"
@@ -126,6 +127,9 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 	LegendaryBuff.new("Harvest Shrine", FactionStats.FOOD),
 	LegendaryBuff.new("Ancient Bastion", FactionStats.BUILDING_MAX_HP, 10.0),
 ]
+@export_group("Match Setup")
+@export var show_match_setup_on_start := false
+
 @export_group("CPU Strategy", "cpu_")
 @export_range(0.25, 10.0, 0.25) var cpu_decision_interval := 2.0
 @export_range(4.0, 24.0, 0.5) var cpu_threat_radius := 10.0
@@ -199,6 +203,8 @@ var _placement_id: StringName = &""
 var _preview: Node3D
 var _preview_material: StandardMaterial3D
 var _cpu_strategy: CpuStrategy
+var cpu_difficulty := DifficultyProfile.DEFAULT_LEVEL
+var _process_mode_before_setup: ProcessMode
 var _build_options: Dictionary[StringName, Button] = {}
 
 @onready var _buildings: Dictionary[MatchRegion.Owner, Node3D] = {
@@ -245,6 +251,12 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _cpu_hp_label: Label = %CPUHP
 @onready var _outcome_label: Label = %Outcome
 @onready var _restart_button: Button = %Restart
+@onready var _active_difficulty: Label = %ActiveDifficulty
+@onready var _match_setup: Control = %MatchSetup
+@onready var _difficulty_picker: OptionButton = _match_setup.get_node("%Difficulty")
+@onready var _difficulty_description: Label = _match_setup.get_node("%Description")
+@onready var _confirm_setup: Button = _match_setup.get_node("%Confirm")
+@onready var _cancel_setup: Button = _match_setup.get_node("%Cancel")
 @onready var _event_dialogue := $NarrativeOverlay/EventDialogue
 
 
@@ -302,11 +314,65 @@ func _ready() -> void:
 		%ScoutSlots.add_child(button)
 		_scout_buttons.append(button)
 	$HUD.move_child(%ClaimMarkers, 0)
-	_restart_button.pressed.connect(restart_match)
+	for level in range(1, DifficultyProfile.PROFILES.size() + 1):
+		var difficulty := DifficultyProfile.get_profile(level)
+		_difficulty_picker.add_item(DifficultyProfile.display_name(level), level)
+		_difficulty_picker.get_popup().set_item_tooltip(level - 1, difficulty.description)
+	_difficulty_picker.item_selected.connect(_describe_difficulty)
+	_confirm_setup.pressed.connect(_apply_match_setup)
+	_cancel_setup.pressed.connect(_close_match_setup)
+	_restart_button.pressed.connect(_open_match_setup.bind(false))
 	_event_dialogue.choice_pressed.connect(_resolve_narrative_choice)
 	claim_completed.connect(_discover_on_claim)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
 	restart_match()
+	if show_match_setup_on_start:
+		_open_match_setup(true)
+
+
+func _open_match_setup(initial: bool) -> void:
+	if _match_setup.visible:
+		return
+	_pending_pick = Vector2.INF
+	_clear_wall_drag()
+	_camera.end_drag()
+	_difficulty_picker.select(_difficulty_picker.get_item_index(cpu_difficulty))
+	_describe_difficulty(_difficulty_picker.selected)
+	_confirm_setup.text = "Start match" if initial else "Restart match"
+	_cancel_setup.visible = not initial
+	var next_button := _confirm_setup if initial else _cancel_setup
+	var previous_button := _difficulty_picker if initial else _cancel_setup
+	_difficulty_picker.focus_previous = _difficulty_picker.get_path_to(_confirm_setup)
+	_difficulty_picker.focus_next = _difficulty_picker.get_path_to(next_button)
+	_confirm_setup.focus_previous = _confirm_setup.get_path_to(previous_button)
+	_confirm_setup.focus_next = _confirm_setup.get_path_to(_difficulty_picker)
+	_cancel_setup.focus_previous = _cancel_setup.get_path_to(_difficulty_picker)
+	_cancel_setup.focus_next = _cancel_setup.get_path_to(_confirm_setup)
+	_process_mode_before_setup = process_mode
+	process_mode = Node.PROCESS_MODE_DISABLED
+	_match_setup.show()
+	_difficulty_picker.grab_focus()
+
+
+func _describe_difficulty(index: int) -> void:
+	var difficulty := DifficultyProfile.get_profile(_difficulty_picker.get_item_id(index))
+	_difficulty_description.text = difficulty.description
+	_difficulty_picker.tooltip_text = difficulty.description
+
+
+func _apply_match_setup() -> void:
+	cpu_difficulty = _difficulty_picker.get_selected_id()
+	restart_match()
+
+
+func _close_match_setup() -> void:
+	if _match_setup.visible:
+		_match_setup.hide()
+		process_mode = _process_mode_before_setup
+
+
+func _cpu_decision_period() -> float:
+	return cpu_decision_interval * _cpu_strategy.difficulty.cadence
 
 
 func _create_layout() -> TerritoryLayout:
@@ -436,6 +502,9 @@ func _base_structure_id(side: MatchRegion.Owner) -> StringName:
 
 
 func restart_match() -> void:
+	_close_match_setup()
+	_active_difficulty.text = "CPU %s" % DifficultyProfile.display_name(cpu_difficulty)
+	_active_difficulty.tooltip_text = DifficultyProfile.get_profile(cpu_difficulty).description
 	if narrative_events != null:
 		narrative_events.close()
 		narrative_events.queue_changed.disconnect(_sync_narrative_dialogue)
@@ -490,8 +559,8 @@ func restart_match() -> void:
 	economy = MatchEconomy.new(faction_stats)
 	narrative_events = NarrativeEvents.new(active_map_seed, economy, narrative_catalog)
 	narrative_events.queue_changed.connect(_sync_narrative_dialogue)
-	_time_until_cpu_decision = cpu_decision_interval
-	_cpu_strategy = CpuStrategy.new(active_map_seed)
+	_cpu_strategy = CpuStrategy.new(active_map_seed, cpu_difficulty)
+	_time_until_cpu_decision = _cpu_decision_period()
 	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
 		_map_position(_bases[CPU].global_position), unit_aggro_radius,
 		_layout.bounds, faction_stats)
@@ -524,7 +593,7 @@ func restart_match() -> void:
 
 
 func _process(delta: float) -> void:
-	if _battle.is_finished() or _has_narrative_decision():
+	if _match_setup.visible or _battle.is_finished() or _has_narrative_decision():
 		return
 
 	# Apply income and production up to each decision before making its purchase.
@@ -534,7 +603,7 @@ func _process(delta: float) -> void:
 		_time_until_cpu_decision -= used
 		if _has_narrative_decision():
 			break
-		_time_until_cpu_decision = cpu_decision_interval
+		_time_until_cpu_decision = _cpu_decision_period()
 		if not _battle.is_finished():
 			_try_cpu_purchase()
 		if _has_narrative_decision():

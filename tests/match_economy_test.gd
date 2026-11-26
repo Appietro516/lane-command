@@ -277,6 +277,8 @@ func _test_claimed_placement() -> void:
 	scene.set_process(false)
 	await _choose_barracks(build)
 	_click(scene.get_node("%Restart"))
+	await process_frame
+	_click(scene.get_node("%MatchSetup").get_node("%Confirm"))
 	scene.set_process(false)
 	_check(not scene.get_node("%PlacementPanel").visible and player_buildings.get_child_count() == 0,
 		"Restart cancels active placement and clears constructed buildings.")
