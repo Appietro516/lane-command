@@ -131,7 +131,7 @@ func _assign_starting_territories(cpu_opponents: int, player_count: int, cpu_cou
 	for start in starts:
 		base_positions[start.id] = candidates[start]
 
-	if cpu_opponents == 1 and settings.shape != MapSettings.Shape.TRIANGLE:
+	if cpu_opponents == 1 and settings.shape in [MapSettings.Shape.RECTANGLE, MapSettings.Shape.SQUARE]:
 		starting_territories = [player_start_ids, cpu_start_ids.duplicate()]
 		starting_territories[1].reverse()
 		return
@@ -173,6 +173,8 @@ func _generate_sites(count: int) -> PackedVector2Array:
 	rng.seed = active_seed
 	if settings.shape == MapSettings.Shape.TRIANGLE:
 		return _generate_triangle_sites(count, rng)
+	if settings.shape == MapSettings.Shape.CIRCLE:
+		return _generate_circle_sites(count, rng)
 	var transpose := bounds.size.y > bounds.size.x
 	var extent := Vector2(bounds.size.y, bounds.size.x) if transpose else bounds.size
 	var max_columns := floori(extent.x / MapSettings.MIN_SITE_PITCH)
@@ -196,6 +198,29 @@ func _generate_sites(count: int) -> PackedVector2Array:
 	# The traversal runs from one end of the long axis to the other. Its
 	# prefix and suffix give both factions contiguous territory at any split.
 	return sites
+
+
+func _generate_circle_sites(count: int, rng: RandomNumberGenerator) -> PackedVector2Array:
+	if count == 2:
+		var offset := Vector2.RIGHT * bounds.size.x * 0.23
+		return PackedVector2Array([-offset, offset])
+	# Divide the disk into annuli of approximately equal area per site.
+	var rings := maxi(1, roundi(sqrt(count / PI)))
+	var points: Array[Vector2] = [Vector2.ZERO]
+	var phase := rng.randf_range(0.0, TAU)
+	for ring in range(1, rings + 1):
+		var outer_count := roundi(count * (ring * ring) / float(rings * rings))
+		var entries := outer_count - points.size()
+		if entries <= 0:
+			continue
+		var radius := bounds.size.x * 0.5 * sqrt((points.size() + entries * 0.5) / count)
+		for index in entries:
+			var angle := phase + TAU * (index + 0.5 * (ring % 2)) / entries
+			points.append(Vector2.from_angle(angle) * radius
+				+ Vector2(rng.randf_range(-0.18, 0.18), rng.randf_range(-0.18, 0.18)))
+	# Stable IDs at the extreme sides keep the original opening endpoints.
+	points.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.x < b.x)
+	return PackedVector2Array(points)
 
 
 func _generate_triangle_sites(count: int, rng: RandomNumberGenerator) -> PackedVector2Array:

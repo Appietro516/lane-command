@@ -16,7 +16,6 @@ var _layout: TerritoryLayout
 var _seed_rng := RandomNumberGenerator.new()
 
 @onready var _shape_picker: OptionButton = %MapShape
-@onready var _size_picker: OptionButton = %MapSize
 @onready var _region_field: LineEdit = %MapRegions
 @onready var _seed_field: LineEdit = %MapSeed
 @onready var _opponent_picker: OptionButton = %OpponentCount
@@ -31,21 +30,17 @@ func _ready() -> void:
 	_seed_rng.randomize()
 	for shape in MapSettings.SHAPE_NAMES:
 		_shape_picker.add_item(MapSettings.SHAPE_NAMES[shape], shape)
-	for size in MatchSettings.SIZE_PRESETS:
-		_size_picker.add_item(MatchSettings.SIZE_PRESETS[size].label, size)
 	for count in range(1, TerritoryLayout.MAX_CPU_OPPONENTS + 1):
 		_opponent_picker.add_item(str(count), count)
 		var level := settings.cpu_difficulties[count - 1] if count <= settings.cpu_difficulties.size() \
 			else DifficultyProfile.DEFAULT_LEVEL
 		_add_cpu_row(count, level)
 	_shape_picker.select(_shape_picker.get_item_index(settings.map.shape))
-	_size_picker.select(_size_picker.get_item_index(settings.map_size))
 	_opponent_picker.select(_opponent_picker.get_item_index(settings.cpu_difficulties.size()))
 	_region_field.text = str(settings.map.region_count)
 	_seed_field.text = str(settings.map.seed)
 
-	_shape_picker.item_selected.connect(_update_size_options.unbind(1))
-	_size_picker.item_selected.connect(_validate.unbind(1))
+	_shape_picker.item_selected.connect(_validate.unbind(1))
 	_opponent_picker.item_selected.connect(func(_index: int) -> void:
 		_update_cpu_rows()
 		_validate())
@@ -54,7 +49,7 @@ func _ready() -> void:
 	%Randomize.pressed.connect(_randomize_seed)
 	_start.pressed.connect(_start_match)
 	_update_cpu_rows()
-	_update_size_options()
+	_validate()
 	_opponent_picker.grab_focus()
 
 
@@ -102,31 +97,16 @@ func _update_cpu_rows() -> void:
 		_cpu_rows[i].visible = i < count
 
 
-func _update_size_options() -> void:
-	var shape := _shape_picker.get_selected_id() as MapSettings.Shape
-	for i in _size_picker.item_count:
-		var preset := _size_picker.get_item_id(i) as MatchSettings.MapSize
-		var dimensions := MatchSettings.preset_dimensions(preset, shape)
-		_size_picker.set_item_text(i, "%s · %s × %s" % [MatchSettings.SIZE_PRESETS[preset].label,
-			String.num(dimensions.x, 0), String.num(dimensions.y, 1).trim_suffix(".0")])
-	_validate()
-
-
 func _validate() -> void:
 	var shape := _shape_picker.get_selected_id() as MapSettings.Shape
-	var preset := _size_picker.get_selected_id() as MatchSettings.MapSize
-	var dimensions := MatchSettings.preset_dimensions(preset, shape)
 	var opponents := _opponent_picker.get_selected_id()
 	var minimum := opponents + 2
 	var regions := _region_field.text.strip_edges()
 	var seed := _seed_field.text.strip_edges()
 	var count: Variant = _parse_integer(regions)
-	var map := MapSettings.new(shape, dimensions, count if count != null else 0, 0)
-	_capacity.text = "%d–%d regions for this map and opponent count." % [minimum, map.supported_maximum]
+	_capacity.text = "%d–%d regions · terrain scales automatically" % [minimum, MapSettings.MAX_REGIONS]
 	if count == null or count < MapSettings.MIN_REGIONS or count > MapSettings.MAX_REGIONS:
 		_show_error("Enter a whole number of regions from 2 to 128.")
-	elif count > map.supported_maximum:
-		_show_error("This map fits up to %d regions. Reduce regions or choose a larger map." % map.supported_maximum)
 	elif count < minimum:
 		_show_error("Use at least %d regions so each faction has a start and one region stays neutral." % minimum)
 	else:
@@ -134,7 +114,8 @@ func _validate() -> void:
 		if selected_seed == null:
 			_show_error("Enter a whole-number seed from -%s to %s." % [MIN_INT_MAGNITUDE_TEXT, MAX_INT_TEXT])
 			return
-		_layout = TerritoryLayout.new(selected_seed, count, dimensions, 1, 1, opponents, shape)
+		_layout = TerritoryLayout.new(selected_seed, count, MapSettings.scaled_dimensions(shape, count),
+			1, 1, opponents, shape)
 		_show_error(_layout.configuration_error)
 
 
@@ -160,7 +141,7 @@ func _start_match() -> void:
 	var levels: Array[int] = []
 	for i in _opponent_picker.get_selected_id():
 		levels.append(_difficulty_pickers[i].get_selected_id())
-	var selected := MatchSettings.new(_layout.settings, _size_picker.get_selected_id() as MatchSettings.MapSize, levels)
+	var selected := MatchSettings.new(_layout.settings, levels)
 	_start.disabled = true
 	start_requested.emit(selected, _layout)
 

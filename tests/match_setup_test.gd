@@ -18,7 +18,6 @@ func _run() -> void:
 	var setup_screen: MatchSetup = game.get_node("MatchSetup")
 	var count: OptionButton = setup_screen.get_node("%OpponentCount")
 	var shape: OptionButton = setup_screen.get_node("%MapShape")
-	var size: OptionButton = setup_screen.get_node("%MapSize")
 	var regions: LineEdit = setup_screen.get_node("%MapRegions")
 	var seed_field: LineEdit = setup_screen.get_node("%MapSeed")
 	var start: Button = setup_screen.get_node("%Start")
@@ -31,7 +30,7 @@ func _run() -> void:
 	_check(setup_screen._difficulty_pickers[0].has_focus(),
 		"Tab focuses the first difficulty selector.")
 	_check(shape.get_selected_id() == MapSettings.Shape.RECTANGLE
-		and size.text == "Medium · 60 × 36" and regions.text == "24" and seed_field.text == "17"
+		and setup_screen.get_node_or_null("%MapSize") == null and regions.text == "24" and seed_field.text == "17"
 		and setup_screen._difficulty_pickers[0].get_selected_id() == 3,
 		"Setup displays the requested defaults.")
 
@@ -42,7 +41,7 @@ func _run() -> void:
 		game.free()
 		quit(1)
 		return
-	_check(match_scene._layout.settings.size == Vector2(60, 36)
+	_check(match_scene._layout.settings.size == MapSettings.scaled_dimensions(MapSettings.Shape.RECTANGLE, 24)
 		and match_scene._layout.settings.shape == MapSettings.Shape.RECTANGLE
 		and match_scene._layout.cells.size() == 24 and match_scene.active_map_seed == 17
 		and match_scene._cpu_strategies.size() == 1
@@ -57,7 +56,6 @@ func _run() -> void:
 	setup_screen = game.get_node("MatchSetup")
 	count = setup_screen.get_node("%OpponentCount")
 	shape = setup_screen.get_node("%MapShape")
-	size = setup_screen.get_node("%MapSize")
 	regions = setup_screen.get_node("%MapRegions")
 	seed_field = setup_screen.get_node("%MapSeed")
 	start = setup_screen.get_node("%Start")
@@ -73,14 +71,15 @@ func _run() -> void:
 	_edit(regions, "5")
 	_check(start.disabled and "at least 6" in error.text, "Four CPU starts also leave room for a neutral claim.")
 	_select(shape, MapSettings.Shape.TRIANGLE)
-	_select(size, MatchSettings.MapSize.SMALL)
-	_edit(regions, "29")
-	_check(start.disabled and "up to 28" in error.text, "The small triangle enforces its specific capacity.")
+	_edit(regions, "129")
+	_check(start.disabled, "Changing shape preserves the region count limit.")
+	_edit(regions, "96")
+	_check(not start.disabled, "A triangle can scale to 96 regions.")
+	_edit(regions, "129")
 	start.pressed.emit()
 	_check(not game.has_node("Match"), "An invalid configuration cannot start.")
 
 	_edit(regions, "18")
-	_select(size, MatchSettings.MapSize.LARGE)
 	_select(count, 2)
 	_check(setup_screen._cpu_rows[1].visible and not setup_screen._cpu_rows[2].visible,
 		"Exactly two labeled rows are available with two CPUs.")
@@ -104,8 +103,7 @@ func _run() -> void:
 		return
 	var triangle: TerritoryLayout = match_scene._layout
 	_check(match_scene.active_map_seed == -9223372036854775807 - 1 and triangle.boundary.size() == 3
-		and is_equal_approx(triangle.bounds.size.y, 90.0 * sqrt(3.0) / 2.0)
-		and triangle.bounds.size.x == 90.0 and triangle.cells.size() == 18
+		and triangle.bounds.size == MapSettings.scaled_dimensions(MapSettings.Shape.TRIANGLE, 18) and triangle.cells.size() == 18
 		and match_scene._cpu_strategies.size() == 2, "Start applies the exact seed, triangle and region count.")
 	_check_profiles(match_scene, [5, 2])
 	var old_battle: MatchBattle = match_scene._battle
@@ -118,7 +116,6 @@ func _run() -> void:
 	setup_screen = game.get_node("MatchSetup")
 	_check(setup_screen.get_node("%MapSeed").text == str(triangle.active_seed)
 		and setup_screen.get_node("%MapShape").get_selected_id() == MapSettings.Shape.TRIANGLE
-		and setup_screen.get_node("%MapSize").get_selected_id() == MatchSettings.MapSize.LARGE
 		and setup_screen.get_node("%MapRegions").text == "18"
 		and setup_screen.get_node("%OpponentCount").get_selected_id() == 2
 		and setup_screen._difficulty_pickers[0].get_selected_id() == 5
@@ -133,7 +130,6 @@ func _run() -> void:
 	root.size = Vector2i(1000, 640)
 	_select(setup_screen.get_node("%OpponentCount"), 4)
 	_select(setup_screen.get_node("%MapShape"), MapSettings.Shape.SQUARE)
-	_select(setup_screen.get_node("%MapSize"), MatchSettings.MapSize.SMALL)
 	_edit(setup_screen.get_node("%MapRegions"), "12")
 	var levels: Array[int] = [3, 2, 1, 4]
 	for i in levels.size():
@@ -151,7 +147,7 @@ func _run() -> void:
 	await _click(setup_screen.get_node("%Start"))
 	match_scene = game.get_node("Match")
 	var square: TerritoryLayout = match_scene._layout
-	_check(square.bounds.size == Vector2(32, 32) and square.cells.size() == 12
+	_check(square.bounds.size == MapSettings.scaled_dimensions(MapSettings.Shape.SQUARE, 12) and square.cells.size() == 12
 		and square.settings.shape == MapSettings.Shape.SQUARE and square.active_seed == randomized_seed.to_int()
 		and match_scene._battle._bases.size() == 5, "The square starts all four CPUs with the displayed randomized seed.")
 	_check_profiles(match_scene, levels)
@@ -160,7 +156,6 @@ func _run() -> void:
 	setup_screen = game.get_node("MatchSetup")
 	_select(setup_screen.get_node("%OpponentCount"), 1)
 	_select(setup_screen.get_node("%MapShape"), MapSettings.Shape.RECTANGLE)
-	_select(setup_screen.get_node("%MapSize"), MatchSettings.MapSize.MEDIUM)
 	_edit(setup_screen.get_node("%MapRegions"), "24")
 	_edit(setup_screen.get_node("%MapSeed"), "17")
 	await _click(setup_screen.get_node("%Start"))

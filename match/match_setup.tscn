@@ -131,20 +131,9 @@ layout_mode = 2
 size_flags_horizontal = 3
 accessibility_name = "Map shape"
 
-[node name="SizeLabel" type="Label" parent="Margins/Panel/Stack/FormScroll/Form/MapFields"]
-layout_mode = 2
-text = "Map size (world units)"
-
-[node name="MapSize" type="OptionButton" parent="Margins/Panel/Stack/FormScroll/Form/MapFields"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 32)
-layout_mode = 2
-accessibility_name = "Map size"
-accessibility_description = "Width by height in world units"
-
 [node name="RegionLabel" type="Label" parent="Margins/Panel/Stack/FormScroll/Form/MapFields"]
 layout_mode = 2
-text = "Regions"
+text = "Region count"
 
 [node name="RegionControls" type="HBoxContainer" parent="Margins/Panel/Stack/FormScroll/Form/MapFields"]
 layout_mode = 2

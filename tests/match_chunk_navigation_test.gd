@@ -24,7 +24,7 @@ func _run() -> void:
 
 
 func _test_shapes_and_clearance() -> void:
-	for shape in [MapSettings.Shape.RECTANGLE, MapSettings.Shape.SQUARE, MapSettings.Shape.TRIANGLE]:
+	for shape in MapSettings.SHAPE_NAMES:
 		var settings := MapSettings.new(shape as MapSettings.Shape, BOUNDS.size, 6, 17)
 		var navigation := Navigation.new(settings.bounds, settings.boundary)
 		navigation.add_obstacle(Rect2(-0.4, -5.0, 0.8, 10.0), 0.12)

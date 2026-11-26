@@ -24,6 +24,9 @@ func _run() -> void:
 				_test_partition(shape, Vector2(18, 18), 2, map_seed, 1)
 				_test_partition(shape, Vector2(72, 31), 24, map_seed, 4)
 				_test_partition(shape, Vector2(168, 192), 128, map_seed, 4)
+		for shape in MapSettings.SHAPE_NAMES:
+			for count in [12, 24, 48, 96]:
+				_test_partition(shape, MapSettings.scaled_dimensions(shape, count), count, 17, 4, true)
 		await _test_triangle_play()
 	if _failures == 0:
 		print("Map shape checks passed.")
@@ -31,7 +34,7 @@ func _run() -> void:
 
 
 func _test_partition(shape: MapSettings.Shape, dimensions: Vector2, count: int, map_seed: int,
-		opponents: int) -> void:
+		opponents: int, scaled := false) -> void:
 	var layout := TerritoryLayout.new(map_seed, count, dimensions, 1, 1, opponents, shape)
 	var reproducible := TerritoryLayout.new(map_seed, count, dimensions, 1, 1, opponents, shape)
 	_check(layout.configuration_error.is_empty() and layout.cells.size() == count
@@ -53,6 +56,9 @@ func _test_partition(shape: MapSettings.Shape, dimensions: Vector2, count: int, 
 			for i in 3:
 				_check(is_equal_approx(layout.boundary[i].distance_to(layout.boundary[(i + 1) % 3]),
 					dimensions.x), "Triangle is equilateral in the map plane.")
+		MapSettings.Shape.CIRCLE:
+			_check(layout.boundary.size() == MapSettings.CIRCLE_EDGES
+				and layout.bounds.size == Vector2.ONE * dimensions.x, "Circle is a regular disk.")
 	_check(layout.base_positions == reproducible.base_positions
 		and layout.starting_territories == reproducible.starting_territories,
 		"Same seed reproduces faction starts and ownership.")
@@ -75,6 +81,8 @@ func _test_partition(shape: MapSettings.Shape, dimensions: Vector2, count: int, 
 		var cell_area := _area(cell.polygon)
 		_check(cell_area > 1.0 and not Geometry2D.triangulate_polygon(cell.polygon).is_empty(),
 			"Each territory has a usable polygon.")
+		if scaled:
+			_check(cell_area > MapSettings.AREA_PER_REGION * 0.32, "Scaled cells preserve useful area.")
 		area += cell_area
 		for point in cell.polygon:
 			_check(layout.contains(point), "Cell vertices lie inside the playable boundary.")
@@ -85,6 +93,10 @@ func _test_partition(shape: MapSettings.Shape, dimensions: Vector2, count: int, 
 				_check(_area(overlap) < AREA_EPSILON, "Cells have no interior overlap.")
 	var map_area := _area(layout.boundary)
 	_check(absf(area - map_area) < map_area * 0.000001, "Cells cover the entire boundary.")
+
+	if scaled:
+		_check(is_equal_approx(map_area, MapSettings.AREA_PER_REGION * count),
+			"Playable area scales linearly with count in every shape.")
 
 	var connected: Array[StringName] = [layout.cells[0].id]
 	var index := 0

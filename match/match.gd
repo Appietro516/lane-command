@@ -563,7 +563,8 @@ func _base_structure_id(side: MatchRegion.Owner) -> StringName:
 
 func _navigation_boundary() -> PackedVector2Array:
 	# Axis-aligned maps use the rectangular route fast path.
-	return _layout.boundary if _layout.settings.shape == MapSettings.Shape.TRIANGLE else PackedVector2Array()
+	return _layout.boundary if _layout.settings.shape in [MapSettings.Shape.TRIANGLE,
+		MapSettings.Shape.CIRCLE] else PackedVector2Array()
 
 
 func restart_match(layout: TerritoryLayout = null) -> void:

@@ -1,13 +1,15 @@
 class_name MapSettings
 extends RefCounted
 
-enum Shape { RECTANGLE, SQUARE, TRIANGLE }
+enum Shape { RECTANGLE, SQUARE, TRIANGLE, CIRCLE }
 
 const SHAPE_NAMES := {
-	Shape.RECTANGLE: "Rectangle", Shape.SQUARE: "Square", Shape.TRIANGLE: "Triangle",
+	Shape.RECTANGLE: "Rectangle", Shape.SQUARE: "Square", Shape.TRIANGLE: "Triangle", Shape.CIRCLE: "Circle",
 }
 const DEFAULT_SIZE := Vector2(60.0, 36.0)
 const DEFAULT_REGION_COUNT := 24
+const AREA_PER_REGION := 115.0
+const CIRCLE_EDGES := 48
 const MIN_REGIONS := 2
 const MAX_REGIONS := 128
 const MIN_DIMENSION := 18.0
@@ -32,13 +34,13 @@ func _init(map_shape: Shape, dimensions: Vector2, count: int, map_seed: int) -> 
 	region_count = count
 	seed = map_seed
 	if not SHAPE_NAMES.has(shape):
-		configuration_error = "Choose Rectangle, Square or Triangle."
+		configuration_error = "Choose Rectangle, Square, Triangle or Circle."
 		return
 	if not _valid_dimension(size.x) or (shape == Shape.RECTANGLE and not _valid_dimension(size.y)):
 		configuration_error = "Enter map dimensions between %d and %d world units." % [
 			MIN_DIMENSION, MAX_DIMENSION]
 		return
-	if shape == Shape.SQUARE:
+	if shape == Shape.SQUARE or shape == Shape.CIRCLE:
 		size.y = size.x
 	elif shape == Shape.TRIANGLE:
 		# Equilateral in the map plane, with the apex facing north (negative Z).
@@ -49,6 +51,10 @@ func _init(map_shape: Shape, dimensions: Vector2, count: int, map_seed: int) -> 
 			Vector2(bounds.position.x, bounds.end.y)])
 		var divisions := floori(triangle_site_span() / MIN_SITE_PITCH)
 		supported_maximum = mini(MAX_REGIONS, (divisions + 1) * (divisions + 2) / 2)
+	elif shape == Shape.CIRCLE:
+		for index in CIRCLE_EDGES:
+			boundary.append(Vector2.from_angle(TAU * index / CIRCLE_EDGES) * size.x * 0.5)
+		supported_maximum = mini(MAX_REGIONS, floori(PI * size.x * size.x / (4.0 * MIN_SITE_PITCH ** 2)))
 	else:
 		boundary = PackedVector2Array([bounds.position, Vector2(bounds.end.x, bounds.position.y),
 			bounds.end, Vector2(bounds.position.x, bounds.end.y)])
@@ -56,6 +62,23 @@ func _init(map_shape: Shape, dimensions: Vector2, count: int, map_seed: int) -> 
 	if count < MIN_REGIONS or count > supported_maximum:
 		configuration_error = "Choose %d–%d regions for this %s, or increase its size for more regions." % [
 			MIN_REGIONS, supported_maximum, SHAPE_NAMES[shape].to_lower()]
+
+
+## Production maps keep approximately the same playable area per region in every shape.
+static func scaled_dimensions(map_shape: Shape, count: int) -> Vector2:
+	var area := AREA_PER_REGION * clampi(count, MIN_REGIONS, MAX_REGIONS)
+	match map_shape:
+		Shape.SQUARE:
+			return Vector2.ONE * sqrt(area)
+		Shape.TRIANGLE:
+			var side := sqrt(4.0 * area / sqrt(3.0))
+			return Vector2(side, side * sqrt(3.0) * 0.5)
+		Shape.CIRCLE:
+			var polygon_factor := CIRCLE_EDGES * sin(TAU / CIRCLE_EDGES) / 2.0
+			return Vector2.ONE * 2.0 * sqrt(area / polygon_factor)
+		_:
+			var aspect := DEFAULT_SIZE.aspect()
+			return Vector2(aspect, 1.0) * sqrt(area / aspect)
 
 
 func triangle_site_span() -> float:
