@@ -46,7 +46,7 @@ run_godot() {
     if grep -Eq '^[[:space:]]*(SCRIPT ERROR|ERROR):' "$log"; then
         # Only allow the exact, post-savepack shutdown diagnostic, and only for
         # a successful export that actually produced the requested artifact.
-        if [[ ${1:-} == "--export-release" && -s ${@: -1} ]] &&
+        if [[ ${1:-} == "--export-release" && -s "${@: -1}" ]] &&
             python3 .github/scripts/validate-export-log.py "$log"; then
             echo "WARNING: Godot reported a post-export resource leak; the export completed."
         else
