@@ -32,14 +32,23 @@ class SideState:
 
 
 var stats: FactionStats
-var _sides: Dictionary[MatchRegion.Owner, SideState] = {
-	MatchRegion.Owner.PLAYER: SideState.new(),
-	MatchRegion.Owner.CPU: SideState.new(),
-}
+var _sides: Dictionary[MatchRegion.Owner, SideState] = {}
+var _eliminated: Dictionary[MatchRegion.Owner, bool] = {}
 
 
-func _init(faction_stats: FactionStats = null) -> void:
+func _init(faction_stats: FactionStats = null, sides: Array = [
+		MatchRegion.Owner.PLAYER, MatchRegion.Owner.CPU]) -> void:
 	stats = faction_stats if faction_stats != null else FactionStats.new()
+	for side: MatchRegion.Owner in sides:
+		_sides[side] = SideState.new()
+
+
+func is_active(side: MatchRegion.Owner) -> bool:
+	return _sides.has(side) and not _eliminated.has(side)
+
+
+func eliminate(side: MatchRegion.Owner) -> void:
+	_eliminated[side] = true
 
 
 func advance(delta: float) -> void:
@@ -47,6 +56,8 @@ func advance(delta: float) -> void:
 		return
 
 	for side in _sides:
+		if not is_active(side):
+			continue
 		var state := _sides[side]
 		for resource_id in RESOURCES:
 			state.stockpiles[resource_id] = maxf(0.0,
@@ -113,7 +124,7 @@ static func cost_text(cost: Dictionary) -> String:
 
 
 func cost_block_reason(side: MatchRegion.Owner, cost: Dictionary) -> String:
-	if not _sides.has(side):
+	if not is_active(side):
 		return "Purchase unavailable"
 
 	var missing := PackedStringArray()
@@ -137,7 +148,7 @@ func try_spend(side: MatchRegion.Owner, cost: Dictionary) -> bool:
 
 
 func grant_resource(side: MatchRegion.Owner, resource_id: StringName, amount: int) -> bool:
-	if not _sides.has(side) or not RESOURCES.has(resource_id) or amount <= 0:
+	if not is_active(side) or not RESOURCES.has(resource_id) or amount <= 0:
 		return false
 	_sides[side].stockpiles[resource_id] = stockpile(side, resource_id) + amount
 	return true

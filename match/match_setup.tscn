@@ -59,6 +59,27 @@ theme_override_constants/separation = 12
 layout_mode = 2
 theme_override_colors/font_color = Color(0.98, 0.86, 0.61, 1)
 theme_override_font_sizes/font_size = 28
+text = "Match setup"
+
+[node name="OpponentCountRow" type="HBoxContainer" parent="Center/Panel/Fields"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Label" type="Label" parent="Center/Panel/Fields/OpponentCountRow"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "CPU opponents"
+
+[node name="OpponentCount" type="OptionButton" parent="Center/Panel/Fields/OpponentCountRow"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(80, 36)
+theme_override_font_sizes/font_size = 18
+
+[node name="FirstCPULabel" type="Label" parent="Center/Panel/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 17
 text = "CPU difficulty"
 
 [node name="Difficulty" type="OptionButton" parent="Center/Panel/Fields"]
@@ -66,6 +87,11 @@ unique_name_in_owner = true
 layout_mode = 2
 custom_minimum_size = Vector2(0, 40)
 theme_override_font_sizes/font_size = 18
+
+[node name="ExtraDifficulties" type="VBoxContainer" parent="Center/Panel/Fields"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
 
 [node name="Description" type="Label" parent="Center/Panel/Fields"]
 unique_name_in_owner = true

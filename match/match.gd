@@ -97,11 +97,6 @@ const ROUTE_HEIGHT := 0.12
 const ROUTE_HALF_WIDTH := 0.045
 const ROUTE_TIP_RADIUS := 0.18
 
-const FACTION_ACCENTS := {
-	PLAYER: preload("res://match/player_accent.tres"),
-	CPU: preload("res://match/cpu_accent.tres"),
-}
-
 const OUTCOME_LABELS := {
 	MatchBattle.Outcome.IN_PROGRESS: "",
 	MatchBattle.Outcome.VICTORY: "Victory",
@@ -143,6 +138,9 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 ]
 @export_group("Match Setup")
 @export var show_match_setup_on_start := false
+@export_range(1, TerritoryLayout.MAX_CPU_OPPONENTS) var cpu_opponent_count := 1
+@export_range(1, 5) var cpu_difficulty := DifficultyProfile.DEFAULT_LEVEL
+@export var additional_cpu_difficulties: Array[int] = []
 
 @export_group("CPU Strategy", "cpu_")
 @export_range(0.25, 10.0, 0.25) var cpu_decision_interval := 2.0
@@ -211,7 +209,6 @@ var _selected_unit_id := MatchBattle.NO_TARGET
 var _pending_unit_order := MatchBattle.Order.AUTONOMOUS
 var _order_hint := ""
 var _route_mesh := ImmediateMesh.new()
-var _time_until_cpu_decision: float
 var _advancing_battle := false
 var _owns_narrative_pause := false
 
@@ -220,8 +217,18 @@ var _pending_pick := Vector2.INF
 var _placement_id: StringName = &""
 var _preview: Node3D
 var _preview_material: StandardMaterial3D
-var _cpu_strategy: CpuStrategy
-var cpu_difficulty := DifficultyProfile.DEFAULT_LEVEL
+var _cpu_strategies: Dictionary[MatchRegion.Owner, CpuStrategy] = {}
+var _cpu_strategy: CpuStrategy:
+	get:
+		return _cpu_strategies.get(CPU)
+var _time_until_cpu_decision: float:
+	get:
+		return _cpu_strategy.time_until_decision
+	set(value):
+		_cpu_strategy.time_until_decision = value
+var _difficulty_pickers: Array[OptionButton] = []
+var _cpu_hp_labels: Dictionary[MatchRegion.Owner, Label] = {}
+var _extra_accents: Dictionary[MatchRegion.Owner, StandardMaterial3D] = {}
 var _process_mode_before_setup: ProcessMode
 var _build_options: Dictionary[StringName, Button] = {}
 var _build_descriptions: Dictionary[StringName, String] = {}
@@ -283,6 +290,7 @@ var _barracks_menu_interval := -1.0
 @onready var _restart_button: Button = %Restart
 @onready var _active_difficulty: Label = %ActiveDifficulty
 @onready var _match_setup: Control = %MatchSetup
+@onready var _opponent_picker: OptionButton = _match_setup.get_node("%OpponentCount")
 @onready var _difficulty_picker: OptionButton = _match_setup.get_node("%Difficulty")
 @onready var _difficulty_description: Label = _match_setup.get_node("%Description")
 @onready var _confirm_setup: Button = _match_setup.get_node("%Confirm")
@@ -291,7 +299,14 @@ var _barracks_menu_interval := -1.0
 
 
 func _ready() -> void:
-	_generate_map()
+	var layout := _create_layout()
+	if not layout.configuration_error.is_empty():
+		_outcome_label.text = layout.configuration_error
+		_outcome_label.show()
+		process_mode = Node.PROCESS_MODE_DISABLED
+		push_error(layout.configuration_error)
+		return
+	_generate_map(layout)
 	_unit_route.mesh = _route_mesh
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
@@ -332,11 +347,7 @@ func _ready() -> void:
 		%ScoutSlots.add_child(button)
 		_scout_buttons.append(button)
 	$HUD.move_child(%ClaimMarkers, 0)
-	for level in range(1, DifficultyProfile.PROFILES.size() + 1):
-		var difficulty := DifficultyProfile.get_profile(level)
-		_difficulty_picker.add_item(DifficultyProfile.display_name(level), level)
-		_difficulty_picker.get_popup().set_item_tooltip(level - 1, difficulty.description)
-	_difficulty_picker.item_selected.connect(_describe_difficulty)
+	_create_setup_controls()
 	_confirm_setup.pressed.connect(_apply_match_setup)
 	_cancel_setup.pressed.connect(_close_match_setup)
 	_restart_button.pressed.connect(_open_match_setup.bind(false))
@@ -362,39 +373,88 @@ func _ready() -> void:
 		_open_match_setup(true)
 
 
+func _create_setup_controls() -> void:
+	_difficulty_pickers.append(_difficulty_picker)
+	for count in range(1, TerritoryLayout.MAX_CPU_OPPONENTS + 1):
+		_opponent_picker.add_item(str(count), count)
+		if count == 1:
+			continue
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		label.text = "CPU %d difficulty" % count
+		row.add_child(label)
+		var picker := OptionButton.new()
+		picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		picker.custom_minimum_size.y = 36
+		row.add_child(picker)
+		_match_setup.get_node("%ExtraDifficulties").add_child(row)
+		_difficulty_pickers.append(picker)
+	for i in _difficulty_pickers.size():
+		var picker := _difficulty_pickers[i]
+		for level in range(1, DifficultyProfile.PROFILES.size() + 1):
+			var difficulty := DifficultyProfile.get_profile(level)
+			picker.add_item(DifficultyProfile.display_name(level), level)
+			picker.get_popup().set_item_tooltip(level - 1, difficulty.description)
+		picker.item_selected.connect(_describe_difficulty.bind(i))
+	_opponent_picker.item_selected.connect(_refresh_setup_rows)
+
+
 func _open_match_setup(initial: bool) -> void:
 	if _match_setup.visible:
 		return
 	_cancel_placement()
 	_show_income_sources(&"")
 	_camera.end_drag()
-	_difficulty_picker.select(_difficulty_picker.get_item_index(cpu_difficulty))
-	_describe_difficulty(_difficulty_picker.selected)
+	_opponent_picker.select(_opponent_picker.get_item_index(cpu_opponent_count))
+	for i in _difficulty_pickers.size():
+		var level := _cpu_level(i)
+		var picker := _difficulty_pickers[i]
+		picker.select(picker.get_item_index(level))
+	_refresh_setup_rows(_opponent_picker.selected)
 	_confirm_setup.text = "Start match" if initial else "Restart match"
 	_cancel_setup.visible = not initial
-	var next_button := _confirm_setup if initial else _cancel_setup
-	var previous_button := _difficulty_picker if initial else _cancel_setup
-	_difficulty_picker.focus_previous = _difficulty_picker.get_path_to(_confirm_setup)
-	_difficulty_picker.focus_next = _difficulty_picker.get_path_to(next_button)
-	_confirm_setup.focus_previous = _confirm_setup.get_path_to(previous_button)
-	_confirm_setup.focus_next = _confirm_setup.get_path_to(_difficulty_picker)
-	_cancel_setup.focus_previous = _cancel_setup.get_path_to(_difficulty_picker)
-	_cancel_setup.focus_next = _cancel_setup.get_path_to(_confirm_setup)
 	_process_mode_before_setup = process_mode
 	process_mode = Node.PROCESS_MODE_DISABLED
 	_match_setup.show()
 	_difficulty_picker.grab_focus()
 
 
-func _describe_difficulty(index: int) -> void:
-	var difficulty := DifficultyProfile.get_profile(_difficulty_picker.get_item_id(index))
+func _cpu_level(index: int) -> int:
+	var level := cpu_difficulty if index == 0 else (
+		additional_cpu_difficulties[index - 1] if index <= additional_cpu_difficulties.size()
+		else DifficultyProfile.DEFAULT_LEVEL)
+	return clampi(level, 1, DifficultyProfile.PROFILES.size())
+
+
+func _refresh_setup_rows(_index: int) -> void:
+	var count := _opponent_picker.get_selected_id()
+	_match_setup.get_node("%FirstCPULabel").text = "CPU 1 difficulty" if count > 1 else "CPU difficulty"
+	for i in range(1, _difficulty_pickers.size()):
+		_difficulty_pickers[i].get_parent().visible = i < count
+	_describe_difficulty(_difficulty_picker.selected, 0)
+
+
+func _describe_difficulty(index: int, cpu_index: int) -> void:
+	var picker := _difficulty_pickers[cpu_index]
+	var difficulty := DifficultyProfile.get_profile(picker.get_item_id(index))
 	_difficulty_description.text = difficulty.description
-	_difficulty_picker.tooltip_text = difficulty.description
+	picker.tooltip_text = difficulty.description
 
 
 func _apply_match_setup() -> void:
+	var count := _opponent_picker.get_selected_id()
+	var layout: TerritoryLayout
+	if count != cpu_opponent_count:
+		layout = _create_layout_for(count)
+		if not layout.configuration_error.is_empty():
+			_difficulty_description.text = layout.configuration_error
+			return
+	cpu_opponent_count = count
 	cpu_difficulty = _difficulty_picker.get_selected_id()
-	restart_match()
+	additional_cpu_difficulties.clear()
+	for i in range(1, count):
+		additional_cpu_difficulties.append(_difficulty_pickers[i].get_selected_id())
+	restart_match(layout)
 
 
 func _close_match_setup() -> void:
@@ -403,19 +463,27 @@ func _close_match_setup() -> void:
 		process_mode = _process_mode_before_setup
 
 
-func _cpu_decision_period() -> float:
-	return cpu_decision_interval * _cpu_strategy.difficulty.cadence
-
-
 func _create_layout() -> TerritoryLayout:
+	return _create_layout_for(cpu_opponent_count)
+
+
+func _create_layout_for(count: int) -> TerritoryLayout:
 	return TerritoryLayout.new(map_seed, region_count, Vector2(map_width, map_height),
-		player_start_count, cpu_start_count)
+		player_start_count, cpu_start_count, count)
 
 
-func _generate_map() -> void:
-	_layout = _create_layout()
+func _generate_map(layout: TerritoryLayout) -> void:
+	_layout = layout
 	_camera.set_map_bounds(_layout.bounds)
 	%Overview.tooltip_text = "Center the map and zoom out (Home)\nMap seed: %d" % active_map_seed
+	var owners: Dictionary[StringName, MatchRegion.Owner] = {}
+	var base_regions: Dictionary[StringName, bool] = {}
+	for i in _layout.starting_territories.size():
+		var territory := _layout.starting_territories[i]
+		var side := (PLAYER + i) as MatchRegion.Owner
+		base_regions[territory[0]] = true
+		for id: StringName in territory:
+			owners[id] = side
 	for cell in _layout.cells:
 		var region := MatchRegion.new(cell)
 		region.name = cell.id
@@ -424,18 +492,47 @@ func _generate_map() -> void:
 				region.name = "PlayerStart"
 			TerritoryLayout.CPU_START:
 				region.name = "CPUStart"
-		if cell.id in _layout.player_start_ids:
-			region.region_owner = PLAYER
-		elif cell.id in _layout.cpu_start_ids:
-			region.region_owner = CPU
+		region.region_owner = owners.get(cell.id, MatchRegion.Owner.NEUTRAL)
 		_regions.add_child(region)
 		_regions_by_id[cell.id] = region
 		_initial_owners[cell.id] = region.region_owner
 		_region_structures[cell.id] = {}
-		if cell.id == TerritoryLayout.PLAYER_START or cell.id == TerritoryLayout.CPU_START:
+		if base_regions.has(cell.id):
 			_add_starting_base(region)
 	_register_starting_bases()
 	_generate_landmarks()
+
+
+func _replace_map(layout: TerritoryLayout) -> void:
+	for region in _regions.get_children():
+		_regions.remove_child(region)
+		region.queue_free()
+	for side in _buildings.keys():
+		if side > CPU:
+			var container := _buildings[side]
+			_buildings.erase(side)
+			container.get_parent().remove_child(container)
+			container.queue_free()
+	_bases.clear()
+	_regions_by_id.clear()
+	_initial_owners.clear()
+	_region_structures.clear()
+	_landmarks.clear()
+	_generate_map(layout)
+
+
+func _faction_accent(side: MatchRegion.Owner) -> StandardMaterial3D:
+	match side:
+		PLAYER:
+			return MatchRegion.PLAYER_ACCENT
+		CPU:
+			return MatchRegion.CPU_ACCENT
+		_:
+			if not _extra_accents.has(side):
+				var material := MatchRegion.CPU_ACCENT.duplicate() as StandardMaterial3D
+				material.albedo_color = MatchRegion.accent_color(side)
+				_extra_accents[side] = material
+			return _extra_accents[side]
 
 
 func _generate_landmarks() -> void:
@@ -506,9 +603,14 @@ func _landmark_site_clear(point: Vector2, region: MatchRegion, outpost_site: Vec
 func _add_starting_base(region: MatchRegion) -> void:
 	var side := region.region_owner
 	var base := STARTING_BASE.instantiate() as Node3D
-	base.name = "PlayerBase" if side == PLAYER else "CPUBase"
+	base.name = "PlayerBase" if side == PLAYER else ("CPUBase" if side == CPU else "CPUBase%d" % (side - PLAYER))
+	if not _buildings.has(side):
+		var container := Node3D.new()
+		container.name = "CPU%d" % (side - PLAYER)
+		$Buildings.add_child(container)
+		_buildings[side] = container
 	base.position.y = 0.08
-	var offset := Vector2(0.0, 2.0)
+	var offset := Vector2(0.0, 2.0) if cpu_opponent_count == 1 else Vector2.ZERO
 	var site := Vector2(region.position.x, region.position.z)
 	var footprint := Rect2(site + offset - MatchBattle.BASE_FOOTPRINT,
 		MatchBattle.BASE_FOOTPRINT * 2.0)
@@ -517,7 +619,7 @@ func _add_starting_base(region: MatchRegion) -> void:
 			offset = Vector2.ZERO
 			break
 	base.position.z = offset.y
-	base.get_node("Core").material_override = FACTION_ACCENTS[side]
+	base.get_node("Core").material_override = _faction_accent(side)
 	region.add_child(base)
 	_bases[side] = base
 
@@ -533,15 +635,13 @@ func _base_structure_id(side: MatchRegion.Owner) -> StringName:
 	return StringName("base/%d" % side)
 
 
-func restart_match() -> void:
+func restart_match(layout: TerritoryLayout = null) -> void:
 	_close_match_setup()
-	_active_difficulty.text = "CPU %s" % DifficultyProfile.display_name(cpu_difficulty)
-	_active_difficulty.tooltip_text = DifficultyProfile.get_profile(cpu_difficulty).description
 	if narrative_events != null:
 		narrative_events.close()
 		narrative_events.queue_changed.disconnect(_sync_narrative_dialogue)
-	_camera.reset_view(true)
 	if _battle != null:
+		_expeditions.assignment_interrupted.disconnect(_on_assignment_interrupted)
 		_battle.step_finished.disconnect(_expeditions._step)
 		_battle.step_finished.disconnect(_advance_narrative_time)
 		_battle.unit_produced.disconnect(_spawn_unit)
@@ -558,11 +658,6 @@ func restart_match() -> void:
 	for view in _outpost_views.values():
 		view.get_parent().remove_child(view)
 		view.queue_free()
-	for structures in _region_structures.values():
-		structures.clear()
-	_register_starting_bases()
-	for landmark in _landmarks.values():
-		_register_region_structure(landmark.source_id, LEGENDARY_KIND, [landmark.region_id])
 	_outpost_views.clear()
 	_outposts_by_region.clear()
 	_show_income_sources(&"")
@@ -576,7 +671,18 @@ func restart_match() -> void:
 		for building in _buildings[side].get_children():
 			_buildings[side].remove_child(building)
 			building.queue_free()
-		_bases[side].show()
+	if layout != null:
+		_replace_map(layout)
+	else:
+		for structures in _region_structures.values():
+			structures.clear()
+		_register_starting_bases()
+		for landmark in _landmarks.values():
+			_register_region_structure(landmark.source_id, LEGENDARY_KIND, [landmark.region_id])
+	for base in _bases.values():
+		base.show()
+	_camera.reset_view(true)
+	_refresh_cpu_status_controls()
 	for region_id in _initial_owners:
 		_regions_by_id[region_id].region_owner = _initial_owners[region_id]
 	_select_region(&"")
@@ -590,14 +696,22 @@ func restart_match() -> void:
 		faction_stats.set_modifier(landmark.source_id, _initial_owners[landmark.region_id],
 			landmark.stat, landmark.magnitude, &"legendary", landmark.display_name,
 			"", true, 0, landmark.region_id)
-	economy = MatchEconomy.new(faction_stats)
+	economy = MatchEconomy.new(faction_stats, _bases.keys())
 	narrative_events = NarrativeEvents.new(active_map_seed, economy, narrative_catalog)
 	narrative_events.queue_changed.connect(_sync_narrative_dialogue)
-	_cpu_strategy = CpuStrategy.new(active_map_seed, cpu_difficulty)
-	_time_until_cpu_decision = _cpu_decision_period()
-	_battle = MatchBattle.new(_map_position(_bases[PLAYER].global_position),
-		_map_position(_bases[CPU].global_position), unit_aggro_radius,
-		_layout.bounds, faction_stats)
+	_cpu_strategies.clear()
+	var positions: Dictionary[MatchRegion.Owner, Vector2] = {}
+	for side in _bases:
+		var position := _map_position(_bases[side].global_position)
+		positions[side] = position
+		if side == PLAYER:
+			continue
+		var strategy := CpuStrategy.new(active_map_seed, _cpu_level(side - CPU), side)
+		# Stagger the first decisions in larger matches to spread work across frames.
+		strategy.time_until_decision = _decision_period(strategy) + 0.12 * (side - CPU)
+		_cpu_strategies[side] = strategy
+	_battle = MatchBattle.new(positions[PLAYER], positions[CPU], unit_aggro_radius,
+		_layout.bounds, faction_stats, positions)
 	for landmark in _landmarks.values():
 		_battle.add_landmark_footprint(landmark.footprint)
 	_battle.target_priority = unit_target_priority
@@ -619,7 +733,7 @@ func restart_match() -> void:
 	})
 	_expeditions.expedition_completed.connect(_complete_claim)
 	_expeditions.expedition_failed.connect(_show_expedition_notice)
-	_expeditions.assignment_interrupted.connect(_cpu_strategy.on_assignment_interrupted)
+	_expeditions.assignment_interrupted.connect(_on_assignment_interrupted)
 	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_cost)
 	_scout_notice.hide()
 	_refresh_hud()
@@ -630,21 +744,26 @@ func _process(delta: float) -> void:
 	if _match_setup.visible or _battle.is_finished() or _has_narrative_decision():
 		return
 
-	# Apply income and production up to each decision before making its purchase.
-	while delta >= _time_until_cpu_decision and not _battle.is_finished():
-		var used := _advance_simulation(_time_until_cpu_decision)
+	# Apply income and production up to the next planner's decision.
+	while delta > 0.0 and not _battle.is_finished() and not _has_narrative_decision():
+		var next := delta
+		for strategy in _cpu_strategies.values():
+			next = minf(next, strategy.time_until_decision)
+		var used := _advance_simulation(next)
 		delta -= used
-		_time_until_cpu_decision -= used
-		if _has_narrative_decision():
+		for strategy in _cpu_strategies.values():
+			strategy.time_until_decision = maxf(0.0, strategy.time_until_decision - used)
+		if _battle.is_finished() or _has_narrative_decision():
 			break
-		_time_until_cpu_decision = _cpu_decision_period()
-		if not _battle.is_finished():
-			_try_cpu_purchase()
-		if _has_narrative_decision():
-			break
-
-	if not _battle.is_finished() and not _has_narrative_decision():
-		_time_until_cpu_decision -= _advance_simulation(delta)
+		for side in _cpu_strategies:
+			var strategy := _cpu_strategies[side]
+			if strategy.time_until_decision > MatchBattle.TIME_EPSILON:
+				continue
+			strategy.time_until_decision = _decision_period(strategy)
+			if side == CPU:
+				_try_cpu_purchase()
+			else:
+				strategy.decide(self)
 	if _battle.is_finished():
 		_cancel_placement()
 		_select_unit(MatchBattle.NO_TARGET)
@@ -729,7 +848,7 @@ func _building_site_block_reason(side: MatchRegion.Owner, building_id: StringNam
 func _purchase_block_reason(side: MatchRegion.Owner, building_id: StringName) -> String:
 	if _battle.is_finished():
 		return "Match ended"
-	if not _buildings.has(side) or not BUILDINGS.has(building_id):
+	if not _battle.is_side_active(side) or not BUILDINGS.has(building_id):
 		return "Building unavailable"
 	return economy.cost_block_reason(side, _minimum_build_cost(building_id))
 
@@ -886,7 +1005,7 @@ func _add_structure_view(defense: MatchBattle.Fortification, regions: Array[Stri
 	_buildings[defense.side].add_child(view)
 	view.global_position = _world_position(defense.position)
 	view.rotation.y = -defense.angle
-	_structure_accent(view, defense.kind).material_override = FACTION_ACCENTS[defense.side]
+	_structure_accent(view, defense.kind).material_override = _faction_accent(defense.side)
 	var placed := PlacedFortification.new()
 	placed.defense = defense
 	placed.view = view
@@ -1197,7 +1316,7 @@ func _complete_claim(side: MatchRegion.Owner, region_id: StringName, scout_id: i
 	_register_region_structure(outpost.source_id, OUTPOST_KIND, _footprint_regions(footprint))
 	_outposts_by_region[region_id] = outpost
 	var view := OUTPOST.instantiate() as Node3D
-	view.get_node("Beacon").material_override = FACTION_ACCENTS[side]
+	view.get_node("Beacon").material_override = _faction_accent(side)
 	get_region(region_id).add_child(view)
 	view.global_position = _regions.to_global(Vector3(point.x, 0.0, point.y))
 	_outpost_views[region_id] = view
@@ -1211,7 +1330,7 @@ func _discover_on_claim(side: MatchRegion.Owner, region_id: StringName, _scout_i
 	# The first successful claim by this faction owns this occurrence for the match.
 	# Replacements and reclamations reuse the ID, even if another Scout completes them.
 	var id := StringName("claim/%d/%s" % [side, region_id])
-	if narrative_events.submit(id, CLAIM_DISCOVERY, side, region_id) and side == CPU:
+	if narrative_events.submit(id, CLAIM_DISCOVERY, side, region_id) and side != PLAYER:
 		narrative_events.resolve_cpu(id)
 
 
@@ -1241,7 +1360,7 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 				active = false
 				break
 		_battle.set_fortification_active(placed.defense, active)
-		_structure_accent(placed.view, placed.defense.kind).material_override = FACTION_ACCENTS[placed.defense.side] \
+		_structure_accent(placed.view, placed.defense.kind).material_override = _faction_accent(placed.defense.side) \
 			if active else INACTIVE_ACCENT
 	_refresh_hud()
 	if _preview != null:
@@ -1400,9 +1519,10 @@ func _pick_map(pointer: Vector2) -> void:
 func _pick_building(pointer: Vector2) -> Node3D:
 	var start := _camera.project_ray_origin(pointer)
 	var end := start + _camera.project_ray_normal(pointer) * _camera.far
-	var buildings: Array[Node] = [_bases[PLAYER], _bases[CPU]]
-	buildings.append_array(_buildings[PLAYER].get_children())
-	buildings.append_array(_buildings[CPU].get_children())
+	var buildings: Array[Node] = []
+	buildings.append_array(_bases.values())
+	for container in _buildings.values():
+		buildings.append_array(container.get_children())
 	buildings.append_array(_outpost_views.values())
 	buildings.append_array(_landmarks.values())
 	var nearest: Node3D
@@ -1473,7 +1593,7 @@ func _update_unit_selection() -> void:
 	_unit_selection.global_position = _unit_views[unit.id].global_position
 	_unit_selection.scale = Vector3.ONE * float(unit.definition.selection_scale)
 	_unit_name.text = "%s %s #%d" % [_side_label(unit.side), unit.definition.label, unit.id]
-	_unit_name.modulate = FACTION_ACCENTS[unit.side].albedo_color.lightened(0.25)
+	_unit_name.modulate = _faction_accent(unit.side).albedo_color.lightened(0.25)
 	var scout := _expeditions.scout_for(unit.id)
 	_stat_sources.visible = scout == null
 	if scout != null:
@@ -1531,7 +1651,7 @@ func _update_fortification_inspection() -> void:
 	_unit_panel.show()
 	_stat_sources.show()
 	_unit_name.text = "%s %s" % [_side_label(fort.side), fort.profile.label]
-	_unit_name.modulate = FACTION_ACCENTS[fort.side].albedo_color.lightened(0.25)
+	_unit_name.modulate = _faction_accent(fort.side).albedo_color.lightened(0.25)
 	_unit_stats.text = _health_text(fort)
 	var details := _breakdown_text("Maximum HP", fort.health_stat())
 	_unit_intent.text = "Active" if fort.active else "Inactive · territory lost"
@@ -1685,7 +1805,7 @@ static func _stance_name(stance: MatchBattle.Stance) -> String:
 
 func _target_label(unit: MatchBattle.Unit) -> String:
 	if unit.target == MatchBattle.BASE_TARGET:
-		return "CPU base" if unit.side == PLAYER else "Player base"
+		return "%s base" % _side_label(unit.target_base)
 	var target := _battle.get_unit(unit.target)
 	if target != null:
 		return "%s %s #%d" % [_side_label(target.side), target.definition.label, target.id]
@@ -1737,7 +1857,7 @@ func _add_route_triangle(a: Vector2, b: Vector2, c: Vector2) -> void:
 
 
 func _side_label(side: MatchRegion.Owner) -> String:
-	return "Player" if side == PLAYER else "CPU"
+	return MatchRegion.side_label(side, cpu_opponent_count > 1)
 
 
 func _ground_point(pointer: Vector2) -> Variant:
@@ -1811,8 +1931,19 @@ func _exit_tree() -> void:
 	_release_narrative_pause()
 
 
+func _decision_period(strategy: CpuStrategy) -> float:
+	return cpu_decision_interval * strategy.difficulty.cadence
+
+
+func _on_assignment_interrupted(side: MatchRegion.Owner, region_id: StringName, elapsed: float) -> void:
+	var strategy := _cpu_strategies.get(side) as CpuStrategy
+	if strategy != null:
+		strategy.on_assignment_interrupted(side, region_id, elapsed)
+
+
 func _try_cpu_purchase() -> void:
-	_cpu_strategy.decide(self)
+	if _cpu_strategy != null:
+		_cpu_strategy.decide(self)
 
 
 func _spawn_unit(unit: MatchBattle.Unit) -> void:
@@ -1824,7 +1955,7 @@ func _spawn_unit(unit: MatchBattle.Unit) -> void:
 
 
 func _unit_material(unit: MatchBattle.Unit) -> StandardMaterial3D:
-	var accent: StandardMaterial3D = FACTION_ACCENTS[unit.side]
+	var accent: StandardMaterial3D = _faction_accent(unit.side)
 	var weight: float = unit.definition.tint_weight
 	if weight == 0.0:
 		return accent
@@ -1854,7 +1985,12 @@ func _remove_unit(unit_id: int) -> void:
 func _hide_base(side: MatchRegion.Owner) -> void:
 	_unregister_region_structure(_base_structure_id(side))
 	_bases[side].hide()
-	narrative_events.close()
+	_cpu_strategies.erase(side)
+	for region_id in _regions_by_id:
+		if owns_region(side, region_id):
+			_set_region_owner(region_id, MatchRegion.Owner.NEUTRAL)
+	if _battle.is_finished():
+		narrative_events.close()
 
 
 func _create_resource_readouts() -> void:
@@ -2056,11 +2192,39 @@ func _legendary_effect(stat: StringName, amount: float) -> String:
 	return _format_amount(amount, " " + label, true)
 
 
+func _refresh_cpu_status_controls() -> void:
+	for side in _cpu_hp_labels:
+		if side != CPU:
+			var label := _cpu_hp_labels[side]
+			label.get_parent().remove_child(label)
+			label.queue_free()
+	_cpu_hp_labels = {CPU: _cpu_hp_label}
+	for i in range(1, cpu_opponent_count):
+		var side := (CPU + i) as MatchRegion.Owner
+		var label := Label.new()
+		label.add_theme_font_size_override("font_size", 16)
+		label.add_theme_color_override("font_color", MatchRegion.accent_color(side))
+		label.mouse_filter = Control.MOUSE_FILTER_PASS
+		_cpu_hp_label.get_parent().add_child(label)
+		_cpu_hp_labels[side] = label
+	_active_difficulty.text = "CPU %s" % DifficultyProfile.display_name(cpu_difficulty)
+	_active_difficulty.visible = cpu_opponent_count == 1
+	_active_difficulty.tooltip_text = DifficultyProfile.get_profile(cpu_difficulty).description
+
+
 func _refresh_hud() -> void:
 	_player_hp_label.text = "Player base · %s HP" % _stat_number(_battle.base_hp(PLAYER))
-	_cpu_hp_label.text = "CPU base · %s HP" % _stat_number(_battle.base_hp(CPU))
 	_player_hp_label.tooltip_text = _breakdown_text("Maximum HP", _battle.base_health_stat(PLAYER))
-	_cpu_hp_label.tooltip_text = _breakdown_text("Maximum HP", _battle.base_health_stat(CPU))
+	for side in _cpu_hp_labels:
+		var label := _cpu_hp_labels[side]
+		var status := "%s HP" % _stat_number(_battle.base_hp(side))
+		if cpu_opponent_count > 1 and not _battle.is_side_active(side):
+			status = "Eliminated"
+		label.text = "%s base · %s" % [_side_label(side), status]
+		var details := _breakdown_text("Maximum HP", _battle.base_health_stat(side))
+		if cpu_opponent_count > 1:
+			details = "%s\n%s" % [DifficultyProfile.display_name(_cpu_level(side - CPU)), details]
+		label.tooltip_text = details
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
 	_refresh_resource_readouts()
@@ -2244,7 +2408,7 @@ func _refresh_claim_markers() -> void:
 			_claim_markers[region_id] = _create_claim_marker()
 		var marker := _claim_markers[region_id]
 		var label := marker.get_node("Readouts/Status") as Label
-		label.modulate = FACTION_ACCENTS[scout.side].albedo_color.lightened(0.35)
+		label.modulate = _faction_accent(scout.side).albedo_color.lightened(0.35)
 		label.text = _expedition_text(scout)
 		_update_claim_progress(marker.get_node("Readouts/Progress"), scout)
 		var point := _world_position(scout.site) + Vector3.UP * 0.35

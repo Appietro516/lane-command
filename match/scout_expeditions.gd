@@ -59,7 +59,7 @@ func _init(battle: MatchBattle, economy: MatchEconomy,
 	replacement_cost = {MatchEconomy.ENERGY: settings.replacement_energy}
 	duration = settings.duration
 	replacement_delay = settings.replacement_delay
-	for side in [MatchRegion.Owner.PLAYER, MatchRegion.Owner.CPU]:
+	for side in battle._bases:
 		var roster: Array[Scout] = []
 		slots[side] = roster
 		for index in CAPACITY:
@@ -91,11 +91,13 @@ func available(side: MatchRegion.Owner) -> Array[Scout]:
 func eligibility(side: MatchRegion.Owner, region_id: StringName) -> String:
 	if not slots.has(side):
 		return "Invalid faction"
+	if not _battle.is_side_active(side):
+		return "Faction eliminated"
 	var region := _regions.get(region_id) as MatchRegion
 	if region == null:
 		return "Select a region"
 	if region.region_owner != MatchRegion.Owner.NEUTRAL:
-		return "Player-owned" if region.region_owner == MatchRegion.Owner.PLAYER else "CPU-owned"
+		return MatchRegion.side_label(region.region_owner, slots.size() > 2) + "-owned"
 	if _battle.is_finished():
 		return "Match ended"
 	for neighbor in region.neighbor_ids:
@@ -201,7 +203,7 @@ func replacement_wait(scout: Scout) -> float:
 
 
 func replacement_block_reason(scout: Scout) -> String:
-	if _battle.is_finished() or scout.state != State.DEAD:
+	if _battle.is_finished() or not _battle.is_side_active(scout.side) or scout.state != State.DEAD:
 		return "Replacement unavailable"
 	if replacement_wait(scout) > MatchBattle.TIME_EPSILON:
 		return "Replacement ready in %ds" % ceili(replacement_wait(scout))
@@ -325,11 +327,11 @@ func _deploy(scout: Scout, point: Vector2) -> void:
 
 
 func _spawn_point(side: MatchRegion.Owner) -> Vector2:
-	if _battle.is_finished():
+	if _battle.is_finished() or not _battle.is_side_active(side):
 		return Vector2.INF
 	var base := _battle._bases[side]
 	var routes := _battle.navigation.with_clearance(UnitCatalog.DEFINITIONS[UnitCatalog.SCOUT].clearance)
-	var facing := base.direction_to(_battle._bases[MatchBattle.CPU if side == MatchBattle.PLAYER else MatchBattle.PLAYER])
+	var facing := base.direction_to(_battle._bases[_battle.nearest_hostile_base(side, base)])
 	var units := _battle.active_units()
 	for radius in [2.35, 3.1, 3.85]:
 		for offset in [0.45, -0.45, 0.0, 0.9, -0.9, 1.35, -1.35, PI]:

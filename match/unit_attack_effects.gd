@@ -5,10 +5,7 @@ const Catalog := preload("res://match/unit_catalog.gd")
 const MAX_CUES := 512
 const UNIT_HEIGHT := 0.52
 const STRUCTURE_HEIGHT := 0.88
-const FACTION_COLORS := {
-	MatchBattle.PLAYER: preload("res://match/player_accent.tres"),
-	MatchBattle.CPU: preload("res://match/cpu_accent.tres"),
-}
+
 
 var _cues: Array[MatchBattle.AttackResolved] = []
 var _replace_index := 0
@@ -77,7 +74,7 @@ func _draw_cue(attack: MatchBattle.AttackResolved, style: StringName, progress: 
 	if direction == Vector2.ZERO:
 		direction = Vector2.RIGHT
 	var height := UNIT_HEIGHT if attack.target_id > MatchBattle.NO_TARGET else STRUCTURE_HEIGHT
-	var tint: Color = FACTION_COLORS[attack.attacker_side].albedo_color
+	var tint: Color = MatchRegion.accent_color(attack.attacker_side)
 	tint.a = 1.0 - progress * progress
 	var core := tint.lerp(Color(1.0, 0.98, 0.88, tint.a), 0.78)
 
