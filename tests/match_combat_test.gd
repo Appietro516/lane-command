@@ -1,5 +1,6 @@
 extends SceneTree
 
+const Catalog := preload("res://match/unit_catalog.gd")
 const ScoutFixture := preload("res://tests/scout_fixture.gd")
 
 const MATCH_FIXTURE := preload("res://tests/prototype_match_fixture.gd")
@@ -26,6 +27,12 @@ func _run() -> void:
 	_test_base_destruction(CPU, PLAYER)
 	_test_orders_and_defense()
 	_test_routes()
+	for side: MatchRegion.Owner in [PLAYER, CPU]:
+		for type_id: StringName in Catalog.COMBAT_TYPES:
+			_test_stances(side, type_id)
+	_test_threat_ranking()
+	_test_blocked_targets()
+	await _test_tactical_hud()
 	await _test_match_scene()
 	await _test_match_end_and_restart()
 	if failures == 0:
@@ -145,7 +152,7 @@ func _test_target_priority(attacker_side: MatchRegion.Owner, defender_side: Matc
 	battle.target_priority = MatchBattle.TargetPriority.LOWEST_HP
 	farther.hp = 1
 	battle.advance(MatchBattle.STEP, economy)
-	_check(attacker.target == farther.id, "The optional lowest-HP priority overrides distance.")
+	_check(attacker.target == nearer.id, "Hold shot priority does not override Seek Nearest.")
 	battle.target_priority = MatchBattle.TargetPriority.NEAREST
 	farther.hp = MatchBattle.UNIT_HP
 	for step in range(100):
@@ -236,37 +243,29 @@ func _test_orders_and_defense() -> void:
 	_check(player.target == MatchBattle.NO_TARGET and player.position.y > -2.0,
 		"The ordered unit advances away from its strategic base target.")
 
-	opponent.position = player.position + Vector2(2.0, 0.0)
-	opponent.hp = MatchBattle.ATTACK_DAMAGE
+	opponent.position = player.position + Vector2(0.4, 0.0)
+	_check(battle.set_unit_stance(CPU, opponent.id, MatchBattle.Stance.IDLE), "CPU can enter reserve.")
+	var opponent_hp := opponent.hp
 	battle.advance(MatchBattle.STEP, economy)
-	_check(player.target == opponent.id and player.order == MatchBattle.Order.MOVE
-		and player.ordered_destination == destination and player.movement_destination != destination,
-		"Detecting a local threat interrupts movement while retaining the order.")
-	battle.advance(0.5, economy)
-	_check(battle.get_unit(opponent.id) == null and player.target == MatchBattle.NO_TARGET
-		and player.movement_destination == destination,
-		"After killing its attacker, the unit resumes the original route.")
-	battle.advance(4.5, economy)
+	_check(player.target == MatchBattle.NO_TARGET and player.order == MatchBattle.Order.MOVE
+		and player.movement_destination == destination and opponent.hp == opponent_hp,
+		"An in-range enemy does not divert or interrupt transit.")
+	battle.advance(5.0, economy)
 	_check(player.order == MatchBattle.Order.HOLD and player.position == destination
 		and player.waypoints.is_empty(), "Arrival converts a move into a persistent hold.")
 
-	var next_opponent := battle.spawn_unit(CPU, destination + Vector2(2.0, 0.0))
-	if next_opponent == null:
-		_check(false, "A second opponent is available to test defense after arrival.")
-		return
+	opponent.position = destination + Vector2(2.0, 0.0)
 	battle.advance(MatchBattle.STEP, economy)
-	_check(player.order == MatchBattle.Order.HOLD and player.target == next_opponent.id,
-		"Holding units still defend against local enemies.")
-	battle.advance(0.25, economy)
-	next_opponent.position = destination + Vector2(battle.aggro_radius + 0.2, 0.0)
-	_check(player.position.distance_to(next_opponent.position) < battle.aggro_radius,
-		"The former target is still close enough to draw the unit away without a hold area.")
+	_check(player.target == MatchBattle.NO_TARGET and player.position == destination,
+		"Hold ignores detected enemies outside weapon range.")
+	opponent.position = destination + Vector2(0.5, 0.0)
 	battle.advance(MatchBattle.STEP, economy)
-	_check(player.target == MatchBattle.NO_TARGET and player.movement_destination == destination,
-		"A nearby opponent outside the hold area breaks off the pursuit.")
-	next_opponent.position = Vector2(4.0, 4.0)
-	battle.advance(0.5, economy)
-	_check(player.position == destination, "The unit returns to the hold destination.")
+	_check(player.target == opponent.id and opponent.hp < opponent_hp and player.position == destination,
+		"Hold fires on a target that enters weapon range and keeps its post.")
+	opponent.position = destination + Vector2(4.2, 0.0)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(player.target == MatchBattle.NO_TARGET and player.position == destination,
+		"Leaving the hold radius clears the defender's target.")
 
 
 func _test_routes() -> void:
@@ -312,6 +311,207 @@ func _test_routes() -> void:
 	battle.advance(1.0, economy)
 	_check(unit.order == MatchBattle.Order.HOLD and unit.position == replacement,
 		"The replacement reaches its destination.")
+
+
+func _test_stances(side: MatchRegion.Owner, type_id: StringName) -> void:
+	var enemy := CPU if side == PLAYER else PLAYER
+	var battle := MatchBattle.new(PLAYER_BASE, CPU_BASE)
+	var economy := MatchEconomy.new()
+	var start := Vector2.ZERO
+	var unit := battle.spawn_unit(side, start, type_id)
+	var near := battle.spawn_unit(enemy, Vector2(0, 0.5), Catalog.RANGED)
+	var strong := battle.spawn_unit(enemy, Vector2(0, 3), Catalog.HEAVY)
+	battle.set_unit_stance(enemy, near.id, MatchBattle.Stance.IDLE)
+	battle.set_unit_stance(enemy, strong.id, MatchBattle.Stance.IDLE)
+	var context := "%s %s" % [MatchRegion.Owner.keys()[side], type_id]
+	_check(not battle.set_unit_stance(enemy, unit.id, MatchBattle.Stance.IDLE)
+		and not battle.order_move(enemy, unit.id, Vector2.LEFT)
+		and not battle.order_hold(enemy, unit.id), context + " rejects orders from the other faction.")
+	battle.set_unit_stance(side, unit.id, MatchBattle.Stance.IDLE)
+	var route_revision := unit.route_revision
+	battle.navigation.add_obstacle(Rect2(6, 6, 1, 1))
+	battle.advance(MatchBattle.STEP, economy)
+	_check(unit.position == start and unit.target == MatchBattle.NO_TARGET
+		and near.hp == near.definition.hp and unit.route_revision == route_revision,
+		context + " stays idle even with a target in range and a changed map.")
+	battle.set_unit_stance(side, unit.id, MatchBattle.Stance.SEEK_NEAREST)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(unit.target == near.id and near.hp < near.definition.hp,
+		context + " fires at the nearest hostile.")
+	battle.set_unit_stance(side, unit.id, MatchBattle.Stance.SEEK_STRONGEST)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(unit.target == strong.id and unit.position.y > 0,
+		context + " advances on the stronger, farther hostile.")
+
+	battle.set_unit_stance(side, unit.id, MatchBattle.Stance.IDLE)
+	var post := Vector2(-1, 0)
+	_check(battle.order_hold(side, unit.id, post) and unit.order == MatchBattle.Order.HOLD,
+		context + " accepts a chosen hold point while assigned to Idle.")
+	battle.advance(1.0, economy)
+	_check(unit.position == post and unit.order == MatchBattle.Order.HOLD,
+		context + " reaches and holds the chosen post.")
+	near.position = post + Vector2(0, 0.5)
+	var near_hp := near.hp
+	battle.advance(unit.attack_interval, economy)
+	_check(near.hp < near_hp and unit.position == post,
+		context + " defends the post while assigned to Idle.")
+	var waypoint := Vector2(-3, 0)
+	_check(battle.order_move(side, unit.id, waypoint, true), context + " accepts a move with resume.")
+	battle.set_unit_stance(side, unit.id, MatchBattle.Stance.SEEK_STRONGEST)
+	_check(unit.order == MatchBattle.Order.MOVE, context + " retains Move when only its default changes.")
+	near.position = Vector2(0, 7)
+	strong.position = Vector2(0, -7)
+	var outpost := battle.add_outpost(&"objective", enemy, Vector2(-5, 1), 24)
+	for step in 180:
+		battle.advance(MatchBattle.STEP, economy)
+		if unit.order == MatchBattle.Order.AUTONOMOUS:
+			break
+	_check(unit.position == waypoint and unit.order == MatchBattle.Order.AUTONOMOUS
+		and unit.target == MatchBattle.NO_TARGET, context + " resumes its stance after arrival.")
+	battle.advance(MatchBattle.STEP, economy)
+	_check(unit.target == outpost.id, context + " Seek Strongest falls back to a reachable outpost.")
+	battle.set_unit_stance(side, unit.id, MatchBattle.Stance.SEEK_NEAREST)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(unit.target == outpost.id, context + " Seek Nearest uses the same strategic fallback.")
+	battle.set_unit_stance(side, unit.id, MatchBattle.Stance.IDLE)
+	var reserve := unit.position
+	battle.advance(1.0, economy)
+	_check(unit.position == reserve and unit.target == MatchBattle.NO_TARGET and unit.waypoints.is_empty(),
+		context + " clears the strategic route when returning to reserve.")
+
+
+func _test_threat_ranking() -> void:
+	var economy := MatchEconomy.new()
+	var battle := MatchBattle.new(PLAYER_BASE, CPU_BASE)
+	var attacker := battle.spawn_unit(PLAYER, Vector2.ZERO, Catalog.RANGED)
+	var heavy := battle.spawn_unit(CPU, Vector2(0, -2.5), Catalog.HEAVY)
+	var infantry := battle.spawn_unit(CPU, Vector2(0, 2), Catalog.INFANTRY)
+	battle.set_unit_stance(PLAYER, attacker.id, MatchBattle.Stance.SEEK_STRONGEST)
+	battle.set_unit_stance(CPU, heavy.id, MatchBattle.Stance.IDLE)
+	battle.set_unit_stance(CPU, infantry.id, MatchBattle.Stance.IDLE)
+	attacker.cooldown = 5.0
+	heavy.hp = 10.0
+	battle.target_priority = MatchBattle.TargetPriority.LOWEST_HP
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == heavy.id, "Strongest uses current DPS and HP independently of shot priority.")
+	battle.stats.set_modifier(&"suppression", CPU, FactionStats.UNIT_DPS, -4.0)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == infantry.id, "An effective DPS reduction can change the threat ranking.")
+	heavy.hp = infantry.hp
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == infantry.id, "Equal threat favors the closer unit.")
+	heavy.position = -infantry.position
+	var reordered: Dictionary[int, MatchBattle.Unit] = {
+		attacker.id: attacker, infantry.id: infantry, heavy.id: heavy,
+	}
+	battle._units = reordered
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == heavy.id, "Equal threat and distance favor the lower ID independent of insertion order.")
+	battle.stats.remove_source(&"suppression")
+	heavy.hp = 1.0
+	battle.threat_weights = Vector2(1.0, 0.0)
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == heavy.id, "Changing the weights changes which effective stats drive the score.")
+
+
+func _test_blocked_targets() -> void:
+	var economy := MatchEconomy.new()
+	var battle := MatchBattle.new(PLAYER_BASE, CPU_BASE)
+	var attacker := battle.spawn_unit(PLAYER, Vector2(-1, 0))
+	var trapped := battle.spawn_unit(CPU, Vector2(1, 0), Catalog.HEAVY)
+	var reachable := battle.spawn_unit(CPU, Vector2(-1, -3))
+	battle.set_unit_stance(CPU, trapped.id, MatchBattle.Stance.IDLE)
+	battle.set_unit_stance(CPU, reachable.id, MatchBattle.Stance.IDLE)
+	for stance in [MatchBattle.Stance.SEEK_NEAREST, MatchBattle.Stance.SEEK_STRONGEST]:
+		battle.set_unit_stance(PLAYER, attacker.id, stance)
+		battle.advance(MatchBattle.STEP, economy)
+		_check(attacker.target == trapped.id, "The closer and stronger target is selected before the barrier.")
+		var obstacle := battle.navigation.add_obstacle(Rect2(-0.25, -9, 0.5, 18))
+		for step in 8:
+			battle.advance(MatchBattle.STEP, economy)
+			_check(attacker.target == reachable.id and attacker.position.x < -0.25,
+				"The disconnected target is skipped without oscillating or crossing the barrier.")
+		battle.navigation.remove_obstacle(obstacle)
+		attacker.position = Vector2(-1, 0)
+	trapped.hp = 0
+	battle.advance(MatchBattle.STEP, economy)
+	_check(attacker.target == reachable.id, "An unavailable target cannot retain a stale pursuit.")
+
+
+func _test_tactical_hud() -> void:
+	root.size = Vector2i(1280, 800)
+	var scene := MATCH_FIXTURE.instantiate()
+	root.add_child(scene)
+	scene.set_process(false)
+	var battle: MatchBattle = scene._battle
+	var unit := battle.spawn_unit(PLAYER, Vector2(-4, 0), Catalog.HEAVY)
+	var rival := battle.spawn_unit(CPU, Vector2(3, 1), Catalog.RANGED)
+	battle.set_unit_stance(CPU, rival.id, MatchBattle.Stance.IDLE)
+	await process_frame
+	_click_at_world(scene._unit_views[unit.id].global_position)
+	await process_frame
+	var picker := scene.get_node("%StancePicker") as OptionButton
+	var hold := scene.get_node("%HoldHere") as Button
+	var hold_at := scene.get_node("%HoldOrder") as Button
+	var move := scene.get_node("%MoveOrder") as Button
+	var resume := scene.get_node("%ResumeStance") as CheckBox
+	_check(scene.selected_unit() == unit and picker.visible and hold.visible and hold_at.visible
+		and move.visible and resume.visible, "Selecting a combat unit exposes the tactical HUD.")
+	_click(picker)
+	await process_frame
+	var popup := picker.get_popup()
+	_check(popup.visible, "The stance dropdown opens through the viewport.")
+	scene._process(MatchBattle.STEP)
+	_check(popup.visible, "Live updates keep the stance dropdown open.")
+	_choose_stance(picker, MatchBattle.Stance.IDLE)
+	await process_frame
+	_check(unit.stance == MatchBattle.Stance.IDLE and picker.text == "Idle",
+		"Choosing Idle updates the inspector and applies reserve stance immediately.")
+	_click(hold)
+	_check(unit.order == MatchBattle.Order.HOLD and unit.ordered_destination == unit.position,
+		"Hold here defends the inspected unit's current position.")
+	_click(hold_at)
+	await process_frame
+	_click_at_world(Vector3(-2, 0, -2))
+	_check(unit.order == MatchBattle.Order.HOLD
+		and unit.ordered_destination.is_equal_approx(Vector2(-2, -2)) and not unit.waypoints.is_empty(),
+		"Hold at accepts a map click and exposes its route.")
+	_click(resume)
+	_click(move)
+	await process_frame
+	_click_at_world(Vector3(-2, 0, 2))
+	_check(unit.order == MatchBattle.Order.MOVE and unit.resume_stance_on_arrival,
+		"The Move button takes a destination with the resume option.")
+	scene._process(2.5)
+	_check(unit.order == MatchBattle.Order.AUTONOMOUS and unit.stance == MatchBattle.Stance.IDLE
+		and unit.position.is_equal_approx(Vector2(-2, 2)), "The unit goes idle at the Move destination.")
+	_click(picker)
+	await process_frame
+	_choose_stance(picker, MatchBattle.Stance.SEEK_STRONGEST)
+	await process_frame
+	_check(unit.stance == MatchBattle.Stance.SEEK_STRONGEST, "The HUD can reassign an offensive stance.")
+	_click_at_world(scene._unit_views[rival.id].global_position)
+	_check(scene.selected_unit() == rival and not picker.is_visible_in_tree()
+		and not move.is_visible_in_tree() and scene.get_node("%StanceLabel").text.contains("Idle"),
+		"CPU inspection shows the current stance without player commands.")
+	scene._select_unit(unit.id)
+	scene._begin_unit_order(MatchBattle.Order.HOLD)
+	scene.restart_match()
+	scene.set_process(false)
+	var fresh: MatchBattle.Unit = scene._battle.spawn_unit(PLAYER, Vector2(-4, 0), Catalog.HEAVY)
+	scene._select_unit(fresh.id)
+	_check(fresh.stance == MatchBattle.Stance.SEEK_NEAREST and fresh.order == MatchBattle.Order.AUTONOMOUS
+		and picker.text == "Seek Nearest" and not resume.button_pressed
+		and scene._pending_unit_order == MatchBattle.Order.AUTONOMOUS,
+		"Restart clears the tactical order, stance and pending click mode.")
+	scene.free()
+
+
+func _choose_stance(picker: OptionButton, stance: MatchBattle.Stance) -> void:
+	var popup := picker.get_popup()
+	# The embedded popup's item activation is delivered by index.
+	popup.index_pressed.emit(picker.get_item_index(stance))
+	popup.hide()
 
 
 func _test_match_scene() -> void:
@@ -400,9 +600,9 @@ func _test_match_scene() -> void:
 
 	cpu.position = player.position + Vector2(0.0, -2.0)
 	scene._process(MatchBattle.STEP)
-	_check(player.target == cpu.id and intent.text == "Target  CPU Infantry #%d\nOrder  Hold\nState  Pursuing" % cpu.id
-		and route.get_surface_count() == 1 and route.get_aabb().position.z < cpu.position.y,
-		"A new target and its pursuit route replace the previous movement intent live.")
+	_check(player.target == MatchBattle.NO_TARGET and intent.text.ends_with("State  Holding")
+		and route.get_surface_count() == 0,
+		"The inspected defender stays at its post when an enemy is outside weapon range.")
 	cpu.position = player.position + Vector2(0.0, -0.55)
 	scene._process(MatchBattle.STEP)
 	_check(player.hp == 9 and stats.text.begins_with("HP  9 / 12")

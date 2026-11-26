@@ -180,9 +180,18 @@ func _test_ranged_targeting() -> void:
 	var weak := battle.spawn_unit(CPU, Vector2(3.5, 0.0), Catalog.INFANTRY)
 	var exposed := battle.spawn_unit(CPU, Vector2(2.0, 0.0), Catalog.HEAVY)
 	weak.hp = 1.0
+	battle.order_hold(PLAYER, ranged.id)
+	battle.set_unit_stance(CPU, weak.id, MatchBattle.Stance.IDLE)
+	battle.set_unit_stance(CPU, exposed.id, MatchBattle.Stance.IDLE)
 	battle.advance(STEP, economy)
 	_check(ranged.target == exposed.id and exposed.hp < exposed.definition.hp and weak.hp == 1.0,
-		"Ranged shoots a reachable target ahead of pursuing a lower-HP enemy.")
+		"A ranged defender fires on the in-range enemy even with a weaker enemy outside weapon range.")
+	weak.position = Vector2(0, 2.5)
+	ranged.cooldown = 0.0
+	var hp_before := exposed.hp
+	battle.advance(STEP, economy)
+	_check(battle.get_unit(weak.id) == null and exposed.hp == hp_before,
+		"Lowest HP still prioritizes the weaker enemy among available hold shots.")
 	battle.navigation.add_obstacle(Rect2(0.9, -0.5, 0.2, 1.0))
 	ranged.cooldown = 0.0
 	var hp := exposed.hp

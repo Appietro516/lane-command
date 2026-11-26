@@ -160,7 +160,9 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 @export_range(1.0, 120.0, 0.5) var scout_replacement_delay := 15.0
 @export_group("")
 @export_range(0.9, 12.0, 0.1) var unit_aggro_radius := MatchBattle.DEFAULT_AGGRO_RADIUS
+## Shot selection among enemies in range of a unit on Hold.
 @export var unit_target_priority := MatchBattle.TargetPriority.NEAREST
+@export var unit_threat_weights := MatchBattle.DEFAULT_THREAT_WEIGHTS
 @export_range(1, 80) var outpost_hp := MatchBattle.DEFAULT_OUTPOST_HP
 
 var active_map_seed: int:
@@ -193,6 +195,8 @@ var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _unit_materials: Dictionary[StringName, StandardMaterial3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
+var _pending_unit_order := MatchBattle.Order.AUTONOMOUS
+var _order_hint := ""
 var _route_mesh := ImmediateMesh.new()
 var _time_until_cpu_decision: float
 var _advancing_battle := false
@@ -223,6 +227,10 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _unit_stats: Label = %UnitStats
 @onready var _unit_intent: Label = %UnitIntent
 @onready var _unit_order_hint: Label = %UnitOrderHint
+@onready var _stance_label: Label = %StanceLabel
+@onready var _stance_picker: OptionButton = %StancePicker
+@onready var _tactical_orders: VBoxContainer = %TacticalOrders
+@onready var _resume_stance_toggle: CheckBox = %ResumeStance
 @onready var _stat_sources: Button = %StatSources
 @onready var _stat_source_scroll: ScrollContainer = %StatSourceScroll
 @onready var _stat_source_text: Label = %StatSourceText
@@ -329,6 +337,13 @@ func _ready() -> void:
 	_event_dialogue.choice_pressed.connect(_resolve_narrative_choice)
 	claim_completed.connect(_discover_on_claim)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
+	for stance in MatchBattle.Stance.values():
+		_stance_picker.add_item(_stance_name(stance), stance)
+	_stance_picker.item_selected.connect(_apply_selected_stance)
+	%MoveOrder.pressed.connect(_begin_unit_order.bind(MatchBattle.Order.MOVE))
+	%HoldOrder.pressed.connect(_begin_unit_order.bind(MatchBattle.Order.HOLD))
+	%HoldHere.pressed.connect(_hold_selected_unit)
+	_unit_panel.minimum_size_changed.connect(_fit_unit_panel)
 	restart_match()
 	if show_match_setup_on_start:
 		_open_match_setup(true)
@@ -573,6 +588,7 @@ func restart_match() -> void:
 	for landmark in _landmarks.values():
 		_battle.add_landmark_footprint(landmark.footprint)
 	_battle.target_priority = unit_target_priority
+	_battle.threat_weights = unit_threat_weights
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
 	_battle.attack_resolved.connect(_unit_attack_effects.record)
@@ -946,6 +962,7 @@ func _begin_placement(building_id: StringName) -> void:
 
 
 func _cancel_placement() -> void:
+	_clear_pending_unit_order()
 	if _preview != null:
 		remove_child(_preview)
 		_preview.queue_free()
@@ -1160,6 +1177,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		_show_income_sources(&"")
 		get_viewport().set_input_as_handled()
 		return
+	if event.is_action_pressed("ui_cancel") and _pending_unit_order != MatchBattle.Order.AUTONOMOUS:
+		_clear_pending_unit_order()
+		_update_unit_selection()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("ui_cancel") and (selected_unit() != null
 			or _selected_fortification != MatchBattle.NO_TARGET):
 		_select_unit(MatchBattle.NO_TARGET)
@@ -1185,14 +1207,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				# The camera may move before the next physics tick commits the placement.
 				var point: Variant = _ground_point(event.position)
 				_pending_pick = _map_position(point) if point != null else Vector2.INF
+			elif _pending_unit_order != MatchBattle.Order.AUTONOMOUS:
+				_issue_unit_order_at(event.position, _pending_unit_order)
 			else:
 				_pick_map(event.position)
 			get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_RIGHT and _selected_unit_can_receive_orders():
-			var point: Variant = _ground_point(event.position)
-			if point != null and _pick_unit(event.position) == MatchBattle.NO_TARGET \
-					and _battle.issue_move(_selected_unit_id, _map_position(point)):
-				_update_unit_selection()
+			_clear_pending_unit_order()
+			_issue_unit_order_at(event.position, MatchBattle.Order.MOVE)
 			get_viewport().set_input_as_handled()
 
 
@@ -1288,6 +1310,8 @@ func _pick_unit(pointer: Vector2) -> int:
 func _select_unit(id: int) -> void:
 	if id != _selected_unit_id:
 		_stat_sources.button_pressed = false
+		_clear_pending_unit_order()
+		_resume_stance_toggle.set_pressed_no_signal(false)
 	_selected_unit_id = id
 	_update_unit_selection()
 
@@ -1299,6 +1323,11 @@ func _update_unit_selection() -> void:
 	_route_mesh.clear_surfaces()
 	_recall_button.hide()
 	_unit_claim_progress.hide()
+	var combat_unit := unit != null and unit.type_id != UnitCatalog.SCOUT
+	var can_command := combat_unit and _selected_unit_can_receive_orders()
+	_stance_label.visible = combat_unit
+	_stance_picker.visible = can_command
+	_tactical_orders.visible = can_command
 	if unit == null:
 		return
 
@@ -1311,7 +1340,10 @@ func _update_unit_selection() -> void:
 	if scout != null:
 		_update_scout_inspection(unit, scout)
 		return
-	_unit_order_hint.text = "Right-click ground to move"
+	_stance_label.text = "Stance" if can_command else "Stance  " + _stance_name(unit.stance)
+	if _stance_picker.get_selected_id() != unit.stance:
+		_stance_picker.select(_stance_picker.get_item_index(unit.stance))
+	_unit_order_hint.text = "Right-click ground to move" if _order_hint.is_empty() else _order_hint
 	var attack := _battle.unit_attack_stat(unit)
 	var health := _battle.unit_health_stat(unit)
 	var speed := _battle.unit_speed_stat(unit)
@@ -1336,6 +1368,10 @@ func _update_unit_selection() -> void:
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
 	if not unit.waypoints.is_empty():
 		_draw_unit_route(unit)
+
+
+func _fit_unit_panel() -> void:
+	_unit_panel.size.y = _unit_panel.get_combined_minimum_size().y
 
 
 func _select_fortification(id: int) -> void:
@@ -1454,6 +1490,61 @@ func _selected_unit_can_receive_orders() -> bool:
 	return unit != null and unit.side == PLAYER and not unit.scout_committed and not _battle.is_finished()
 
 
+func _selected_combat_unit_can_receive_orders() -> bool:
+	return _selected_unit_can_receive_orders() and selected_unit().type_id != UnitCatalog.SCOUT \
+		and _placement_id.is_empty() and not _build_menu.visible
+
+
+func _clear_pending_unit_order() -> void:
+	_pending_unit_order = MatchBattle.Order.AUTONOMOUS
+	_order_hint = ""
+
+
+func _apply_selected_stance(index: int) -> void:
+	if _selected_combat_unit_can_receive_orders() and _battle.set_unit_stance(
+			PLAYER, _selected_unit_id, _stance_picker.get_item_id(index), true):
+		_clear_pending_unit_order()
+		_update_unit_selection()
+
+
+func _begin_unit_order(order: MatchBattle.Order) -> void:
+	if not _selected_combat_unit_can_receive_orders():
+		return
+	_pending_unit_order = order
+	_order_hint = "Click ground to move · Esc to cancel" if order == MatchBattle.Order.MOVE \
+		else "Click ground to set post · Esc to cancel"
+	_update_unit_selection()
+
+
+func _hold_selected_unit() -> void:
+	if _selected_combat_unit_can_receive_orders() and _battle.order_hold(PLAYER, _selected_unit_id):
+		_clear_pending_unit_order()
+		_update_unit_selection()
+
+
+func _issue_unit_order_at(pointer: Vector2, order: MatchBattle.Order) -> void:
+	var point: Variant = _ground_point(pointer)
+	var accepted := false
+	if point != null and _pick_unit(pointer) == MatchBattle.NO_TARGET:
+		var destination := _map_position(point)
+		if order == MatchBattle.Order.HOLD:
+			accepted = _battle.order_hold(PLAYER, _selected_unit_id, destination)
+		else:
+			accepted = _battle.issue_move(_selected_unit_id, destination,
+				_resume_stance_toggle.button_pressed)
+	if accepted:
+		_clear_pending_unit_order()
+	else:
+		_order_hint = "Choose reachable ground"
+		if _pending_unit_order != MatchBattle.Order.AUTONOMOUS:
+			_order_hint += " · Esc to cancel"
+	_update_unit_selection()
+
+
+static func _stance_name(stance: MatchBattle.Stance) -> String:
+	return MatchBattle.Stance.keys()[stance].capitalize()
+
+
 func _target_label(unit: MatchBattle.Unit) -> String:
 	if unit.target == MatchBattle.BASE_TARGET:
 		return "CPU base" if unit.side == PLAYER else "Player base"
@@ -1477,7 +1568,7 @@ func _unit_state_label(unit: MatchBattle.Unit) -> String:
 			return "Pursuing"
 		match unit.order:
 			MatchBattle.Order.MOVE: return "Moving to order"
-			MatchBattle.Order.HOLD: return "Returning to hold point"
+			MatchBattle.Order.HOLD: return "Moving to hold point"
 		return "Advancing"
 	if unit.order == MatchBattle.Order.HOLD and unit.position == unit.ordered_destination:
 		return "Holding"

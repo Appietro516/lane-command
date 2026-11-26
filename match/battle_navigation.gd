@@ -66,6 +66,18 @@ func with_clearance(clearance: float) -> BattleNavigation:
 	return routes
 
 
+## Check whether breaching one specific footprint reconnects a blocked order.
+func reachable_without_obstacle(start: Vector2, end: Vector2, clearance: float,
+		ignored_id: int) -> bool:
+	var routes := BattleNavigation.new(_bounds.grow(-clearance))
+	for id in _obstacles:
+		if id != ignored_id:
+			var obstacle := _obstacles[id]
+			var footprint := Rect2(obstacle.rect.position + obstacle.transform.origin, obstacle.rect.size)
+			routes.add_obstacle(footprint.grow(clearance), obstacle.transform.get_rotation())
+	return not routes.path(start, end).is_empty()
+
+
 func is_passable(point: Vector2) -> bool:
 	if not point.is_finite() or not _bounds.has_point(point):
 		return false

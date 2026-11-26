@@ -49,10 +49,9 @@ static func exercise(scene: Node, decisions := 10) -> Dictionary:
 				continue
 			var site := hub + Vector2(-4.65 - (i % 2) * 0.45, (i - 3.5) * 0.36)
 			var unit := MatchBattle.Unit.new(id, PLAYER, site)
-			unit.order = MatchBattle.Order.HOLD
-			unit.ordered_destination = site
 			targets[id] = unit
 			battle._units[id] = unit
+			battle.set_unit_stance(PLAYER, id, MatchBattle.Stance.IDLE)
 			battle.unit_produced.emit(unit)
 		scene._process(scene.cpu_decision_interval)
 		# Include a combat step after each purchase.

@@ -18,6 +18,8 @@ func setup(scene: Node) -> void:
 	_click(viewport, camera.unproject_position(Vector3(-5.0, 0, -5.0)), MOUSE_BUTTON_RIGHT)
 	assert(scene.selected_unit() != null)
 	assert(scene.selected_unit().order == MatchBattle.Order.MOVE)
+	assert(scene._battle.set_unit_stance(MatchRegion.Owner.PLAYER, scene.selected_unit().id,
+		MatchBattle.Stance.IDLE))
 	scene._process(0.9)
 
 

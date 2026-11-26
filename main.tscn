@@ -236,11 +236,66 @@ mouse_filter = 2
 unique_name_in_owner = true
 layout_mode = 2
 
+[node name="UnitStance" type="HBoxContainer" parent="HUD/UnitInspection/Readouts"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="StanceLabel" type="Label" parent="HUD/UnitInspection/Readouts/UnitStance"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Stance"
+
+[node name="StancePicker" type="OptionButton" parent="HUD/UnitInspection/Readouts/UnitStance"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+allow_reselect = true
+tooltip_text = "Choose a stance to end the current order and apply it immediately."
+
+[node name="TacticalOrders" type="VBoxContainer" parent="HUD/UnitInspection/Readouts"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Commands" type="HBoxContainer" parent="HUD/UnitInspection/Readouts/TacticalOrders"]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="MoveOrder" type="Button" parent="HUD/UnitInspection/Readouts/TacticalOrders/Commands"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Move"
+tooltip_text = "Choose a destination on the map."
+
+[node name="HoldHere" type="Button" parent="HUD/UnitInspection/Readouts/TacticalOrders/Commands"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Hold here"
+tooltip_text = "Defend from the unit's current position."
+
+[node name="HoldOrder" type="Button" parent="HUD/UnitInspection/Readouts/TacticalOrders/Commands"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Hold at…"
+tooltip_text = "Choose a position to travel to and defend."
+
+[node name="ResumeStance" type="CheckBox" parent="HUD/UnitInspection/Readouts/TacticalOrders"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Resume stance after Move"
+tooltip_text = "Leave unchecked to hold at the destination."
+
 [node name="UnitOrderHint" type="Label" parent="HUD/UnitInspection/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
 theme_override_font_sizes/font_size = 14
+autowrap_mode = 3
 text = "Right-click ground to move"
 
 [node name="UnitClaimProgress" type="ProgressBar" parent="HUD/UnitInspection/Readouts"]

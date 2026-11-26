@@ -15,6 +15,7 @@ const Fortifications := preload("res://match/fortification_rules.gd")
 
 enum Outcome { IN_PROGRESS, VICTORY, DEFEAT }
 enum Order { AUTONOMOUS, MOVE, HOLD }
+enum Stance { SEEK_NEAREST, SEEK_STRONGEST, IDLE }
 enum TargetPriority { NEAREST, LOWEST_HP }
 
 const PLAYER := MatchRegion.Owner.PLAYER
@@ -29,6 +30,7 @@ const UNIT_ATTACK_RANGE := INFANTRY.range
 const BASE_ATTACK_RANGE := 1.8
 const DEFAULT_BOUNDS := Rect2(-15.0, -9.0, 30.0, 18.0)
 const DEFAULT_AGGRO_RADIUS := 4.0
+const DEFAULT_THREAT_WEIGHTS := Vector2(2.0, 0.25)
 const COMBAT_CELL_SIZE := 4.0
 const BASE_FOOTPRINT := Vector2(1.5, 1.5)
 const BARRACKS_FOOTPRINT := Vector2(1.41, 0.91)
@@ -57,7 +59,9 @@ class Unit:
 	var side: MatchRegion.Owner
 	var position: Vector2
 	var heading := Vector2.RIGHT
+	var stance := Stance.SEEK_NEAREST
 	var order := Order.AUTONOMOUS
+	var resume_stance_on_arrival := false
 	var ordered_destination := Vector2.INF
 	var movement_destination := Vector2.INF
 	var waypoints := PackedVector2Array()
@@ -163,7 +167,10 @@ class ProductionTimer extends Fortification:
 
 var stats: FactionStats
 var aggro_radius: float
+## Defensive shot priority for Hold. Autonomous pursuit uses the unit's stance.
 var target_priority := TargetPriority.NEAREST
+## Threat score = effective DPS * weight.x + current HP * weight.y.
+var threat_weights := DEFAULT_THREAT_WEIGHTS
 var navigation: BattleNavigation
 var _bases: Dictionary[MatchRegion.Owner, Vector2]
 var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
@@ -382,25 +389,86 @@ func get_unit(id: int) -> Unit:
 	return _units.get(id)
 
 
-func issue_move(id: int, destination: Vector2) -> bool:
-	var unit := get_unit(id)
-	if is_finished() or unit == null or unit.side != PLAYER or unit.scout_committed:
+## Set the default for an owned combat unit. Cancel the order to apply it now.
+func set_unit_stance(side: MatchRegion.Owner, id: int, stance: Stance,
+		cancel_order := false) -> bool:
+	var unit := _commandable_unit(side, id)
+	if unit == null or unit.type_id == UnitCatalog.SCOUT or not Stance.values().has(stance):
 		return false
-	var routes := _unit_navigation(unit)
-	var route := routes.path(unit.position, destination)
-	if route.is_empty() and (unit.type_id == UnitCatalog.SCOUT or not routes.is_passable(destination)
-			or _find_wall_approach(unit).is_empty()):
-		return false
-	_order_move(unit, destination, route)
+	unit.stance = stance
+	if cancel_order or unit.order == Order.AUTONOMOUS:
+		_resume_stance(unit)
 	return true
 
 
+func issue_move(id: int, destination: Vector2, resume_stance := false) -> bool:
+	return order_move(PLAYER, id, destination, resume_stance)
+
+
+func order_move(side: MatchRegion.Owner, id: int, destination: Vector2,
+		resume_stance := false) -> bool:
+	var unit := _commandable_unit(side, id)
+	if unit == null:
+		return false
+	var routes := _unit_navigation(unit)
+	var route := routes.path(unit.position, destination)
+	var breach := {}
+	if route.is_empty():
+		if unit.type_id == UnitCatalog.SCOUT or not routes.is_passable(destination):
+			return false
+		breach = _find_wall_approach(unit, destination)
+		if breach.is_empty():
+			return false
+	_order_move(unit, destination, route)
+	unit.resume_stance_on_arrival = resume_stance
+	if not breach.is_empty():
+		unit.blocked_revision = navigation.revision
+		unit.blocked_objective = destination
+		unit.wall_approach = breach
+	return true
+
+
+## With no destination, establish a post at the unit's current position.
+func order_hold(side: MatchRegion.Owner, id: int, destination: Variant = null) -> bool:
+	var unit := _commandable_unit(side, id)
+	if unit == null or unit.type_id == UnitCatalog.SCOUT \
+			or (destination != null and not destination is Vector2):
+		return false
+	var point: Vector2 = unit.position if destination == null else destination
+	var route := PackedVector2Array()
+	if point != unit.position:
+		route = _unit_navigation(unit).path(unit.position, point)
+		if route.is_empty():
+			return false
+	_set_order(unit, Order.HOLD, point, route)
+	return true
+
+
+func _commandable_unit(side: MatchRegion.Owner, id: int) -> Unit:
+	var unit := get_unit(id)
+	if is_finished() or unit == null or unit.side != side or unit.scout_committed or unit.hp <= 0.0:
+		return null
+	return unit
+
+
 func _order_move(unit: Unit, destination: Vector2, route: PackedVector2Array) -> void:
-	unit.order = Order.MOVE
+	_set_order(unit, Order.MOVE, destination, route)
+
+
+func _set_order(unit: Unit, order: Order, destination: Vector2, route: PackedVector2Array) -> void:
+	unit.order = order
 	unit.ordered_destination = destination
+	unit.resume_stance_on_arrival = false
 	unit.target = NO_TARGET
 	unit.can_attack_target = false
+	unit.strategic_revision = -1
+	unit.blocked_revision = -1
+	unit.wall_approach.clear()
 	_set_route(unit, destination, route)
+
+
+func _resume_stance(unit: Unit) -> void:
+	_set_order(unit, Order.AUTONOMOUS, Vector2.INF, PackedVector2Array())
 
 
 func active_units() -> Array[Unit]:
@@ -552,12 +620,7 @@ func _step_combat() -> void:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
 		if unit.hp <= 0.0:
 			continue
-		if unit.type_id == UnitCatalog.SCOUT:
-			if unit.order == Order.MOVE:
-				_route_to(unit, unit.ordered_destination)
-			continue
-		var nearby := _nearby_enemies(units, cells, unit.position, unit.side, absf(aggro_radius))
-		unit.can_attack_target = _plan_turn(unit, nearby)
+		unit.can_attack_target = _plan_turn(unit, units, cells)
 		if unit.can_attack_target and unit.cooldown <= TIME_EPSILON:
 			attacks.append(unit)
 
@@ -568,6 +631,10 @@ func _step_combat() -> void:
 	for unit in attacks:
 		_resolve_attack(unit, report_attacks)
 	for unit in units:
+		if unit.hp <= 0.0:
+			continue
+		if unit.target > NO_TARGET and _units[unit.target].hp <= 0.0:
+			continue
 		_move(unit)
 
 	for unit in units:
@@ -712,65 +779,85 @@ func _fire_fortifications(units: Array[Unit], cells: Dictionary[Vector3i, Array]
 		fortification_fired.emit(fort, target.position)
 
 
-func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
+func _plan_turn(unit: Unit, units: Array[Unit], cells: Dictionary[Vector3i, Array]) -> bool:
 	unit.target = NO_TARGET
-	if _plan_local_engagement(unit, units):
+	match unit.order:
+		Order.MOVE:
+			if unit.blocked_revision == navigation.revision and not unit.wall_approach.is_empty():
+				return _plan_breach(unit, unit.ordered_destination, true)
+			_route_to(unit, unit.ordered_destination)
+			return unit.type_id != UnitCatalog.SCOUT and unit.waypoints.is_empty() \
+				and unit.position != unit.ordered_destination \
+				and _plan_breach(unit, unit.ordered_destination, true)
+		Order.HOLD:
+			if unit.position != unit.ordered_destination:
+				_route_to(unit, unit.ordered_destination)
+				return false
+		Order.AUTONOMOUS:
+			if unit.stance == Stance.IDLE:
+				if unit.movement_destination.is_finite():
+					_clear_route(unit)
+				return false
+	if unit.type_id == UnitCatalog.SCOUT:
+		return false
+
+	var holding := unit.order == Order.HOLD
+	var radius := absf(aggro_radius)
+	if holding:
+		radius = minf(radius, unit.definition.range + RANGE_EPSILON)
+	var nearby := _nearby_enemies(units, cells, unit.position, unit.side, radius)
+	if _plan_local_engagement(unit, nearby, radius, holding):
 		return unit.waypoints.is_empty()
 
 	var side := _opponent(unit.side)
-	var base := _bases[side]
 	var weapon_range: float = unit.definition.range
-	var at_hold_point := unit.order == Order.HOLD and unit.position == unit.ordered_destination
-	if unit.order == Order.AUTONOMOUS or at_hold_point:
-		if _can_attack_structure(unit.position, base, _base_obstacles[side],
-				weapon_range + BASE_ATTACK_RANGE - UNIT_ATTACK_RANGE):
-			unit.target = BASE_TARGET
-			unit.heading = unit.position.direction_to(base)
-			_clear_route(unit)
-			return true
-		for outpost in _outposts.values():
-			if outpost.side != unit.side and _can_attack_structure(unit.position, outpost.position,
-					outpost.obstacle, weapon_range + OUTPOST_ATTACK_RANGE - UNIT_ATTACK_RANGE):
-				unit.target = outpost.id
-				unit.heading = unit.position.direction_to(outpost.position)
-				_clear_route(unit)
-				return true
+	if _can_attack_structure(unit.position, _bases[side], _base_obstacles[side],
+			weapon_range + BASE_ATTACK_RANGE - UNIT_ATTACK_RANGE):
+		return _aim_at(unit, BASE_TARGET, _bases[side])
+	for outpost in _outposts.values():
+		if outpost.side != unit.side and _can_attack_structure(unit.position, outpost.position,
+				outpost.obstacle, weapon_range + OUTPOST_ATTACK_RANGE - UNIT_ATTACK_RANGE):
+			return _aim_at(unit, outpost.id, outpost.position)
+	for fort: Fortification in _fortifications.values():
+		if fort.side != unit.side and _can_attack_structure(unit.position, fort.position,
+				fort.obstacle, fort.unit_attack_range(weapon_range)):
+			return _aim_at(unit, fort.id, fort.position)
 
-		for fort: Fortification in _fortifications.values():
-			if fort.side != unit.side and _can_attack_structure(unit.position, fort.position,
-					fort.obstacle, fort.unit_attack_range(weapon_range)):
-				unit.target = fort.id
-				unit.heading = unit.position.direction_to(fort.position)
-				_clear_route(unit)
-				return true
-
-	if unit.order == Order.AUTONOMOUS:
-		if unit.strategic_revision != navigation.revision:
-			_plan_strategic_approach(unit, side)
+	if holding:
+		return false
+	if unit.strategic_revision != navigation.revision:
+		_plan_strategic_approach(unit, side)
+	_route_to(unit, unit.strategic_destination)
+	if not unit.waypoints.is_empty():
 		unit.target = unit.strategic_target
-		_route_to(unit, unit.strategic_destination)
-	else:
-		_route_to(unit, unit.ordered_destination)
-	if unit.waypoints.is_empty():
-		var objective := _bases[side] if unit.order == Order.AUTONOMOUS else unit.ordered_destination
-		if unit.position.is_equal_approx(objective):
-			return false
-		if unit.blocked_revision != navigation.revision or unit.blocked_objective != objective:
-			unit.blocked_revision = navigation.revision
-			unit.blocked_objective = objective
-			unit.wall_approach = _find_wall_approach(unit)
-		if not unit.wall_approach.is_empty():
-			var wall := get_fortification(unit.wall_approach.id)
-			unit.target = wall.id
-			if _can_attack_structure(unit.position, wall.position, wall.obstacle, wall.unit_attack_range(weapon_range)):
-				unit.heading = unit.position.direction_to(wall.position)
-				_clear_route(unit)
-				return true
-			_route_to(unit, unit.wall_approach.point)
+		return false
+	return _plan_breach(unit, _bases[side], false)
+
+
+func _aim_at(unit: Unit, target: int, position: Vector2) -> bool:
+	unit.target = target
+	unit.heading = unit.position.direction_to(position)
+	_clear_route(unit)
+	return true
+
+
+func _plan_breach(unit: Unit, objective: Vector2, explicit_move: bool) -> bool:
+	if unit.blocked_revision != navigation.revision or unit.blocked_objective != objective:
+		unit.blocked_revision = navigation.revision
+		unit.blocked_objective = objective
+		unit.wall_approach = _find_wall_approach(unit, objective if explicit_move else Vector2.INF)
+	if unit.wall_approach.is_empty():
+		return false
+	var wall := get_fortification(unit.wall_approach.id)
+	if _can_attack_structure(unit.position, wall.position, wall.obstacle,
+			wall.unit_attack_range(unit.definition.range)):
+		return _aim_at(unit, wall.id, wall.position)
+	unit.target = wall.id
+	_route_to(unit, unit.wall_approach.point)
 	return false
 
 
-func _find_wall_approach(unit: Unit) -> Dictionary:
+func _find_wall_approach(unit: Unit, destination := Vector2.INF) -> Dictionary:
 	var result := {}
 	var nearest := INF
 	for fort: Fortification in _fortifications.values():
@@ -781,67 +868,58 @@ func _find_wall_approach(unit: Unit) -> Dictionary:
 			continue
 		var point := _find_structure_approach(unit, fort.position, fort.obstacle,
 			fort.unit_attack_range(unit.definition.range))
-		if point.is_finite():
-			nearest = distance
-			result = {"id": fort.id, "point": point}
+		if not point.is_finite():
+			continue
+		if destination.is_finite() and not navigation.reachable_without_obstacle(
+				unit.position, destination, unit.definition.clearance, fort.obstacle):
+			continue
+		nearest = distance
+		result = {"id": fort.id, "point": point}
 	return result
 
 
-func _plan_local_engagement(unit: Unit, units: Array[Unit]) -> bool:
-	var nearest: Unit
-	var nearest_distance := INF
+func _plan_local_engagement(unit: Unit, units: Array[Unit], radius: float, holding: bool) -> bool:
+	var selected: Unit
+	var best_distance := INF
 	var best_priority := INF
-	var best_readiness := 1
-	var detection_squared := aggro_radius * aggro_radius
 	var weapon_range: float = unit.definition.range
 	var best_route := PackedVector2Array()
-	var routes := _unit_navigation(unit)
 	for opponent in units:
-		if opponent.side == unit.side or opponent.hp <= 0.0:
+		if opponent.side != _opponent(unit.side) or opponent.hp <= 0.0:
 			continue
 		var distance := unit.position.distance_squared_to(opponent.position)
-		if distance > detection_squared:
+		if distance > radius * radius:
 			continue
-		if unit.order == Order.HOLD \
-				and opponent.position.distance_squared_to(unit.ordered_destination) > detection_squared:
+		var priority := 0.0
+		if holding and target_priority == TargetPriority.LOWEST_HP:
+			priority = opponent.hp
+		elif not holding and unit.stance == Stance.SEEK_STRONGEST:
+			var dps := stats.value(opponent.side, FactionStats.UNIT_DPS, _base_dps(opponent))
+			priority = -(threat_weights.x * dps + threat_weights.y * opponent.hp)
+		if selected != null and (priority > best_priority or (priority == best_priority and (
+				distance > best_distance or (distance == best_distance and opponent.id > selected.id)))):
 			continue
 		var can_fire := distance <= (weapon_range + RANGE_EPSILON) ** 2 \
 			and navigation.line_clear(unit.position, opponent.position)
-		var readiness := int(unit.definition.prefer_ready_shot and not can_fire)
-		var priority := opponent.hp if target_priority == TargetPriority.LOWEST_HP else 0.0
-		if readiness > best_readiness or (readiness == best_readiness and (
-				priority > best_priority or (priority == best_priority and (
-					distance > nearest_distance or (distance == nearest_distance
-						and nearest != null and opponent.id > nearest.id))))):
-			continue
 		var route := PackedVector2Array()
 		if not can_fire:
-			route = routes.path(unit.position, opponent.position)
+			if holding:
+				continue
+			route = _unit_navigation(unit).path(unit.position, opponent.position)
 			if route.is_empty():
 				route = _find_attack_route(unit, opponent.position, -1, weapon_range)
-			if route.is_empty() or not _within_hold_area(unit, route):
+			if route.is_empty():
 				continue
-		nearest = opponent
+		selected = opponent
 		best_priority = priority
-		best_readiness = readiness
-		nearest_distance = distance
+		best_distance = distance
 		best_route = route
-	if nearest == null:
+	if selected == null:
 		return false
-	unit.target = nearest.id
 	if best_route.is_empty():
-		unit.heading = unit.position.direction_to(nearest.position)
-		_clear_route(unit)
-	else:
-		_set_route(unit, best_route[-1], best_route)
-	return true
-
-
-func _within_hold_area(unit: Unit, route: PackedVector2Array) -> bool:
-	if unit.order == Order.HOLD:
-		for point in route:
-			if point.distance_squared_to(unit.ordered_destination) > aggro_radius * aggro_radius:
-				return false
+		return _aim_at(unit, selected.id, selected.position)
+	unit.target = selected.id
+	_set_route(unit, best_route[-1], best_route)
 	return true
 
 
@@ -938,7 +1016,10 @@ func _move(unit: Unit) -> void:
 		if remaining >= 0.0:
 			unit.waypoints.remove_at(0)
 	if unit.order == Order.MOVE and unit.position == unit.ordered_destination:
-		unit.order = Order.HOLD
+		if unit.resume_stance_on_arrival:
+			_resume_stance(unit)
+		else:
+			unit.order = Order.HOLD
 
 
 func _add_footprint(center: Vector2, half_size: Vector2) -> int:
