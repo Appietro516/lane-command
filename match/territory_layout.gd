@@ -5,6 +5,7 @@ const DEFAULT_SIZE := Vector2(60.0, 36.0)
 const DEFAULT_REGION_COUNT := 24
 const MIN_REGIONS := 2
 const MAX_REGIONS := 128
+const MAX_CPU_OPPONENTS := 4
 const MIN_DIMENSION := 18.0
 const MAX_DIMENSION := 192.0
 const MIN_SITE_PITCH := 5.0
@@ -29,10 +30,13 @@ var bounds: Rect2
 var active_seed: int
 var player_start_ids: Array[StringName] = []
 var cpu_start_ids: Array[StringName] = []
+# The first region in each territory contains its starting base.
+var starting_territories: Array[Array] = []
+var configuration_error := ""
 
 
 func _init(map_seed: int, region_count: int, map_size := DEFAULT_SIZE,
-		player_start_count := 1, cpu_start_count := 1) -> void:
+		player_start_count := 1, cpu_start_count := 1, cpu_opponents := 1) -> void:
 	active_seed = map_seed
 	var world_size := Vector2(_validate_dimension(map_size.x, DEFAULT_SIZE.x),
 		_validate_dimension(map_size.y, DEFAULT_SIZE.y))
@@ -41,6 +45,12 @@ func _init(map_seed: int, region_count: int, map_size := DEFAULT_SIZE,
 	var count := clampi(region_count, MIN_REGIONS, mini(capacity, MAX_REGIONS))
 	player_start_count = maxi(1, player_start_count)
 	cpu_start_count = maxi(1, cpu_start_count)
+	if cpu_opponents < 1 or cpu_opponents > MAX_CPU_OPPONENTS:
+		configuration_error = "Choose between 1 and %d CPU opponents." % MAX_CPU_OPPONENTS
+		return
+	if cpu_opponents > 1 and count <= player_start_count + cpu_start_count * cpu_opponents:
+		configuration_error = "This map needs room for every starting territory and a neutral region."
+		return
 	if player_start_count > count - cpu_start_count:
 		player_start_count = 1
 		cpu_start_count = 1
@@ -74,6 +84,63 @@ func _init(map_seed: int, region_count: int, map_size := DEFAULT_SIZE,
 			if _shares_edge(cell, other):
 				cell.neighbor_ids.append(other.id)
 				other.neighbor_ids.append(cell.id)
+
+	_assign_starting_territories(cpu_opponents, player_start_count, cpu_start_count)
+
+
+func _assign_starting_territories(cpu_opponents: int, player_count: int, cpu_count: int) -> void:
+	if cpu_opponents == 1:
+		starting_territories = [player_start_ids, cpu_start_ids.duplicate()]
+		starting_territories[1].reverse()
+		return
+
+	# Keep the two established endpoints. Spread each subsequent base as far as
+	# possible from its nearest existing base using the seeded map positions.
+	var starts: Array[Cell] = [cells.front(), cells.back()]
+	while starts.size() <= cpu_opponents:
+		var best: Cell
+		var separation := -1.0
+		for candidate in cells:
+			if candidate in starts:
+				continue
+			var nearest := INF
+			for start in starts:
+				nearest = minf(nearest, candidate.site.distance_squared_to(start.site))
+			if nearest > separation:
+				best = candidate
+				separation = nearest
+		starts.append(best)
+
+	var reserved: Dictionary[StringName, bool] = {}
+	for start in starts:
+		starting_territories.append([start.id])
+		reserved[start.id] = true
+
+	# Expand in rounds so each side gets a chance to reserve adjacent cells.
+	var by_id: Dictionary[StringName, Cell] = {}
+	for cell in cells:
+		by_id[cell.id] = cell
+	for round_index in range(1, maxi(player_count, cpu_count)):
+		for index in starts.size():
+			if round_index >= (player_count if index == 0 else cpu_count):
+				continue
+			var best: StringName
+			var distance := INF
+			for id: StringName in starting_territories[index]:
+				for neighbor in by_id[id].neighbor_ids:
+					if reserved.has(neighbor):
+						continue
+					var candidate_distance := starts[index].site.distance_squared_to(by_id[neighbor].site)
+					if candidate_distance < distance:
+						best = neighbor
+						distance = candidate_distance
+			if best.is_empty():
+				configuration_error = "The map cannot fit connected starting territories of this size."
+				return
+			starting_territories[index].append(best)
+			reserved[best] = true
+	player_start_ids.assign(starting_territories[0])
+	cpu_start_ids.assign(starting_territories[1])
 
 
 func _generate_sites(count: int) -> PackedVector2Array:

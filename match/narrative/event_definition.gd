@@ -9,7 +9,7 @@ extends Resource
 @export_range(0, 1000000) var weight := 1
 
 @export_group("Eligibility")
-## Neutral allows either active faction.
+## Neutral allows any active faction. CPU allows every CPU opponent.
 @export var eligible_side := MatchRegion.Owner.NEUTRAL
 ## An empty list allows any region, including a context without a region.
 @export var eligible_regions: Array[StringName] = []
@@ -52,7 +52,8 @@ func is_eligible(origin: StringName, side: MatchRegion.Owner, region: StringName
 		facts: Array[StringName], economy: MatchEconomy) -> bool:
 	if trigger != origin or weight == 0:
 		return false
-	if eligible_side != MatchRegion.Owner.NEUTRAL and eligible_side != side:
+	if eligible_side != MatchRegion.Owner.NEUTRAL and eligible_side != side \
+			and not (eligible_side == MatchRegion.Owner.CPU and side > MatchRegion.Owner.CPU):
 		return false
 	if not eligible_regions.is_empty() and region not in eligible_regions:
 		return false

@@ -44,7 +44,7 @@ func _init(match_seed: int, economy: MatchEconomy, catalog: NarrativeCatalog) ->
 ## Returns whether the ID refers to the requested occurrence. An existing ID never rerolls.
 func submit(id: StringName, origin: StringName, side: MatchRegion.Owner,
 		region := &"", facts: Array[StringName] = []) -> bool:
-	if not _active or id.is_empty() or side not in [MatchRegion.Owner.PLAYER, MatchRegion.Owner.CPU]:
+	if not _active or id.is_empty() or not _economy.is_active(side):
 		return false
 	var existing := _decisions.get(id) as Decision
 	if existing != null:
@@ -120,7 +120,8 @@ func resolve_player(id: StringName, option_id: StringName) -> bool:
 ## A caller may supply a CPU choice or use the shared scarcity-based policy.
 func resolve_cpu(id: StringName, option_id := &"") -> bool:
 	var decision := _decisions.get(id) as Decision
-	if decision == null or decision.side != MatchRegion.Owner.CPU or decision.status != Status.PENDING:
+	if decision == null or decision.side == MatchRegion.Owner.PLAYER \
+			or not _economy.is_active(decision.side) or decision.status != Status.PENDING:
 		return false
 	var best: Array[NarrativeOption] = []
 	var best_score := -INF

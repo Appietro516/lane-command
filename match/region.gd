@@ -1,12 +1,23 @@
 class_name MatchRegion
 extends Node3D
 
-enum Owner { NEUTRAL, PLAYER, CPU }
+enum Owner { NEUTRAL, PLAYER, CPU, CPU_2, CPU_3, CPU_4 }
+
+const EXTRA_CPU_ACCENTS := {
+	Owner.CPU_2: Color("#b4ed72"),
+	Owner.CPU_3: Color("#d8a5ff"),
+	Owner.CPU_4: Color("#ffdb68"),
+}
+const PLAYER_ACCENT := preload("res://match/player_accent.tres")
+const CPU_ACCENT := preload("res://match/cpu_accent.tres")
 
 const OWNER_COLORS := {
 	Owner.NEUTRAL: Color("#394b53"),
 	Owner.PLAYER: Color("#235c76"),
 	Owner.CPU: Color("#784538"),
+	Owner.CPU_2: Color("#466632"),
+	Owner.CPU_3: Color("#63477d"),
+	Owner.CPU_4: Color("#756226"),
 }
 const BORDER_COLOR := Color("#728487")
 const SELECTED_BORDER_COLOR := Color("#ffe5a5")
@@ -26,6 +37,28 @@ var polygon: PackedVector2Array
 var geometry: MeshInstance3D
 var _fill_material := StandardMaterial3D.new()
 var _border_material := StandardMaterial3D.new()
+
+
+static func side_label(side: Owner, show_cpu_number: bool) -> String:
+	match side:
+		Owner.NEUTRAL:
+			return "Neutral"
+		Owner.PLAYER:
+			return "Player"
+		Owner.CPU:
+			return "CPU 1" if show_cpu_number else "CPU"
+		_:
+			return "CPU %d" % (side - Owner.PLAYER)
+
+
+static func accent_color(side: Owner) -> Color:
+	match side:
+		Owner.PLAYER:
+			return PLAYER_ACCENT.albedo_color
+		Owner.CPU:
+			return CPU_ACCENT.albedo_color
+		_:
+			return EXTRA_CPU_ACCENTS[side]
 
 
 func _init(cell: TerritoryLayout.Cell) -> void:
