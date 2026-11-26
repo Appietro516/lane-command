@@ -106,7 +106,12 @@ class ExportLogClassificationTest(unittest.TestCase):
         )
         self.assertTrue(self.check(log))
         self.assertFalse(self.check(log.replace("[ DONE ]", "[  96% ]")))
-        self.assertFalse(self.check(log.replace("1 resources", "2 resources")))
+        for count in (2, 3, 12, 100):
+            with self.subTest(resource_count=count):
+                self.assertTrue(self.check(log.replace("1 resources", f"{count} resources")))
+        for invalid in ("0 resources", "-1 resources", "unknown resources"):
+            with self.subTest(invalid_count=invalid):
+                self.assertFalse(self.check(log.replace("1 resources", invalid)))
         self.assertFalse(self.check(log.replace("ERROR: 1 resources", "SCRIPT ERROR: 1 resources")))
         self.assertFalse(self.check(log + "ERROR: Another problem.\n"))
         self.assertFalse(self.check("ERROR: Export failed.\n" + log))
