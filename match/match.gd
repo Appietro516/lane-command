@@ -116,6 +116,7 @@ var narrative_events: NarrativeEvents
 
 @export var narrative_catalog: NarrativeCatalog
 @export_group("Map")
+@export var map_shape := MapSettings.Shape.RECTANGLE
 @export var map_seed: int = 17
 @export var map_width := TerritoryLayout.DEFAULT_SIZE.x
 @export var map_height := TerritoryLayout.DEFAULT_SIZE.y
@@ -290,6 +291,11 @@ var _barracks_menu_interval := -1.0
 @onready var _restart_button: Button = %Restart
 @onready var _active_difficulty: Label = %ActiveDifficulty
 @onready var _match_setup: Control = %MatchSetup
+@onready var _shape_picker: OptionButton = _match_setup.get_node("%MapShape")
+@onready var _map_width_field: LineEdit = _match_setup.get_node("%MapWidth")
+@onready var _map_height_field: LineEdit = _match_setup.get_node("%MapHeight")
+@onready var _region_count_field: LineEdit = _match_setup.get_node("%MapRegions")
+@onready var _seed_field: LineEdit = _match_setup.get_node("%MapSeed")
 @onready var _opponent_picker: OptionButton = _match_setup.get_node("%OpponentCount")
 @onready var _difficulty_picker: OptionButton = _match_setup.get_node("%Difficulty")
 @onready var _difficulty_description: Label = _match_setup.get_node("%Description")
@@ -299,14 +305,6 @@ var _barracks_menu_interval := -1.0
 
 
 func _ready() -> void:
-	var layout := _create_layout()
-	if not layout.configuration_error.is_empty():
-		_outcome_label.text = layout.configuration_error
-		_outcome_label.show()
-		process_mode = Node.PROCESS_MODE_DISABLED
-		push_error(layout.configuration_error)
-		return
-	_generate_map(layout)
 	_unit_route.mesh = _route_mesh
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
@@ -368,12 +366,20 @@ func _ready() -> void:
 	_build_list.minimum_size_changed.connect(_queue_hud_layout)
 	_income_sources.minimum_size_changed.connect(_queue_hud_layout)
 	_placement_panel.minimum_size_changed.connect(_queue_hud_layout)
-	restart_match()
+	var layout := _create_layout()
+	if not layout.configuration_error.is_empty():
+		_open_match_setup(true)
+		_difficulty_description.text = layout.configuration_error
+		return
+	restart_match(layout)
 	if show_match_setup_on_start:
 		_open_match_setup(true)
 
 
 func _create_setup_controls() -> void:
+	for shape in MapSettings.SHAPE_NAMES:
+		_shape_picker.add_item(MapSettings.SHAPE_NAMES[shape], shape)
+	_shape_picker.item_selected.connect(_refresh_shape_fields)
 	_difficulty_pickers.append(_difficulty_picker)
 	for count in range(1, TerritoryLayout.MAX_CPU_OPPONENTS + 1):
 		_opponent_picker.add_item(str(count), count)
@@ -405,7 +411,13 @@ func _open_match_setup(initial: bool) -> void:
 	_cancel_placement()
 	_show_income_sources(&"")
 	_camera.end_drag()
-	_opponent_picker.select(_opponent_picker.get_item_index(cpu_opponent_count))
+	_shape_picker.select(maxi(0, _shape_picker.get_item_index(map_shape)))
+	_map_width_field.text = String.num(map_width)
+	_map_height_field.text = String.num(map_height)
+	_region_count_field.text = str(region_count)
+	_seed_field.text = str(map_seed)
+	_refresh_shape_fields(_shape_picker.selected)
+	_opponent_picker.select(maxi(0, _opponent_picker.get_item_index(cpu_opponent_count)))
 	for i in _difficulty_pickers.size():
 		var level := _cpu_level(i)
 		var picker := _difficulty_pickers[i]
@@ -441,20 +453,60 @@ func _describe_difficulty(index: int, cpu_index: int) -> void:
 	picker.tooltip_text = difficulty.description
 
 
+func _refresh_shape_fields(_index: int) -> void:
+	var rectangle := _shape_picker.get_selected_id() == MapSettings.Shape.RECTANGLE
+	_match_setup.get_node("%WidthLabel").text = "Width" if rectangle else "Side"
+	_match_setup.get_node("%HeightLabel").visible = rectangle
+	_map_height_field.visible = rectangle
+
+
 func _apply_match_setup() -> void:
 	var count := _opponent_picker.get_selected_id()
-	var layout: TerritoryLayout
-	if count != cpu_opponent_count:
-		layout = _create_layout_for(count)
+	var shape := _shape_picker.get_selected_id() as MapSettings.Shape
+	var width_text := _map_width_field.text.strip_edges()
+	var height_text := _map_height_field.text.strip_edges()
+	var regions_text := _region_count_field.text.strip_edges()
+	var seed_text := _seed_field.text.strip_edges()
+	if not width_text.is_valid_float() or (shape == MapSettings.Shape.RECTANGLE and not height_text.is_valid_float()):
+		_difficulty_description.text = "Enter numeric map dimensions in world units."
+		return
+	if not regions_text.is_valid_int():
+		_difficulty_description.text = "Enter a whole number of regions."
+		return
+	if not _valid_seed_text(seed_text):
+		_difficulty_description.text = "Enter a whole-number seed from −9223372036854775808 to 9223372036854775807."
+		return
+	var dimensions := Vector2(width_text.to_float(), height_text.to_float())
+	var settings := MapSettings.new(shape, dimensions, regions_text.to_int(), seed_text.to_int())
+	var layout := _layout
+	if not _matches_layout(settings, count):
+		layout = _create_layout_for(count, settings)
 		if not layout.configuration_error.is_empty():
 			_difficulty_description.text = layout.configuration_error
 			return
+	map_shape = settings.shape
+	map_width = settings.size.x
+	if shape == MapSettings.Shape.RECTANGLE:
+		map_height = settings.size.y
+	region_count = settings.region_count
+	map_seed = settings.seed
 	cpu_opponent_count = count
 	cpu_difficulty = _difficulty_picker.get_selected_id()
 	additional_cpu_difficulties.clear()
 	for i in range(1, count):
 		additional_cpu_difficulties.append(_difficulty_pickers[i].get_selected_id())
-	restart_match(layout)
+	restart_match(layout if layout != _layout else null)
+
+
+static func _valid_seed_text(value: String) -> bool:
+	if not value.is_valid_int():
+		return false
+	var negative := value.begins_with("-")
+	var digits := value.trim_prefix("-").trim_prefix("+").lstrip("0")
+	if digits.is_empty():
+		return true
+	var limit := "9223372036854775808" if negative else "9223372036854775807"
+	return digits.length() < limit.length() or (digits.length() == limit.length() and digits <= limit)
 
 
 func _close_match_setup() -> void:
@@ -463,18 +515,29 @@ func _close_match_setup() -> void:
 		process_mode = _process_mode_before_setup
 
 
+func _map_settings() -> MapSettings:
+	return MapSettings.new(map_shape, Vector2(map_width, map_height), region_count, map_seed)
+
+
+func _matches_layout(settings: MapSettings, opponents: int) -> bool:
+	return _layout != null and settings.configuration_error.is_empty() \
+		and _layout.settings.shape == settings.shape and _layout.settings.size == settings.size \
+		and _layout.settings.region_count == settings.region_count and _layout.active_seed == settings.seed \
+		and _layout.starting_counts == Vector3i(player_start_count, cpu_start_count, opponents)
+
+
 func _create_layout() -> TerritoryLayout:
-	return _create_layout_for(cpu_opponent_count)
+	return _create_layout_for(cpu_opponent_count, _map_settings())
 
 
-func _create_layout_for(count: int) -> TerritoryLayout:
-	return TerritoryLayout.new(map_seed, region_count, Vector2(map_width, map_height),
-		player_start_count, cpu_start_count, count)
+func _create_layout_for(count: int, settings: MapSettings) -> TerritoryLayout:
+	return TerritoryLayout.new(settings.seed, settings.region_count, settings.size,
+		player_start_count, cpu_start_count, count, settings.shape)
 
 
 func _generate_map(layout: TerritoryLayout) -> void:
 	_layout = layout
-	_camera.set_map_bounds(_layout.bounds)
+	_camera.set_map_bounds(_layout.bounds, _navigation_boundary())
 	%Overview.tooltip_text = "Center the map and zoom out (Home)\nMap seed: %d" % active_map_seed
 	var owners: Dictionary[StringName, MatchRegion.Owner] = {}
 	var base_regions: Dictionary[StringName, bool] = {}
@@ -610,14 +673,8 @@ func _add_starting_base(region: MatchRegion) -> void:
 		$Buildings.add_child(container)
 		_buildings[side] = container
 	base.position.y = 0.08
-	var offset := Vector2(0.0, 2.0) if cpu_opponent_count == 1 else Vector2.ZERO
-	var site := Vector2(region.position.x, region.position.z)
-	var footprint := Rect2(site + offset - MatchBattle.BASE_FOOTPRINT,
-		MatchBattle.BASE_FOOTPRINT * 2.0)
-	for corner in BattleNavigation.corners_of(footprint):
-		if not Geometry2D.is_point_in_polygon(corner, region.polygon):
-			offset = Vector2.ZERO
-			break
+	var offset := _layout.base_positions[region.region_id] - Vector2(region.position.x, region.position.z)
+	base.position.x = offset.x
 	base.position.z = offset.y
 	base.get_node("Core").material_override = _faction_accent(side)
 	region.add_child(base)
@@ -635,7 +692,18 @@ func _base_structure_id(side: MatchRegion.Owner) -> StringName:
 	return StringName("base/%d" % side)
 
 
+func _navigation_boundary() -> PackedVector2Array:
+	# Axis-aligned maps use the rectangular route fast path.
+	return _layout.boundary if _layout.settings.shape == MapSettings.Shape.TRIANGLE else PackedVector2Array()
+
+
 func restart_match(layout: TerritoryLayout = null) -> void:
+	if layout == null and not _matches_layout(_map_settings(), cpu_opponent_count):
+		layout = _create_layout()
+	if layout != null and not layout.configuration_error.is_empty():
+		_open_match_setup(_layout == null)
+		_difficulty_description.text = layout.configuration_error
+		return
 	_close_match_setup()
 	if narrative_events != null:
 		narrative_events.close()
@@ -711,7 +779,7 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 		strategy.time_until_decision = _decision_period(strategy) + 0.12 * (side - CPU)
 		_cpu_strategies[side] = strategy
 	_battle = MatchBattle.new(positions[PLAYER], positions[CPU], unit_aggro_radius,
-		_layout.bounds, faction_stats, positions)
+		_layout.bounds, faction_stats, positions, _navigation_boundary())
 	for landmark in _landmarks.values():
 		_battle.add_landmark_footprint(landmark.footprint)
 	_battle.target_priority = unit_target_priority
@@ -832,6 +900,8 @@ func _building_site_block_reason(side: MatchRegion.Owner, building_id: StringNam
 		polygon: PackedVector2Array, covered: Array[StringName]) -> String:
 	if not position.is_finite() or not _buildings.has(side) or not owns_region(side, _layout.region_at(position)):
 		return "Choose a spot in your territory"
+	if not _battle.navigation.contains_footprint(polygon):
+		return "Keep the entire footprint on the map"
 	if Fortifications.PROFILES.has(building_id) and not _owns_footprint(side, polygon, covered):
 		return "Keep the footprint in your territory"
 	var slot_reason := building_slot_block_reason(building_id, covered)
@@ -872,7 +942,7 @@ func _owns_footprint(side: MatchRegion.Owner, polygon: PackedVector2Array,
 	if not _buildings.has(side) or covered.is_empty():
 		return false
 	for point in polygon:
-		if not _layout.bounds.has_point(point):
+		if not _layout.contains(point):
 			return false
 	for region_id in covered:
 		if not owns_region(side, region_id):
@@ -948,8 +1018,7 @@ func _catalog_block_reason(side: MatchRegion.Owner, kind: StringName) -> String:
 
 func _wall_plan(side: MatchRegion.Owner, start: Vector2, end: Vector2) -> Dictionary:
 	var plan := {"reason": "", "length": 0.0, "cost": {}, "angle": 0.0, "segments": []}
-	if not start.is_finite() or not end.is_finite() or not _layout.bounds.has_point(start) \
-			or not _layout.bounds.has_point(end):
+	if not _layout.contains(start) or not _layout.contains(end):
 		plan.reason = "Keep both endpoints on the map"
 		return plan
 	var count := Fortifications.wall_count(start.distance_to(end))
@@ -1389,7 +1458,7 @@ func get_region(region_id: StringName) -> MatchRegion:
 
 
 func region_at_world_position(world_position: Vector3) -> StringName:
-	return _layout.region_at(_map_position(world_position))
+	return _layout.region_at(_map_position(world_position)) if _layout != null else &""
 
 
 func selected_unit() -> MatchBattle.Unit:

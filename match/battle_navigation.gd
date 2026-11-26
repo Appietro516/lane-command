@@ -34,6 +34,8 @@ class ObstacleBranch:
 
 var revision := 0
 var _bounds: Rect2
+var _boundary: PackedVector2Array
+var _boundary_clearance: float
 var _obstacles: Dictionary[int, Obstacle] = {}
 var _next_obstacle_id := 0
 var _obstacle_tree: ObstacleBranch
@@ -48,8 +50,10 @@ var _start_links: Dictionary[Vector2, PackedInt64Array] = {}
 var _end_links: Dictionary[Vector2, PackedInt64Array] = {}
 
 
-func _init(bounds: Rect2) -> void:
+func _init(bounds: Rect2, boundary := PackedVector2Array(), boundary_clearance := 0.0) -> void:
 	_bounds = bounds
+	_boundary = boundary
+	_boundary_clearance = boundary_clearance
 
 
 func add_obstacle(footprint: Rect2, angle := 0.0) -> int:
@@ -88,7 +92,7 @@ func with_clearance(clearance: float) -> BattleNavigation:
 		return self
 	var routes := _clearance_routes.get(clearance) as BattleNavigation
 	if routes == null:
-		routes = BattleNavigation.new(_bounds.grow(-clearance))
+		routes = BattleNavigation.new(_bounds.grow(-clearance), _boundary, _boundary_clearance + clearance)
 		for id in _obstacles:
 			var obstacle := _obstacles[id]
 			routes._insert_obstacle(id, obstacle.footprint().grow(clearance),
@@ -100,7 +104,7 @@ func with_clearance(clearance: float) -> BattleNavigation:
 ## Check whether breaching one specific footprint reconnects a blocked order.
 func reachable_without_obstacle(start: Vector2, end: Vector2, clearance: float,
 		ignored_id: int) -> bool:
-	var routes := BattleNavigation.new(_bounds.grow(-clearance))
+	var routes := BattleNavigation.new(_bounds.grow(-clearance), _boundary, _boundary_clearance + clearance)
 	for id in _obstacles:
 		if id != ignored_id:
 			var obstacle := _obstacles[id]
@@ -108,8 +112,21 @@ func reachable_without_obstacle(start: Vector2, end: Vector2, clearance: float,
 	return not routes.path(start, end).is_empty()
 
 
+func contains(point: Vector2) -> bool:
+	if _boundary.is_empty():
+		return point.is_finite() and _bounds.has_point(point)
+	return MapSettings.contains_in(_boundary, point, _boundary_clearance)
+
+
+func contains_footprint(polygon: PackedVector2Array) -> bool:
+	for corner in polygon:
+		if not contains(corner):
+			return false
+	return not polygon.is_empty()
+
+
 func is_passable(point: Vector2) -> bool:
-	if not point.is_finite() or not _bounds.has_point(point):
+	if not contains(point):
 		return false
 	for id in _obstacles:
 		var obstacle := _obstacles[id]
@@ -120,7 +137,8 @@ func is_passable(point: Vector2) -> bool:
 
 func line_clear(start: Vector2, end: Vector2, ignored_obstacle := -1,
 		allow_exit := false) -> bool:
-	return _first_blocker(start, end, ignored_obstacle, allow_exit) == -1
+	# A segment between two points inside a convex boundary stays inside it.
+	return contains(start) and contains(end) and _first_blocker(start, end, ignored_obstacle, allow_exit) == -1
 
 
 func _first_blocker(start: Vector2, end: Vector2, ignored_obstacle := -1,
@@ -203,9 +221,9 @@ static func _blocks_segment(obstacle: Obstacle, start: Vector2, end: Vector2,
 
 
 func path(start: Vector2, end: Vector2) -> PackedVector2Array:
-	if not is_passable(end):
+	if not contains(start) or not is_passable(end):
 		return PackedVector2Array()
-	if line_clear(start, end, -1, true):
+	if _first_blocker(start, end, -1, true) == -1:
 		return PackedVector2Array([end])
 
 	if _graph_revision < 0:

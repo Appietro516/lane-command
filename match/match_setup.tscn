@@ -61,6 +61,65 @@ theme_override_colors/font_color = Color(0.98, 0.86, 0.61, 1)
 theme_override_font_sizes/font_size = 28
 text = "Match setup"
 
+[node name="MapRow" type="HBoxContainer" parent="Center/Panel/Fields"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ShapeLabel" type="Label" parent="Center/Panel/Fields/MapRow"]
+layout_mode = 2
+text = "Map shape"
+
+[node name="MapShape" type="OptionButton" parent="Center/Panel/Fields/MapRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(110, 34)
+
+[node name="WidthLabel" type="Label" parent="Center/Panel/Fields/MapRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Width"
+
+[node name="MapWidth" type="LineEdit" parent="Center/Panel/Fields/MapRow"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(56, 0)
+tooltip_text = "18–192 world units"
+
+[node name="HeightLabel" type="Label" parent="Center/Panel/Fields/MapRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Height"
+
+[node name="MapHeight" type="LineEdit" parent="Center/Panel/Fields/MapRow"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(56, 0)
+tooltip_text = "18–192 world units"
+
+[node name="RegionRow" type="HBoxContainer" parent="Center/Panel/Fields"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="RegionLabel" type="Label" parent="Center/Panel/Fields/RegionRow"]
+layout_mode = 2
+text = "Regions"
+
+[node name="MapRegions" type="LineEdit" parent="Center/Panel/Fields/RegionRow"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(68, 34)
+tooltip_text = "2–128, depending on shape and size"
+
+[node name="SeedLabel" type="Label" parent="Center/Panel/Fields/RegionRow"]
+layout_mode = 2
+text = "Seed"
+
+[node name="MapSeed" type="LineEdit" parent="Center/Panel/Fields/RegionRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
 [node name="OpponentCountRow" type="HBoxContainer" parent="Center/Panel/Fields"]
 layout_mode = 2
 theme_override_constants/separation = 12

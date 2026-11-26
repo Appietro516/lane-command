@@ -83,7 +83,7 @@ func _test_setup_and_starts() -> void:
 	var over_limit := TerritoryLayout.new(17, 24, TerritoryLayout.DEFAULT_SIZE, 1, 1, 5)
 	_check(not packed.configuration_error.is_empty() and packed.starting_territories.is_empty()
 		and not over_limit.configuration_error.is_empty(), "Invalid counts are rejected before assigning starts.")
-	scene.region_count = 5
+	scene._region_count_field.text = "5"
 	picker.select(picker.get_item_index(4))
 	picker.item_selected.emit(picker.selected)
 	var previous: MatchBattle = scene._battle

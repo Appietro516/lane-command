@@ -199,10 +199,11 @@ var _outcome := Outcome.IN_PROGRESS
 
 func _init(player_base: Vector2, cpu_base: Vector2, detection_radius := DEFAULT_AGGRO_RADIUS,
 		bounds := DEFAULT_BOUNDS, faction_stats: FactionStats = null,
-		starting_bases: Dictionary[MatchRegion.Owner, Vector2] = {}) -> void:
+		starting_bases: Dictionary[MatchRegion.Owner, Vector2] = {},
+		boundary := PackedVector2Array()) -> void:
 	stats = faction_stats if faction_stats != null else FactionStats.new()
 	aggro_radius = detection_radius
-	navigation = BattleNavigation.new(bounds)
+	navigation = BattleNavigation.new(bounds, boundary)
 	if starting_bases.is_empty():
 		_bases[PLAYER] = player_base
 		_bases[CPU] = cpu_base
@@ -313,6 +314,8 @@ func add_landmark_footprint(footprint: Rect2) -> void:
 
 
 func fortification_site_clear(polygon: PackedVector2Array, include_hubs := true) -> bool:
+	if not navigation.contains_footprint(polygon):
+		return false
 	for footprint in _landmark_footprints:
 		if not Geometry2D.intersect_polygons(polygon, BattleNavigation.corners_of(footprint)).is_empty():
 			return false
@@ -337,12 +340,12 @@ func producer_site_clear(position: Vector2, profile: Dictionary) -> bool:
 	var extent := producer_spawn_extent(profile.size, profile.unit_type)
 	# Reserve enough room for a unit to leave on every side, including near the map edge.
 	var exit_area := _footprint(position, extent)
-	if not navigation._bounds.encloses(exit_area):
+	var exits := BattleNavigation.corners_of(exit_area)
+	if not navigation.contains_footprint(exits):
 		return false
 	var footprint := Fortifications.footprint(position, profile.size)
 	if not fortification_site_clear(footprint):
 		return false
-	var exits := BattleNavigation.corners_of(exit_area)
 	for rect in _landmark_footprints:
 		if rect.intersects(exit_area):
 			return false

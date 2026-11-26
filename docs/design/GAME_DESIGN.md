@@ -4,9 +4,9 @@
 
 Generate 24 seeded Voronoi territories by default in a 60 × 36 world. The human and CPU each own one starting territory by default, with their bases near opposite ends. Additional starting territories form contiguous groups around each faction’s base. The remaining regions start neutral. Units navigate the open map around active building footprints and cross regions freely.
 
-Open `main.tscn` and select the Match root to configure **Map** in the Inspector. Set the width, height, region count, seed, and starting region count for each faction before launching the match. Hover over **Overview** in game to see the active seed. **Restart** restores the same map and its initial owners.
+Use **Match setup** to choose Rectangle, Square, or Triangle and enter the map dimensions, region count, and seed. Rectangle uses independent width and height. Square uses a single side length. Triangle uses a single side length and an equilateral outline with its apex pointing north. Its height is √3/2 times the side length. The 18–192 world-unit dimension limits apply to the values entered. Hover over **Overview** to see the active seed.
 
-Each map dimension accepts 18–192 world units. A nonpositive or nonfinite dimension uses its default, and other out-of-range values clamp to the supported bounds. The generator fits 2–128 regions subject to the map’s capacity at a minimum five-unit site grid pitch. Each side starts with at least one region. If the requested starting territories exceed the effective region count, each side receives one.
+The generator supports 2–128 regions. A smaller map may support fewer regions. Triangle uses inset rows of sites, so it supports fewer regions than a square of the same width. Setup reports the supported maximum or explains when more territory is needed for the chosen starts. **Restart** with the same settings restores the same geometry and initial owners. Changing the settings creates a fresh match. The same settings can also be configured on the Match root in `main.tscn` before launch.
 
 Sources: S95c42ca9286d, Se50c19e91616, [generated territory map ticket](https://trello.com/c/gV8QZqOh/9-generate-a-2d-voronoi-style-territory-map), [configurable territory map ticket](https://trello.com/c/HfqeIWVg/20-scale-up-seeded-voronoi-maps-with-configurable-region-counts-and-starting-territory)
 

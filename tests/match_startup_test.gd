@@ -57,23 +57,15 @@ func _test_layout(size: Vector2, count: int, player_count: int, cpu_count: int) 
 
 
 func _test_invalid_config() -> void:
-	var fallback := TerritoryLayout.new(-13, -8, Vector2(0, -20), 8, 3)
-	_check(fallback.bounds.size == TerritoryLayout.DEFAULT_SIZE
-		and fallback.cells.size() == TerritoryLayout.MIN_REGIONS and fallback.active_seed == -13,
-		"Invalid dimensions and too few regions fall back to a playable match.")
-	_check_starts(fallback, 1, 1)
-	_check_partition(fallback)
-
-	var dense := TerritoryLayout.new(91, 1000000, Vector2(1, 1), 0, -14)
-	_check(dense.bounds.size == Vector2.ONE * TerritoryLayout.MIN_DIMENSION and dense.cells.size() == 9,
-		"The minimum dimensions and site spacing limit oversized region counts.")
-	_check_starts(dense, 1, 1)
-	_check_partition(dense)
-
-	var nonfinite := TerritoryLayout.new(71, 11, Vector2(NAN, INF), 2, 4)
-	_check(nonfinite.bounds.size == TerritoryLayout.DEFAULT_SIZE and nonfinite.cells.size() == 11,
-		"Nonfinite dimensions fall back to the default size.")
-	_check_starts(nonfinite, 2, 4)
+	var invalid_size := TerritoryLayout.new(-13, 8, Vector2(0, -20))
+	_check(invalid_size.cells.is_empty() and "dimensions" in invalid_size.configuration_error,
+		"Invalid dimensions are rejected with feedback.")
+	var dense := TerritoryLayout.new(91, 10, Vector2(18, 18))
+	_check(dense.cells.is_empty() and "2–9" in dense.configuration_error,
+		"An oversized count reports the supported maximum instead of clamping.")
+	var nonfinite := TerritoryLayout.new(71, 11, Vector2(NAN, INF))
+	_check(nonfinite.cells.is_empty() and not nonfinite.configuration_error.is_empty(),
+		"Nonfinite dimensions are rejected.")
 
 
 func _check_starts(layout: TerritoryLayout, player_count: int, cpu_count: int) -> void:

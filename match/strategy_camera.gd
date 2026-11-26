@@ -10,6 +10,7 @@ const CAMERA_DISTANCE := 32.0
 var menu_navigation := false
 
 var _map_bounds := Rect2(-TerritoryLayout.DEFAULT_SIZE / 2.0, TerritoryLayout.DEFAULT_SIZE)
+var _map_boundary: PackedVector2Array
 var _focus := Vector2.ZERO
 var _target_focus := Vector2.ZERO
 var _target_size: float
@@ -25,8 +26,9 @@ func _ready() -> void:
 	reset_view(true)
 
 
-func set_map_bounds(bounds: Rect2) -> void:
+func set_map_bounds(bounds: Rect2, boundary := PackedVector2Array()) -> void:
 	_map_bounds = bounds
+	_map_boundary = boundary
 	_update_overview_size()
 	reset_view(true)
 
@@ -78,8 +80,19 @@ func _pan(offset: Vector2) -> void:
 	var right := Vector2(basis.x.x, basis.x.z)
 	var down := Vector2(-basis.y.x, -basis.y.z) / (basis.z.y * basis.z.y)
 	var bounds := _map_bounds
-	_target_focus = (_target_focus + right * offset.x + down * offset.y).clamp(
+	var target := (_target_focus + right * offset.x + down * offset.y).clamp(
 		bounds.position, bounds.end)
+	if not _map_boundary.is_empty() and not MapSettings.contains_in(_map_boundary, target):
+		var nearest := INF
+		for i in _map_boundary.size():
+			var point := Geometry2D.get_closest_point_to_segment(target,
+				_map_boundary[i], _map_boundary[(i + 1) % _map_boundary.size()])
+			var distance := target.distance_squared_to(point)
+			if distance < nearest:
+				_target_focus = point
+				nearest = distance
+	else:
+		_target_focus = target
 
 
 func _input(event: InputEvent) -> void:
