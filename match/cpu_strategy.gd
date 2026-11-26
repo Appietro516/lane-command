@@ -17,7 +17,8 @@ const WALL_SEGMENTS := 2
 const WALL_BYPASS := Vector2(0.45, 0.18)
 const MIN_MORTAR_TARGETS := 2
 const MIN_WALL_TARGETS := 2
-const CLAIM_COOLDOWN := 12.0
+const CLAIM_ROUTE_BUDGET := 4
+const CLAIM_INTERRUPTION_RETRY := 24.0
 
 
 class Threat:
@@ -58,6 +59,8 @@ var _rng := RandomNumberGenerator.new()
 var _retry_at := {}
 var _next_defense := 0.0
 var _next_claim := 0.0
+var _next_replacement := 0.0
+var _claim_retry_at: Dictionary[StringName, float] = {}
 
 
 func _init(map_seed: int) -> void:
@@ -71,16 +74,20 @@ func decide(scene: Node3D) -> void:
 	var owned: Array[MatchRegion] = []
 	var frontiers: Dictionary[StringName, MatchRegion] = {}
 	var base: Vector2 = battle._bases[CPU]
-	var enemy_base: Vector2 = battle._bases[MatchRegion.Owner.PLAYER]
+	var claims := 0
 	for region: MatchRegion in scene._regions_by_id.values():
 		if region.region_owner != CPU:
 			continue
 		owned.append(region)
+		if region.region_id not in scene._layout.cpu_start_ids:
+			claims += 1
 		for id in region.neighbor_ids:
 			var neighbor: MatchRegion = scene.get_region(id)
 			if neighbor.region_owner == NEUTRAL:
 				frontiers[id] = neighbor
 
+	# This is the current full-visibility view. Filter hostile observations here
+	# when the match introduces fog of war.
 	var units := battle.active_units()
 	var threats := _threats(scene, owned, units)
 	var sites := owned.duplicate()
@@ -109,21 +116,10 @@ func decide(scene: Node3D) -> void:
 	var front: Threat = threats.front() if not threats.is_empty() else null
 	var under_pressure := front != null and front.score > 0.0
 
-	var claims: int = owned.size() - scene._layout.cpu_start_ids.size()
 	var expeditions: ScoutExpeditions = scene._expeditions
 	for expedition in expeditions.assignments.values():
 		if expedition.side == CPU:
 			claims += 1
-	var dormant := _dormant_buildings(scene, frontiers)
-	var claim_targets := _claim_targets(scene, frontiers, units, base, enemy_base, dormant)
-	# Recover dormant investments even if the ordinary expansion budget has been reached.
-	if now >= _next_claim:
-		for region in claim_targets:
-			if not dormant.has(region.region_id):
-				break
-			if _want_claim(scene, region.region_id, now):
-				return
-
 	var covered := under_pressure and _has_cover(scene, front.hub)
 	var options := _military_options(scene, production, allies, enemies, front, covered, now)
 	var food_producer := _producer_for(catalog, FOOD)
@@ -162,12 +158,7 @@ func decide(scene: Node3D) -> void:
 		production_goal += 1
 	var can_expand_production: bool = production.total < mini(production_goal, scene.cpu_production_limit)
 
-	if not claim_targets.is_empty():
-		for index in ScoutExpeditions.CAPACITY:
-			if expeditions.replace(CPU, index):
-				return
-
-	var allow_claim: bool = claims < scene.cpu_expansion_limit and (army > 0 or production.active == 0)
+	var allow_claim: bool = claims < scene.cpu_expansion_limit and army > 0
 	var next_cost: Dictionary = {}
 	if not options.is_empty():
 		next_cost = catalog[options[0].kind].cost
@@ -187,10 +178,10 @@ func decide(scene: Node3D) -> void:
 				if _want_build(scene, _producer_for(catalog, resource), sites, now):
 					return
 
-	if allow_claim and now >= _next_claim and (not under_pressure or production.active == 0):
-		for region in claim_targets:
-			if _want_claim(scene, region.region_id, now):
-				return
+	var can_feed_army := food_rate >= production.food_per_second or food_stock >= reserve
+	if not under_pressure and can_feed_army and (allow_claim or army > 0) \
+			and _try_expand(scene, frontiers, units, allow_claim, now):
+		return
 
 	if can_expand_production:
 		_build_military(scene, options, food_producer, sites, now)
@@ -258,10 +249,9 @@ func _military_options(scene: Node3D, production: Production, allies: Dictionary
 		var construction_cost: float = 0.0
 		for resource: StringName in profile.cost:
 			construction_cost += float(profile.cost[resource]) / MatchEconomy.RESOURCES[resource].starting_stock
-		var score: float = (scores[kind] * scene.cpu_counter_weight
-			- (installed_share + present_share * 0.5) * scene.cpu_diversity_weight
-			- (wait * 2.0 / scene.cpu_investment_horizon + construction_cost * 0.35)
-			- maxf(0.0, food_demand - food_rate) * 0.25)
+		var score := _utility([scores[kind], -(installed_share + present_share * 0.5),
+			-wait / scene.cpu_investment_horizon, -construction_cost, -maxf(0.0, food_demand - food_rate)],
+			[scene.cpu_counter_weight, scene.cpu_diversity_weight, 2.0, 0.35, 0.25])
 		options.append({"kind": kind, "score": score, "food_ready": food_ready,
 			"counter_gap": scores[kind] - existing_matchup})
 	options.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -488,25 +478,192 @@ func _try_wall(scene: Node3D, threat: Threat) -> bool:
 	return false
 
 
-func _claim_targets(scene: Node3D, frontiers: Dictionary[StringName, MatchRegion],
-		units: Array[MatchBattle.Unit], base: Vector2, enemy_base: Vector2,
-		dormant: Dictionary) -> Array[MatchRegion]:
+func on_assignment_interrupted(side: MatchRegion.Owner, region_id: StringName, elapsed: float) -> void:
+	if side == CPU:
+		_claim_retry_at[region_id] = elapsed + CLAIM_INTERRUPTION_RETRY
+
+
+func _try_expand(scene: Node3D, frontiers: Dictionary[StringName, MatchRegion],
+		units: Array[MatchBattle.Unit], allow_new_claim: bool, now: float) -> bool:
+	if frontiers.is_empty():
+		return false
+	var expeditions: ScoutExpeditions = scene._expeditions
+	var dormant := _dormant_buildings(scene, frontiers)
 	var targets: Array[MatchRegion] = []
-	var scores := {}
-	for region in frontiers.values():
-		var site := _site(region)
-		var distance := base.distance_to(site)
-		for unit in units:
-			if unit.side == CPU:
-				distance = minf(distance, unit.position.distance_to(site))
-		scores[region.region_id] = (5.0 if scene._landmarks.has(region.region_id) else 0.0) \
-			- distance - enemy_base.distance_to(site) * 0.15
-		targets.append(region)
-	targets.sort_custom(func(a: MatchRegion, b: MatchRegion) -> bool:
-		if dormant.has(a.region_id) != dormant.has(b.region_id):
-			return dormant.has(a.region_id)
-		return scores[a.region_id] > scores[b.region_id])
-	return targets
+	for region: MatchRegion in frontiers.values():
+		var id := region.region_id
+		if (allow_new_claim or dormant.has(id)) and not expeditions.assignments.has(id) \
+				and expeditions.eligibility(CPU, id).is_empty():
+			targets.append(region)
+	if targets.is_empty():
+		return false
+
+	var scouts := expeditions.available(CPU)
+	if now + MatchBattle.TIME_EPSILON >= _next_claim and not scouts.is_empty() \
+			and _can_fund_expedition(scene, expeditions.claim_cost):
+		var ready := targets.filter(func(region: MatchRegion) -> bool:
+			return now + MatchBattle.TIME_EPSILON >= _claim_retry_at.get(region.region_id, 0.0))
+		if not ready.is_empty() and _dispatch_best_claim(scene, ready, scouts, units, dormant, now):
+			_next_claim = now + scene.cpu_scout_dispatch_interval
+			return true
+
+	if now + MatchBattle.TIME_EPSILON >= _next_replacement \
+			and _can_fund_expedition(scene, expeditions.replacement_cost):
+		for index in ScoutExpeditions.CAPACITY:
+			var scout: ScoutExpeditions.Scout = expeditions.slots[CPU][index]
+			if not expeditions.replacement_block_reason(scout).is_empty():
+				continue
+			_next_replacement = now + scene.cpu_placement_retry
+			return expeditions.replace(CPU, index)
+	return false
+
+
+func _can_fund_expedition(scene: Node3D, cost: Dictionary) -> bool:
+	var budget := cost.duplicate()
+	budget[ENERGY] = budget.get(ENERGY, 0) + scene.cpu_scout_energy_reserve
+	return scene.economy.cost_block_reason(CPU, budget).is_empty()
+
+
+func _dispatch_best_claim(scene: Node3D, targets: Array[MatchRegion],
+		scouts: Array[ScoutExpeditions.Scout], units: Array[MatchBattle.Unit],
+		dormant: Dictionary, now: float) -> bool:
+	var battle: MatchBattle = scene._battle
+	var expeditions: ScoutExpeditions = scene._expeditions
+	var observers: Array[MatchBattle.Unit] = []
+	for scout in scouts:
+		var unit := battle.get_unit(scout.unit_id)
+		if unit != null:
+			observers.append(unit)
+	if observers.is_empty():
+		return false
+	var hazards := PackedVector2Array()
+	for unit in units:
+		if unit.side != CPU and unit.type_id != UnitCatalog.SCOUT:
+			hazards.append(unit.position)
+	for placed in scene._fortifications.values():
+		var defense: MatchBattle.Fortification = placed.defense
+		if defense.side != CPU and defense.active and defense.profile.has("range"):
+			hazards.append(defense.position)
+
+	var choices: Array[Dictionary] = []
+	for region in targets:
+		var center := _site(region)
+		var travel := INF
+		for scout in observers:
+			var speed := maxf(0.01, battle.unit_speed_stat(scout).total)
+			travel = minf(travel, scout.position.distance_to(center) / speed)
+		var id := region.region_id
+		var value := _claim_region_value(scene, region)
+		var danger := _route_danger(hazards, scene.cpu_threat_radius, center, center)
+		choices.append({"id": id, "region": region, "value": value, "recovery": dormant.has(id),
+			"score": value + _claim_route_value(scene, travel, danger)})
+	choices.sort_custom(_prefer_claim)
+
+	# Rank the whole frontier cheaply, then probe a fixed number of regions
+	# with authoritative pathfinding. Backoff lets lower ranks surface.
+	var best: Dictionary = {}
+	for choice in choices.slice(0, CLAIM_ROUTE_BUDGET):
+		var found := false
+		for scout in observers:
+			var plan := expeditions.claim_route(scout, choice.id)
+			if plan == null:
+				continue
+			var distance := 0.0
+			var previous := scout.position
+			var danger := _route_danger(hazards, scene.cpu_threat_radius, plan.site, plan.site)
+			for waypoint in plan.waypoints:
+				distance += previous.distance_to(waypoint)
+				danger = maxf(danger, _route_danger(hazards, scene.cpu_threat_radius, previous, waypoint))
+				previous = waypoint
+			if danger > scene.cpu_scout_max_danger:
+				continue
+			found = true
+			var travel := distance / maxf(0.01, battle.unit_speed_stat(scout).total)
+			var development := _room_for_production(scene, choice.region, plan.site)
+			var candidate := {"id": choice.id, "unit_id": scout.id, "recovery": choice.recovery,
+				"score": choice.value + _claim_route_value(scene, travel, danger)
+					+ float(development) * scene.cpu_scout_production_weight}
+			if best.is_empty() or _prefer_claim(candidate, best):
+				best = candidate
+		if not found:
+			_claim_retry_at[choice.id] = now + scene.cpu_placement_retry
+	if best.is_empty():
+		return false
+	if scene.dispatch_scout(CPU, best.unit_id, best.id):
+		return true
+	_claim_retry_at[best.id] = now + scene.cpu_placement_retry
+	return false
+
+
+func _claim_region_value(scene: Node3D, region: MatchRegion) -> float:
+	var friendly := 0
+	var openings := 0
+	for id in region.neighbor_ids:
+		var neighbor: MatchRegion = scene.get_region(id)
+		if neighbor.region_owner == CPU:
+			friendly += 1
+		elif neighbor.region_owner == NEUTRAL:
+			openings += 1
+	var borders := maxi(1, region.neighbor_ids.size())
+	var connections := float(friendly + openings * 0.5) / borders
+	var occupancy: Dictionary = scene.region_occupancy(region.region_id)
+	var free: int = occupancy.free - scene._building_slot_cost(scene.OUTPOST_KIND)
+	var capacity: float = float(free) / occupancy.capacity
+	# One free slot enables production. Extra slots leave room for its economy and defense.
+	var development := (capacity + float(free > 0)) * 0.5
+	var landmark: LegendaryLandmark = scene._landmarks.get(region.region_id)
+	var bonus := 0.0
+	if landmark != null:
+		# Shorter production intervals are beneficial. Other bonuses add to their stat.
+		var magnitude := -landmark.magnitude if landmark.stat == FactionStats.BARRACKS_INTERVAL \
+			else landmark.magnitude
+		bonus = 0.5 + 0.5 * magnitude / (1.0 + absf(magnitude))
+	return _utility([connections, development, bonus],
+		[scene.cpu_scout_connection_weight, scene.cpu_scout_capacity_weight, scene.cpu_scout_landmark_weight])
+
+
+func _claim_route_value(scene: Node3D, travel: float, danger: float) -> float:
+	return _utility([-travel / (travel + scene.cpu_investment_horizon), -danger],
+		[scene.cpu_scout_travel_weight, scene.cpu_scout_danger_weight])
+
+
+func _room_for_production(scene: Node3D, region: MatchRegion, outpost_site: Vector2) -> bool:
+	var occupancy: Dictionary = scene.region_occupancy(region.region_id)
+	if occupancy.free <= scene._building_slot_cost(scene.OUTPOST_KIND):
+		return false
+	var profile: Dictionary = scene.BUILDINGS[BARRACKS]
+	var extent := MatchBattle.producer_spawn_extent(profile.size, profile.unit_type)
+	var outpost := Rect2(outpost_site - MatchBattle.OUTPOST_CLEARANCE, MatchBattle.OUTPOST_CLEARANCE * 2.0)
+	var battle: MatchBattle = scene._battle
+	for vertex in region.polygon:
+		var point := _site(region).lerp(vertex, 0.65)
+		var exits := Rect2(point - extent, extent * 2.0)
+		if not outpost.intersects(exits) \
+				and _fits_region(region, Rules.footprint(point, profile.size)) \
+				and battle.producer_site_clear(point, profile):
+			return true
+	return false
+
+
+func _route_danger(hazards: PackedVector2Array, radius: float, start: Vector2, end: Vector2) -> float:
+	var nearest := radius
+	for point in hazards:
+		var closest := start if start == end else Geometry2D.get_closest_point_to_segment(point, start, end)
+		nearest = minf(nearest, point.distance_to(closest))
+	return 1.0 - nearest / radius
+
+
+func _prefer_claim(a: Dictionary, b: Dictionary) -> bool:
+	if a.recovery != b.recovery:
+		return a.recovery
+	return a.id < b.id if a.score == b.score else a.score > b.score
+
+
+func _utility(terms: Array, weights: Array) -> float:
+	var score := 0.0
+	for index in terms.size():
+		score += terms[index] * weights[index]
+	return score
 
 
 func _dormant_buildings(scene: Node3D, frontiers: Dictionary[StringName, MatchRegion]) -> Dictionary:
@@ -518,23 +675,6 @@ func _dormant_buildings(scene: Node3D, frontiers: Dictionary[StringName, MatchRe
 			if frontiers.has(region_id):
 				dormant[region_id] = true
 	return dormant
-
-func _want_claim(scene: Node3D, region_id: StringName, now: float) -> bool:
-	var key := "claim/%s" % region_id
-	if now < _retry_at.get(key, 0.0):
-		return false
-	var expeditions: ScoutExpeditions = scene._expeditions
-	var scouts := expeditions.available(CPU)
-	if scouts.is_empty() or expeditions.assignments.has(region_id):
-		return false
-	if not scene.economy.cost_block_reason(CPU, expeditions.claim_cost).is_empty():
-		return true
-	for scout in scouts:
-		if scene.dispatch_scout(CPU, scout.unit_id, region_id):
-			_next_claim = now + CLAIM_COOLDOWN
-			return true
-	_retry_at[key] = now + scene.cpu_placement_retry
-	return false
 
 
 func _approach(threat: Threat, fallback: Vector2) -> Vector2:

@@ -3,6 +3,7 @@ extends RefCounted
 signal expedition_completed(side: MatchRegion.Owner, region_id: StringName, scout_id: int,
 		outpost_site: Vector2)
 signal expedition_failed(side: MatchRegion.Owner, message: String)
+signal assignment_interrupted(side: MatchRegion.Owner, region_id: StringName, elapsed: float)
 
 enum State { AVAILABLE, TRAVELING, CLAIMING, RETURNING, DEAD }
 
@@ -26,6 +27,11 @@ class Scout:
 
 	func assigned() -> bool:
 		return state == State.TRAVELING or state == State.CLAIMING
+
+
+class ClaimRoute:
+	var site: Vector2
+	var waypoints: PackedVector2Array
 
 
 var slots: Dictionary[MatchRegion.Owner, Array] = {}
@@ -111,6 +117,25 @@ func dispatch(side: MatchRegion.Owner, unit_id: int, region_id: StringName) -> S
 		return reason
 	var scout := scout_for(unit_id)
 	var unit := _battle.get_unit(unit_id)
+	var plan := claim_route(unit, region_id)
+	if plan == null:
+		return "No reachable outpost site"
+	if not _economy.try_spend(side, claim_cost):
+		return _economy.cost_block_reason(side, claim_cost)
+
+	scout.departure = unit.position
+	scout.region_id = region_id
+	scout.site = plan.site
+	scout.remaining = duration
+	scout.state = State.TRAVELING
+	assignments[region_id] = scout
+	unit.scout_committed = true
+	_battle._order_move(unit, plan.waypoints[-1], plan.waypoints)
+	return ""
+
+
+## Probe the same site and route as dispatch, without spending Energy or reserving the region.
+func claim_route(unit: MatchBattle.Unit, region_id: StringName) -> ClaimRoute:
 	var routes := _battle._unit_navigation(unit)
 	var region := _regions[region_id]
 	var site := region.interior_point(func(point: Vector2) -> bool:
@@ -121,23 +146,13 @@ func dispatch(side: MatchRegion.Owner, unit_id: int, region_id: StringName) -> S
 				return false
 		if not _battle.outpost_site_clear(point):
 			return false
-		return _approach(region, routes, unit.position, point).is_finite())
+		return not _approach_route(region, routes, unit.position, point).is_empty())
 	if not site.is_finite():
-		return "No reachable outpost site"
-	var destination := _approach(region, routes, unit.position, site)
-	var route := routes.path(unit.position, destination)
-	if not _economy.try_spend(side, claim_cost):
-		return _economy.cost_block_reason(side, claim_cost)
-
-	scout.departure = unit.position
-	scout.region_id = region_id
-	scout.site = site
-	scout.remaining = duration
-	scout.state = State.TRAVELING
-	assignments[region_id] = scout
-	unit.scout_committed = true
-	_battle._order_move(unit, destination, route)
-	return ""
+		return null
+	var plan := ClaimRoute.new()
+	plan.site = site
+	plan.waypoints = _approach_route(region, routes, unit.position, site)
+	return plan
 
 
 func recall(side: MatchRegion.Owner, unit_id: int) -> bool:
@@ -201,9 +216,12 @@ func _step_scout(scout: Scout) -> void:
 	var unit := _battle.get_unit(scout.unit_id)
 	if unit == null:
 		var was_assigned := scout.assigned()
+		var region_id := scout.region_id
 		_release(scout)
 		scout.state = State.DEAD
 		scout.replace_at = _battle.elapsed_time() + replacement_delay
+		if was_assigned:
+			assignment_interrupted.emit(scout.side, region_id, _battle.elapsed_time())
 		expedition_failed.emit(scout.side, "Scout killed · Energy spent" if was_assigned else "Scout killed")
 		return
 	if _battle.is_finished():
@@ -240,6 +258,7 @@ func _step_scout(scout: Scout) -> void:
 
 
 func _cancel(scout: Scout, reason: String) -> void:
+	var region_id := scout.region_id
 	_release(scout)
 	var unit := _battle.get_unit(scout.unit_id)
 	var route := _battle._unit_navigation(unit).path(unit.position, scout.departure)
@@ -248,6 +267,7 @@ func _cancel(scout: Scout, reason: String) -> void:
 	else:
 		scout.state = State.RETURNING
 		_battle._order_move(unit, scout.departure, route)
+	assignment_interrupted.emit(scout.side, region_id, _battle.elapsed_time())
 	expedition_failed.emit(scout.side, reason + " · Energy spent")
 
 
@@ -287,13 +307,15 @@ func _spawn_point(side: MatchRegion.Owner) -> Vector2:
 	return Vector2.INF
 
 
-func _approach(region: MatchRegion, routes: BattleNavigation,
-		start: Vector2, site: Vector2) -> Vector2:
+func _approach_route(region: MatchRegion, routes: BattleNavigation,
+		start: Vector2, site: Vector2) -> PackedVector2Array:
 	var facing := site.direction_to(start)
 	if facing == Vector2.ZERO:
 		facing = Vector2.RIGHT
 	for offset in [0.0, PI / 4, -PI / 4, PI / 2, -PI / 2, PI]:
 		var point := site + facing.rotated(offset) * ARRIVAL_MARGIN * sqrt(2.0)
-		if Geometry2D.is_point_in_polygon(point, region.polygon) and not routes.path(start, point).is_empty():
-			return point
-	return Vector2.INF
+		if Geometry2D.is_point_in_polygon(point, region.polygon):
+			var route := routes.path(start, point)
+			if not route.is_empty():
+				return route
+	return PackedVector2Array()

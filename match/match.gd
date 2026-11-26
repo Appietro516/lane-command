@@ -139,6 +139,15 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 @export_range(0.0, 5.0, 0.1) var cpu_diversity_weight := 0.8
 @export_range(0.0, 5.0, 0.1) var cpu_counter_weight := 2.8
 @export_range(0.0, 1.0, 0.05) var cpu_counter_gap := 0.15
+@export_range(0.25, 30.0, 0.25) var cpu_scout_dispatch_interval := 6.0
+@export_range(0, 100) var cpu_scout_energy_reserve := 10
+@export_range(0.0, 5.0, 0.1) var cpu_scout_travel_weight := 2.0
+@export_range(0.0, 5.0, 0.1) var cpu_scout_connection_weight := 1.0
+@export_range(0.0, 5.0, 0.1) var cpu_scout_capacity_weight := 1.4
+@export_range(0.0, 5.0, 0.1) var cpu_scout_production_weight := 0.5
+@export_range(0.0, 5.0, 0.1) var cpu_scout_landmark_weight := 1.2
+@export_range(0.0, 5.0, 0.1) var cpu_scout_danger_weight := 4.0
+@export_range(0.0, 1.0, 0.05) var cpu_scout_max_danger := 0.8
 @export_group("Scout Expeditions")
 @export_range(1, 500) var claim_energy: int = MatchEconomy.CLAIM_COST[MatchEconomy.ENERGY]
 @export_range(0.1, 120.0, 0.1) var claim_duration := 20.0
@@ -505,6 +514,7 @@ func restart_match() -> void:
 	})
 	_expeditions.expedition_completed.connect(_complete_claim)
 	_expeditions.expedition_failed.connect(_show_expedition_notice)
+	_expeditions.assignment_interrupted.connect(_cpu_strategy.on_assignment_interrupted)
 	_claim_button.text = "Claim\n%s" % MatchEconomy.cost_text(_expeditions.claim_cost)
 	_scout_notice.hide()
 	_refresh_legendary_summary()
