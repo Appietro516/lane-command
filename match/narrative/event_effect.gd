@@ -31,6 +31,8 @@ func preview() -> String:
 			return "Gain %s" % MatchEconomy.cost_text({key: amount})
 		Operation.MODIFIER:
 			var stat_label := String(key).capitalize()
+			if key == FactionStats.UNIT_DPS:
+				stat_label = "Unit DPS"
 			if MatchEconomy.RESOURCES.has(key):
 				stat_label = "%s income/s" % MatchEconomy.RESOURCES[key].label
 			var lifetime := "%s s" % str(duration) if duration > 0.0 else "rest of match"

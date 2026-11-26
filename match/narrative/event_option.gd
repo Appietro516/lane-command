@@ -5,6 +5,8 @@ extends Resource
 @export var label := ""
 @export_multiline var description := ""
 @export var effects: Array[NarrativeEffect] = []
+## CPU utility for effects beyond resource stock and income, in units of starting stock.
+@export var cpu_tactical_value := 0.0
 
 
 func costs() -> Dictionary:

@@ -4,3 +4,4 @@
 
 [node name="ProvenanceMatchFixture" instance=ExtResource("1")]
 map_seed = 22
+narrative_catalog = null

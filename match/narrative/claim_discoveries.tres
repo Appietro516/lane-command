@@ -1,0 +1,230 @@
+[gd_resource type="Resource" script_class="NarrativeCatalog" format=3]
+
+[ext_resource type="Script" path="res://match/narrative/event_catalog.gd" id="catalog"]
+[ext_resource type="Script" path="res://match/narrative/event_definition.gd" id="event"]
+[ext_resource type="Script" path="res://match/narrative/event_option.gd" id="option"]
+[ext_resource type="Script" path="res://match/narrative/event_effect.gd" id="effect"]
+
+[sub_resource type="Resource" id="abandoned_depot_steel_1"]
+script = ExtResource("effect")
+key = &"materials"
+amount = 10
+
+[sub_resource type="Resource" id="abandoned_depot_steel"]
+script = ExtResource("option")
+id = &"steel"
+label = "Lift the steel pallet"
+effects = Array[ExtResource("effect")]([SubResource("abandoned_depot_steel_1")])
+
+[sub_resource type="Resource" id="abandoned_depot_cells_1"]
+script = ExtResource("effect")
+key = &"energy"
+amount = 14
+
+[sub_resource type="Resource" id="abandoned_depot_cells"]
+script = ExtResource("option")
+id = &"cells"
+label = "Lift the battery pallet"
+effects = Array[ExtResource("effect")]([SubResource("abandoned_depot_cells_1")])
+
+[sub_resource type="Resource" id="abandoned_depot"]
+script = ExtResource("event")
+id = &"abandoned_depot"
+trigger = &"claim_completed"
+title = "Abandoned Depot"
+text = "A freight shed still has two sealed pallets. Its buckled hoist can lift only one before the floor gives way."
+weight = 5
+options = Array[ExtResource("option")]([SubResource("abandoned_depot_steel"), SubResource("abandoned_depot_cells")])
+
+[sub_resource type="Resource" id="fertile_soil_plant_1"]
+script = ExtResource("effect")
+operation = 2
+key = &"food"
+modifier_name = "Greenhouse beds"
+magnitude = 0.65
+duration = 20.0
+
+[sub_resource type="Resource" id="fertile_soil_plant"]
+script = ExtResource("option")
+id = &"plant"
+label = "Plant a quick crop"
+effects = Array[ExtResource("effect")]([SubResource("fertile_soil_plant_1")])
+
+[sub_resource type="Resource" id="fertile_soil_harvest_1"]
+script = ExtResource("effect")
+key = &"food"
+amount = 8
+
+[sub_resource type="Resource" id="fertile_soil_harvest"]
+script = ExtResource("option")
+id = &"harvest"
+label = "Harvest the trays now"
+effects = Array[ExtResource("effect")]([SubResource("fertile_soil_harvest_1")])
+
+[sub_resource type="Resource" id="fertile_soil"]
+script = ExtResource("event")
+id = &"fertile_soil"
+trigger = &"claim_completed"
+title = "Rain Under Glass"
+text = "Water has pooled beneath a shattered greenhouse. A tray of hardy seedlings survived under the glass."
+weight = 5
+options = Array[ExtResource("option")]([SubResource("fertile_soil_plant"), SubResource("fertile_soil_harvest")])
+
+[sub_resource type="Resource" id="ancient_relay_beacons_1"]
+script = ExtResource("effect")
+operation = 2
+key = &"unit_speed"
+modifier_name = "Route beacons"
+magnitude = 0.65
+duration = 20.0
+
+[sub_resource type="Resource" id="ancient_relay_beacons"]
+script = ExtResource("option")
+id = &"beacons"
+label = "Broadcast route beacons"
+effects = Array[ExtResource("effect")]([SubResource("ancient_relay_beacons_1")])
+cpu_tactical_value = 0.16
+
+[sub_resource type="Resource" id="ancient_relay_salvage_1"]
+script = ExtResource("effect")
+key = &"materials"
+amount = 9
+
+[sub_resource type="Resource" id="ancient_relay_salvage"]
+script = ExtResource("option")
+id = &"salvage"
+label = "Strip the copper coils"
+effects = Array[ExtResource("effect")]([SubResource("ancient_relay_salvage_1")])
+
+[sub_resource type="Resource" id="ancient_relay"]
+script = ExtResource("event")
+id = &"ancient_relay"
+trigger = &"claim_completed"
+title = "The Singing Relay"
+text = "The outpost antenna catches a pulse from a buried relay. Its route beacons can guide our crews until the old cells run dry."
+weight = 4
+options = Array[ExtResource("option")]([SubResource("ancient_relay_beacons"), SubResource("ancient_relay_salvage")])
+
+[sub_resource type="Resource" id="refugees_hire_1"]
+script = ExtResource("effect")
+operation = 1
+key = &"food"
+amount = 5
+
+[sub_resource type="Resource" id="refugees_hire_2"]
+script = ExtResource("effect")
+key = &"materials"
+amount = 13
+
+[sub_resource type="Resource" id="refugees_hire"]
+script = ExtResource("option")
+id = &"hire"
+label = "Feed the machinists for a shift"
+effects = Array[ExtResource("effect")]([SubResource("refugees_hire_1"), SubResource("refugees_hire_2")])
+
+[sub_resource type="Resource" id="refugees_trade_1"]
+script = ExtResource("effect")
+key = &"food"
+amount = 5
+
+[sub_resource type="Resource" id="refugees_trade"]
+script = ExtResource("option")
+id = &"trade"
+label = "Accept their shared provisions"
+effects = Array[ExtResource("effect")]([SubResource("refugees_trade_1")])
+
+[sub_resource type="Resource" id="refugees"]
+script = ExtResource("event")
+id = &"refugees"
+trigger = &"claim_completed"
+title = "The Roadside Workshop"
+text = "A caravan of displaced machinists has set up beside the outpost. They offer to work a shift for rations, or share a crate from their garden wagon."
+weight = 4
+options = Array[ExtResource("option")]([SubResource("refugees_hire"), SubResource("refugees_trade")])
+
+[sub_resource type="Resource" id="buried_cache_batteries_1"]
+script = ExtResource("effect")
+key = &"energy"
+amount = 7
+
+[sub_resource type="Resource" id="buried_cache_batteries"]
+script = ExtResource("option")
+id = &"batteries"
+label = "Take the batteries"
+effects = Array[ExtResource("effect")]([SubResource("buried_cache_batteries_1")])
+
+[sub_resource type="Resource" id="buried_cache_rations_1"]
+script = ExtResource("effect")
+key = &"food"
+amount = 6
+
+[sub_resource type="Resource" id="buried_cache_rations"]
+script = ExtResource("option")
+id = &"rations"
+label = "Take the ration tins"
+effects = Array[ExtResource("effect")]([SubResource("buried_cache_rations_1")])
+
+[sub_resource type="Resource" id="buried_cache_tools_1"]
+script = ExtResource("effect")
+operation = 1
+key = &"energy"
+amount = 4
+
+[sub_resource type="Resource" id="buried_cache_tools_2"]
+script = ExtResource("effect")
+key = &"materials"
+amount = 12
+
+[sub_resource type="Resource" id="buried_cache_tools"]
+script = ExtResource("option")
+id = &"tools"
+label = "Power the jack for the tool chest"
+effects = Array[ExtResource("effect")]([SubResource("buried_cache_tools_1"), SubResource("buried_cache_tools_2")])
+
+[sub_resource type="Resource" id="buried_cache"]
+script = ExtResource("event")
+id = &"buried_cache"
+trigger = &"claim_completed"
+title = "Below the Floorboards"
+text = "The scout found a stash under a collapsed weigh station. Batteries and ration tins sit within reach. Recovering the tool chest would take a powered jack."
+weight = 5
+options = Array[ExtResource("option")]([SubResource("buried_cache_batteries"), SubResource("buried_cache_rations"), SubResource("buried_cache_tools")])
+
+[sub_resource type="Resource" id="ruined_defenses_drill_1"]
+script = ExtResource("effect")
+operation = 2
+key = &"unit_dps"
+modifier_name = "Gunnery drill"
+magnitude = 0.35
+duration = 18.0
+
+[sub_resource type="Resource" id="ruined_defenses_drill"]
+script = ExtResource("option")
+id = &"drill"
+label = "Run a gunnery drill"
+effects = Array[ExtResource("effect")]([SubResource("ruined_defenses_drill_1")])
+cpu_tactical_value = 0.19
+
+[sub_resource type="Resource" id="ruined_defenses_plates_1"]
+script = ExtResource("effect")
+key = &"materials"
+amount = 11
+
+[sub_resource type="Resource" id="ruined_defenses_plates"]
+script = ExtResource("option")
+id = &"plates"
+label = "Recover the barricade plates"
+effects = Array[ExtResource("effect")]([SubResource("ruined_defenses_plates_1")])
+
+[sub_resource type="Resource" id="ruined_defenses"]
+script = ExtResource("event")
+id = &"ruined_defenses"
+trigger = &"claim_completed"
+title = "The Broken Redoubt"
+text = "A ruined redoubt has firing slits at three heights. Its range markings are still legible, and the barricade plates can be hauled away intact."
+weight = 3
+options = Array[ExtResource("option")]([SubResource("ruined_defenses_drill"), SubResource("ruined_defenses_plates")])
+
+[resource]
+script = ExtResource("catalog")
+events = Array[ExtResource("event")]([SubResource("abandoned_depot"), SubResource("fertile_soil"), SubResource("ancient_relay"), SubResource("refugees"), SubResource("buried_cache"), SubResource("ruined_defenses")])

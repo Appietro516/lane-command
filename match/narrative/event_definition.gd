@@ -37,7 +37,7 @@ func validation_error() -> String:
 	var has_free_option := false
 	for option in options:
 		if option == null or option.id.is_empty() or option.id in ids \
-				or option.label.strip_edges().is_empty():
+				or option.label.strip_edges().is_empty() or not is_finite(option.cpu_tactical_value):
 			return "Invalid or duplicate option"
 		ids.append(option.id)
 		for effect in option.effects:

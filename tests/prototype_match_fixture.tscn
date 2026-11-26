@@ -9,3 +9,4 @@ map_width = 30.0
 map_height = 18.0
 region_count = 6
 legendary_count = 0
+narrative_catalog = null

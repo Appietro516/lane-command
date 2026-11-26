@@ -3,6 +3,7 @@
 [ext_resource type="Script" path="res://match/match.gd" id="3"]
 [ext_resource type="Script" path="res://match/strategy_camera.gd" id="4"]
 [ext_resource type="PackedScene" path="res://match/narrative/event_dialogue.tscn" id="5"]
+[ext_resource type="Resource" path="res://match/narrative/claim_discoveries.tres" id="6"]
 
 [sub_resource type="Environment" id="Environment_map"]
 background_mode = 1
@@ -40,6 +41,7 @@ corner_radius_bottom_right = 8
 
 [node name="Match" type="Node3D"]
 script = ExtResource("3")
+narrative_catalog = ExtResource("6")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_map")

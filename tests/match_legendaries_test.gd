@@ -33,6 +33,7 @@ func _run() -> void:
 func _match(count: int, regions: int, map_seed := 17, probability := 1.0,
 		catalog: Array[LegendaryBuff] = [], neutral_only := true) -> Node:
 	var scene := MATCH_SCENE.instantiate()
+	scene.narrative_catalog = null
 	scene.legendary_count = count
 	scene.region_count = regions
 	scene.map_seed = map_seed

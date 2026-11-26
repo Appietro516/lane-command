@@ -66,6 +66,7 @@ const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const CpuStrategy := preload("res://match/cpu_strategy.gd")
 const ScoutExpeditions := preload("res://match/scout_expeditions.gd")
+const CLAIM_DISCOVERY := &"claim_completed"
 
 signal claim_completed(faction: MatchRegion.Owner, region: StringName, scout_id: int)
 const ROUTE_HEIGHT := 0.12
@@ -280,6 +281,7 @@ func _ready() -> void:
 	$HUD.move_child(%ClaimMarkers, 0)
 	_restart_button.pressed.connect(restart_match)
 	_event_dialogue.choice_pressed.connect(_resolve_narrative_choice)
+	claim_completed.connect(_discover_on_claim)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
 	restart_match()
 
@@ -848,6 +850,14 @@ func _complete_claim(side: MatchRegion.Owner, region_id: StringName, scout_id: i
 	outpost.hp = outpost.max_hp
 	_refresh_claim_control()
 	claim_completed.emit(side, region_id, scout_id)
+
+
+func _discover_on_claim(side: MatchRegion.Owner, region_id: StringName, _scout_id: int) -> void:
+	# The first successful claim by this faction owns this occurrence for the match.
+	# Replacements and reclamations reuse the ID, even if another Scout completes them.
+	var id := StringName("claim/%d/%s" % [side, region_id])
+	if narrative_events.submit(id, CLAIM_DISCOVERY, side, region_id) and side == CPU:
+		narrative_events.resolve_cpu(id)
 
 
 func _lose_region(outpost: MatchBattle.Outpost) -> void:

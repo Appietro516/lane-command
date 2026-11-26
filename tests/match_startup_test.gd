@@ -245,6 +245,7 @@ func _test_expanded_gameplay() -> void:
 	const NEUTRAL := MatchRegion.Owner.NEUTRAL
 	root.size = Vector2i(1280, 800)
 	var scene := MATCH_SCENE.instantiate()
+	scene.narrative_catalog = null
 	root.add_child(scene)
 	scene.set_process(false)
 	var layout: TerritoryLayout = scene._layout

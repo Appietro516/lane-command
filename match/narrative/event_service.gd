@@ -117,21 +117,49 @@ func resolve_player(id: StringName, option_id: StringName) -> bool:
 	return false
 
 
-## A caller may supply a CPU choice or use the independently seeded affordable-option policy.
+## A caller may supply a CPU choice or use the shared scarcity-based policy.
 func resolve_cpu(id: StringName, option_id := &"") -> bool:
 	var decision := _decisions.get(id) as Decision
 	if decision == null or decision.side != MatchRegion.Owner.CPU or decision.status != Status.PENDING:
 		return false
-	var affordable: Array[NarrativeOption] = []
+	var best: Array[NarrativeOption] = []
+	var best_score := -INF
 	for option in decision.definition.options:
-		if not option_id.is_empty() and option.id == option_id:
-			return _resolve(id, option)
-		if _economy.cost_block_reason(decision.side, option.costs()).is_empty():
-			affordable.append(option)
-	if not option_id.is_empty() or affordable.is_empty():
+		if not option_id.is_empty():
+			if option.id == option_id:
+				return _resolve(id, option)
+			continue
+		if not _economy.cost_block_reason(decision.side, option.costs()).is_empty():
+			continue
+		var score := _cpu_score(decision.side, option)
+		if score > best_score:
+			best_score = score
+			best.clear()
+		if score == best_score:
+			best.append(option)
+	if best.is_empty():
 		return false
-	affordable.sort_custom(func(a: NarrativeOption, b: NarrativeOption) -> bool: return a.id < b.id)
-	return _resolve(id, affordable[_rng(id, "cpu choice").randi_range(0, affordable.size() - 1)])
+	best.sort_custom(func(a: NarrativeOption, b: NarrativeOption) -> bool: return a.id < b.id)
+	return _resolve(id, best[_rng(id, "cpu choice").randi_range(0, best.size() - 1)])
+
+
+func _cpu_score(side: MatchRegion.Owner, option: NarrativeOption) -> float:
+	const INCOME_HORIZON := 20.0
+	var score := option.cpu_tactical_value
+	for effect in option.effects:
+		if not MatchEconomy.RESOURCES.has(effect.key):
+			continue
+		var stock: float = MatchEconomy.RESOURCES[effect.key].starting_stock
+		var available := _economy.stockpile(side, effect.key)
+		var net := float(effect.amount)
+		match effect.operation:
+			NarrativeEffect.Operation.SPEND:
+				net = -net
+			NarrativeEffect.Operation.MODIFIER:
+				var duration := minf(effect.duration, INCOME_HORIZON) if effect.duration > 0.0 else INCOME_HORIZON
+				net = 0.75 * effect.magnitude * duration
+		score += net / (stock + available)
+	return score
 
 
 func advance_time(simulation_time: float) -> void:
