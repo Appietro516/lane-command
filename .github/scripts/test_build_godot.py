@@ -1,6 +1,7 @@
 """Exercise build preflight with Godot while stopping before import and export."""
 
 import os
+import runpy
 from pathlib import Path
 import shutil
 import subprocess
@@ -83,6 +84,37 @@ class BuildGodotTest(unittest.TestCase):
                 log = self.run_build(ORDINARY_CONFIG.replace(original, replacement))
                 self.assertIn(diagnostic, log)
                 self.assertNotIn(IMPORT_MARKER, log)
+
+
+class ExportLogClassificationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.check = staticmethod(
+            runpy.run_path(str(ROOT / ".github/scripts/validate-export-log.py"))[
+                "only_shutdown_resource_leak"
+            ]
+        )
+
+    def test_completed_export_with_exact_shutdown_leak_is_nonfatal(self):
+        log = (
+            "[   0% ] savepack | Started Packing\n"
+            "\x1b[92m[ DONE ]\x1b[39m savepack\n"
+            "WARNING: ObjectDB instances leaked at exit (run with --verbose for details).\n"
+            "   at: cleanup (core/object/object.cpp:2663)\n"
+            "ERROR: 1 resources still in use at exit (run with --verbose for details).\n"
+            "   at: clear (core/io/resource.cpp:810)\n"
+        )
+        self.assertTrue(self.check(log))
+        self.assertFalse(self.check(log.replace("[ DONE ]", "[  96% ]")))
+        self.assertFalse(self.check(log.replace("1 resources", "2 resources")))
+        self.assertFalse(self.check(log.replace("ERROR: 1 resources", "SCRIPT ERROR: 1 resources")))
+        self.assertFalse(self.check(log + "ERROR: Another problem.\n"))
+        self.assertFalse(self.check("ERROR: Export failed.\n" + log))
+        self.assertFalse(self.check(log + "WARNING: More problems.\n"))
+
+    def test_real_script_or_export_errors_remain_fatal(self):
+        self.assertFalse(self.check("SCRIPT ERROR: Parse Error: Unexpected token\n"))
+        self.assertFalse(self.check("[ DONE ] savepack\nERROR: Could not save export.\n"))
 
 
 if __name__ == "__main__":
