@@ -1,6 +1,5 @@
 extends SceneTree
 
-const GAME := preload("res://game.tscn")
 const MATCH := preload("res://main.tscn")
 const Fortifications := preload("res://match/fortification_rules.gd")
 const SCOUT_FIXTURE := preload("res://tests/scout_fixture.gd")
@@ -25,7 +24,6 @@ func _run() -> void:
 				_test_partition(shape, Vector2(18, 18), 2, map_seed, 1)
 				_test_partition(shape, Vector2(72, 31), 24, map_seed, 4)
 				_test_partition(shape, Vector2(168, 192), 128, map_seed, 4)
-		_test_setup()
 		await _test_triangle_play()
 	if _failures == 0:
 		print("Map shape checks passed.")
@@ -110,55 +108,6 @@ func _test_partition(shape: MapSettings.Shape, dimensions: Vector2, count: int, 
 		starts.append(position)
 
 
-func _test_setup() -> void:
-	var scene := GAME.instantiate()
-	root.add_child(scene)
-	var original: TerritoryLayout = scene._layout
-	_select_shape(scene, MapSettings.Shape.TRIANGLE)
-	scene._map_width_field.text = "18"
-	scene._region_count_field.text = "4"
-	scene._confirm_setup.pressed.emit()
-	_check(scene._layout == original and scene._match_setup.visible and "2–3" in scene._difficulty_description.text,
-		"Setup explains the shape-specific maximum and preserves the active match.")
-	scene._region_count_field.text = "3"
-	scene._seed_field.text = "9223372036854775808"
-	scene._confirm_setup.pressed.emit()
-	_check(scene._layout == original and "seed" in scene._difficulty_description.text,
-		"Setup rejects seeds beyond signed 64-bit range.")
-	scene._seed_field.text = "-9223372036854775808"
-	scene._confirm_setup.pressed.emit()
-	var triangle: TerritoryLayout = scene._layout
-	_check(triangle != original and triangle.cells.size() == 3
-		and scene.active_map_seed == -9223372036854775807 - 1,
-		"Setup applies valid dimensions, shape, count and an exact signed seed.")
-	scene._open_match_setup(false)
-	scene._confirm_setup.pressed.emit()
-	_check(scene._layout == triangle, "Restart with the same settings preserves the exact layout.")
-	scene._open_match_setup(false)
-	_select_shape(scene, MapSettings.Shape.SQUARE)
-	scene._map_width_field.text = "80"
-	scene._region_count_field.text = "18"
-	scene._opponent_picker.select(3)
-	scene._opponent_picker.item_selected.emit(3)
-	scene._confirm_setup.pressed.emit()
-	_check(scene._layout.bounds.size == Vector2(80, 80) and scene._battle._bases.size() == 5,
-		"Changing shape and opponents rebuilds the map and all five independent factions.")
-	for side in scene._battle._bases:
-		_check(scene._expeditions.available(side).size() == 2, "Each faction receives two Scouts.")
-	scene.free()
-
-	var invalid := MATCH.instantiate()
-	invalid.map_width = 10
-	root.add_child(invalid)
-	_check(invalid._layout == null and invalid._match_setup.visible,
-		"An invalid launch config opens editable setup.")
-	invalid._map_width_field.text = "60"
-	invalid._confirm_setup.pressed.emit()
-	_check(invalid._layout != null and not invalid._match_setup.visible,
-		"Correcting launch settings starts the match.")
-	invalid.free()
-
-
 func _test_triangle_play() -> void:
 	var scene := MATCH.instantiate()
 	scene.map_shape = MapSettings.Shape.TRIANGLE
@@ -239,11 +188,6 @@ func _test_triangle_play() -> void:
 			break
 	_check(claimed, "A Scout can reach and claim a valid neutral territory on the triangle.")
 	scene.free()
-
-
-func _select_shape(scene: Node, shape: MapSettings.Shape) -> void:
-	scene._shape_picker.select(scene._shape_picker.get_item_index(shape))
-	scene._shape_picker.item_selected.emit(scene._shape_picker.selected)
 
 
 func _capture_shapes() -> void:

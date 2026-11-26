@@ -2,10 +2,7 @@ extends RefCounted
 
 
 func setup(scene: Node) -> void:
-	var modal := scene.get_node("%MatchSetup")
-	var picker := modal.get_node("%Difficulty") as OptionButton
-	picker.select(3)
-	modal.get_node("%Confirm").pressed.emit()
-	scene.get_node("%Restart").pressed.emit()
-	picker.select(4)
-	picker.item_selected.emit(4)
+	var setup_screen: MatchSetup = scene.get_node("MatchSetup")
+	var picker := setup_screen._difficulty_pickers[0]
+	picker.select(picker.get_item_index(5))
+	picker.item_selected.emit(picker.selected)

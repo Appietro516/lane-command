@@ -1,6 +1,5 @@
 extends SceneTree
 
-const GameScene := preload("res://game.tscn")
 const MatchScene := preload("res://main.tscn")
 const Profiles := preload("res://match/difficulty_profile.gd")
 const Prototype := preload("res://tests/prototype_match_fixture.gd")
@@ -22,46 +21,29 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	await _test_setup_and_reset()
+	_test_difficulty_and_reset()
 	_test_decisions()
 	_test_route_budget()
 	if _failures == 0:
-		print("CPU difficulty setup, reset, shared rules, strategy and route budgets passed.")
+		print("CPU difficulty profiles, reset, shared rules, strategy and route budgets passed.")
 	quit(int(_failures > 0))
 
 
-func _test_setup_and_reset() -> void:
-	var scene := GameScene.instantiate()
+func _test_difficulty_and_reset() -> void:
+	var scene := MatchScene.instantiate()
 	scene.region_count = 7
 	scene.legendary_count = 0
 	root.add_child(scene)
-	await process_frame
-	var modal: Control = scene.get_node("%MatchSetup")
-	var picker: OptionButton = modal.get_node("%Difficulty")
-	var description: Label = modal.get_node("%Description")
-	var confirm: Button = modal.get_node("%Confirm")
-	var cancel: Button = modal.get_node("%Cancel")
-	var restart: Button = scene.get_node("%Restart")
-	_check(modal.visible and picker.get_selected_id() == 3 and picker.item_count == 5
-		and confirm.text == "Start match" and not cancel.visible and picker.has_focus(),
-		"The playable entry scene opens on Standard and waits for Start match.")
-	scene._process(8.0)
-	_check(scene._battle.elapsed_time() == 0.0, "The preview state stays at the start while setup is open.")
 
 	var initial_event: StringName
 	for level in range(1, 6):
-		if not modal.visible:
-			restart.pressed.emit()
-		var profile := Profiles.get_profile(level)
-		picker.select(picker.get_item_index(level))
-		picker.item_selected.emit(picker.selected)
-		_check(picker.text == Profiles.display_name(level) and description.text == profile.description
-			and not description.text.is_empty(), "Each level has its own visible label and description.")
-		confirm.pressed.emit()
+		scene.cpu_difficulty = level
+		scene.restart_match()
 		scene.set_process(false)
-		_check(not modal.visible and scene.cpu_difficulty == level and scene._cpu_strategy.difficulty == profile
+		var profile := Profiles.get_profile(level)
+		_check(scene._cpu_strategy.difficulty == profile
 			and scene.get_node("%ActiveDifficulty").text == "CPU " + Profiles.display_name(level),
-			"Confirm commits and displays the selected difficulty.")
+			"The CPU uses and displays the selected difficulty.")
 		var expected_period: float = scene.cpu_decision_interval * profile.cadence
 		_check(is_equal_approx(scene._time_until_cpu_decision, expected_period), "Restart resets decision cadence.")
 		_check_starting_rules(scene)
@@ -89,15 +71,7 @@ func _test_setup_and_reset() -> void:
 		var old_economy: MatchEconomy = scene.economy
 		var old_battle: MatchBattle = scene._battle
 		var old_events: NarrativeEvents = scene.narrative_events
-		restart.pressed.emit()
-		_check(modal.visible and cancel.visible and confirm.text == "Restart match"
-			and picker.get_selected_id() == level, "Restart opens on the session's current level.")
-		picker.select(picker.get_item_index(level % 5 + 1))
-		cancel.pressed.emit()
-		_check(scene.cpu_difficulty == level and scene._battle == old_battle and scene.owns_region(CPU, region),
-			"Cancel resumes the existing match.")
-		restart.pressed.emit()
-		confirm.pressed.emit()
+		scene.get_node("%Restart").pressed.emit()
 		_check(scene.cpu_difficulty == level and scene._cpu_strategy != old_strategy
 			and scene.economy != old_economy and scene._battle != old_battle
 			and scene.narrative_events != old_events and scene.narrative_events.instance(event_id).is_empty()

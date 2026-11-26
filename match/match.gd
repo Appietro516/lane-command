@@ -92,6 +92,7 @@ const CpuStrategy := preload("res://match/cpu_strategy.gd")
 const ScoutExpeditions := preload("res://match/scout_expeditions.gd")
 const CLAIM_DISCOVERY := &"claim_completed"
 
+signal return_to_setup_requested
 signal claim_completed(faction: MatchRegion.Owner, region: StringName, scout_id: int)
 const ROUTE_HEIGHT := 0.12
 const ROUTE_HALF_WIDTH := 0.045
@@ -117,7 +118,7 @@ var narrative_events: NarrativeEvents
 @export var narrative_catalog: NarrativeCatalog
 @export_group("Map")
 @export var map_shape := MapSettings.Shape.RECTANGLE
-@export var map_seed: int = 17
+@export var map_seed := MatchSettings.DEFAULT_SEED
 @export var map_width := TerritoryLayout.DEFAULT_SIZE.x
 @export var map_height := TerritoryLayout.DEFAULT_SIZE.y
 @export_range(TerritoryLayout.MIN_REGIONS, TerritoryLayout.MAX_REGIONS)
@@ -138,7 +139,6 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 	LegendaryBuff.new("Ancient Bastion", FactionStats.BUILDING_MAX_HP, 10.0),
 ]
 @export_group("Match Setup")
-@export var show_match_setup_on_start := false
 @export_range(1, TerritoryLayout.MAX_CPU_OPPONENTS) var cpu_opponent_count := 1
 @export_range(1, 5) var cpu_difficulty := DifficultyProfile.DEFAULT_LEVEL
 @export var additional_cpu_difficulties: Array[int] = []
@@ -227,10 +227,9 @@ var _time_until_cpu_decision: float:
 		return _cpu_strategy.time_until_decision
 	set(value):
 		_cpu_strategy.time_until_decision = value
-var _difficulty_pickers: Array[OptionButton] = []
 var _cpu_hp_labels: Dictionary[MatchRegion.Owner, Label] = {}
 var _extra_accents: Dictionary[MatchRegion.Owner, StandardMaterial3D] = {}
-var _process_mode_before_setup: ProcessMode
+var _configured_layout: TerritoryLayout
 var _build_options: Dictionary[StringName, Button] = {}
 var _build_descriptions: Dictionary[StringName, String] = {}
 var _barracks_menu_interval := -1.0
@@ -290,18 +289,20 @@ var _barracks_menu_interval := -1.0
 @onready var _outcome_label: Label = %Outcome
 @onready var _restart_button: Button = %Restart
 @onready var _active_difficulty: Label = %ActiveDifficulty
-@onready var _match_setup: Control = %MatchSetup
-@onready var _shape_picker: OptionButton = _match_setup.get_node("%MapShape")
-@onready var _map_width_field: LineEdit = _match_setup.get_node("%MapWidth")
-@onready var _map_height_field: LineEdit = _match_setup.get_node("%MapHeight")
-@onready var _region_count_field: LineEdit = _match_setup.get_node("%MapRegions")
-@onready var _seed_field: LineEdit = _match_setup.get_node("%MapSeed")
-@onready var _opponent_picker: OptionButton = _match_setup.get_node("%OpponentCount")
-@onready var _difficulty_picker: OptionButton = _match_setup.get_node("%Difficulty")
-@onready var _difficulty_description: Label = _match_setup.get_node("%Description")
-@onready var _confirm_setup: Button = _match_setup.get_node("%Confirm")
-@onready var _cancel_setup: Button = _match_setup.get_node("%Cancel")
 @onready var _event_dialogue := $NarrativeOverlay/EventDialogue
+
+
+func configure_match(settings: MatchSettings, layout: TerritoryLayout) -> void:
+	assert(not is_inside_tree())
+	map_shape = settings.map.shape
+	map_width = settings.map.size.x
+	map_height = settings.map.size.y
+	region_count = settings.map.region_count
+	map_seed = settings.map.seed
+	cpu_opponent_count = settings.cpu_difficulties.size()
+	cpu_difficulty = settings.cpu_difficulties[0]
+	additional_cpu_difficulties.assign(settings.cpu_difficulties.slice(1))
+	_configured_layout = layout
 
 
 func _ready() -> void:
@@ -345,10 +346,9 @@ func _ready() -> void:
 		%ScoutSlots.add_child(button)
 		_scout_buttons.append(button)
 	$HUD.move_child(%ClaimMarkers, 0)
-	_create_setup_controls()
-	_confirm_setup.pressed.connect(_apply_match_setup)
-	_cancel_setup.pressed.connect(_close_match_setup)
-	_restart_button.pressed.connect(_open_match_setup.bind(false))
+	_restart_button.pressed.connect(func() -> void: restart_match())
+	%ReturnToSetup.visible = _configured_layout != null
+	%ReturnToSetup.pressed.connect(return_to_setup_requested.emit)
 	_event_dialogue.choice_pressed.connect(_resolve_narrative_choice)
 	claim_completed.connect(_discover_on_claim)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
@@ -366,69 +366,9 @@ func _ready() -> void:
 	_build_list.minimum_size_changed.connect(_queue_hud_layout)
 	_income_sources.minimum_size_changed.connect(_queue_hud_layout)
 	_placement_panel.minimum_size_changed.connect(_queue_hud_layout)
-	var layout := _create_layout()
-	if not layout.configuration_error.is_empty():
-		_open_match_setup(true)
-		_difficulty_description.text = layout.configuration_error
-		return
+	var layout := _configured_layout if _configured_layout != null else _create_layout()
+	_configured_layout = null
 	restart_match(layout)
-	if show_match_setup_on_start:
-		_open_match_setup(true)
-
-
-func _create_setup_controls() -> void:
-	for shape in MapSettings.SHAPE_NAMES:
-		_shape_picker.add_item(MapSettings.SHAPE_NAMES[shape], shape)
-	_shape_picker.item_selected.connect(_refresh_shape_fields)
-	_difficulty_pickers.append(_difficulty_picker)
-	for count in range(1, TerritoryLayout.MAX_CPU_OPPONENTS + 1):
-		_opponent_picker.add_item(str(count), count)
-		if count == 1:
-			continue
-		var row := HBoxContainer.new()
-		var label := Label.new()
-		label.text = "CPU %d difficulty" % count
-		row.add_child(label)
-		var picker := OptionButton.new()
-		picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		picker.custom_minimum_size.y = 36
-		row.add_child(picker)
-		_match_setup.get_node("%ExtraDifficulties").add_child(row)
-		_difficulty_pickers.append(picker)
-	for i in _difficulty_pickers.size():
-		var picker := _difficulty_pickers[i]
-		for level in range(1, DifficultyProfile.PROFILES.size() + 1):
-			var difficulty := DifficultyProfile.get_profile(level)
-			picker.add_item(DifficultyProfile.display_name(level), level)
-			picker.get_popup().set_item_tooltip(level - 1, difficulty.description)
-		picker.item_selected.connect(_describe_difficulty.bind(i))
-	_opponent_picker.item_selected.connect(_refresh_setup_rows)
-
-
-func _open_match_setup(initial: bool) -> void:
-	if _match_setup.visible:
-		return
-	_cancel_placement()
-	_show_income_sources(&"")
-	_camera.end_drag()
-	_shape_picker.select(maxi(0, _shape_picker.get_item_index(map_shape)))
-	_map_width_field.text = String.num(map_width)
-	_map_height_field.text = String.num(map_height)
-	_region_count_field.text = str(region_count)
-	_seed_field.text = str(map_seed)
-	_refresh_shape_fields(_shape_picker.selected)
-	_opponent_picker.select(maxi(0, _opponent_picker.get_item_index(cpu_opponent_count)))
-	for i in _difficulty_pickers.size():
-		var level := _cpu_level(i)
-		var picker := _difficulty_pickers[i]
-		picker.select(picker.get_item_index(level))
-	_refresh_setup_rows(_opponent_picker.selected)
-	_confirm_setup.text = "Start match" if initial else "Restart match"
-	_cancel_setup.visible = not initial
-	_process_mode_before_setup = process_mode
-	process_mode = Node.PROCESS_MODE_DISABLED
-	_match_setup.show()
-	_difficulty_picker.grab_focus()
 
 
 func _cpu_level(index: int) -> int:
@@ -436,83 +376,6 @@ func _cpu_level(index: int) -> int:
 		additional_cpu_difficulties[index - 1] if index <= additional_cpu_difficulties.size()
 		else DifficultyProfile.DEFAULT_LEVEL)
 	return clampi(level, 1, DifficultyProfile.PROFILES.size())
-
-
-func _refresh_setup_rows(_index: int) -> void:
-	var count := _opponent_picker.get_selected_id()
-	_match_setup.get_node("%FirstCPULabel").text = "CPU 1 difficulty" if count > 1 else "CPU difficulty"
-	for i in range(1, _difficulty_pickers.size()):
-		_difficulty_pickers[i].get_parent().visible = i < count
-	_describe_difficulty(_difficulty_picker.selected, 0)
-
-
-func _describe_difficulty(index: int, cpu_index: int) -> void:
-	var picker := _difficulty_pickers[cpu_index]
-	var difficulty := DifficultyProfile.get_profile(picker.get_item_id(index))
-	_difficulty_description.text = difficulty.description
-	picker.tooltip_text = difficulty.description
-
-
-func _refresh_shape_fields(_index: int) -> void:
-	var rectangle := _shape_picker.get_selected_id() == MapSettings.Shape.RECTANGLE
-	_match_setup.get_node("%WidthLabel").text = "Width" if rectangle else "Side"
-	_match_setup.get_node("%HeightLabel").visible = rectangle
-	_map_height_field.visible = rectangle
-
-
-func _apply_match_setup() -> void:
-	var count := _opponent_picker.get_selected_id()
-	var shape := _shape_picker.get_selected_id() as MapSettings.Shape
-	var width_text := _map_width_field.text.strip_edges()
-	var height_text := _map_height_field.text.strip_edges()
-	var regions_text := _region_count_field.text.strip_edges()
-	var seed_text := _seed_field.text.strip_edges()
-	if not width_text.is_valid_float() or (shape == MapSettings.Shape.RECTANGLE and not height_text.is_valid_float()):
-		_difficulty_description.text = "Enter numeric map dimensions in world units."
-		return
-	if not regions_text.is_valid_int():
-		_difficulty_description.text = "Enter a whole number of regions."
-		return
-	if not _valid_seed_text(seed_text):
-		_difficulty_description.text = "Enter a whole-number seed from −9223372036854775808 to 9223372036854775807."
-		return
-	var dimensions := Vector2(width_text.to_float(), height_text.to_float())
-	var settings := MapSettings.new(shape, dimensions, regions_text.to_int(), seed_text.to_int())
-	var layout := _layout
-	if not _matches_layout(settings, count):
-		layout = _create_layout_for(count, settings)
-		if not layout.configuration_error.is_empty():
-			_difficulty_description.text = layout.configuration_error
-			return
-	map_shape = settings.shape
-	map_width = settings.size.x
-	if shape == MapSettings.Shape.RECTANGLE:
-		map_height = settings.size.y
-	region_count = settings.region_count
-	map_seed = settings.seed
-	cpu_opponent_count = count
-	cpu_difficulty = _difficulty_picker.get_selected_id()
-	additional_cpu_difficulties.clear()
-	for i in range(1, count):
-		additional_cpu_difficulties.append(_difficulty_pickers[i].get_selected_id())
-	restart_match(layout if layout != _layout else null)
-
-
-static func _valid_seed_text(value: String) -> bool:
-	if not value.is_valid_int():
-		return false
-	var negative := value.begins_with("-")
-	var digits := value.trim_prefix("-").trim_prefix("+").lstrip("0")
-	if digits.is_empty():
-		return true
-	var limit := "9223372036854775808" if negative else "9223372036854775807"
-	return digits.length() < limit.length() or (digits.length() == limit.length() and digits <= limit)
-
-
-func _close_match_setup() -> void:
-	if _match_setup.visible:
-		_match_setup.hide()
-		process_mode = _process_mode_before_setup
 
 
 func _map_settings() -> MapSettings:
@@ -701,10 +564,12 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	if layout == null and not _matches_layout(_map_settings(), cpu_opponent_count):
 		layout = _create_layout()
 	if layout != null and not layout.configuration_error.is_empty():
-		_open_match_setup(_layout == null)
-		_difficulty_description.text = layout.configuration_error
+		push_error(layout.configuration_error)
+		if _battle == null:
+			process_mode = Node.PROCESS_MODE_DISABLED
+			_outcome_label.text = layout.configuration_error
+			_outcome_label.show()
 		return
-	_close_match_setup()
 	if narrative_events != null:
 		narrative_events.close()
 		narrative_events.queue_changed.disconnect(_sync_narrative_dialogue)
@@ -809,7 +674,7 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 
 
 func _process(delta: float) -> void:
-	if _match_setup.visible or _battle.is_finished() or _has_narrative_decision():
+	if _battle.is_finished() or _has_narrative_decision():
 		return
 
 	# Apply income and production up to the next planner's decision.

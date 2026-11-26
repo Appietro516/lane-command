@@ -1,6 +1,5 @@
 extends SceneTree
 
-const GAME := preload("res://game.tscn")
 const MATCH := preload("res://main.tscn")
 const PROFILES := preload("res://match/difficulty_profile.gd")
 const SCOUT_FIXTURE := preload("res://tests/scout_fixture.gd")
@@ -32,24 +31,18 @@ func _run() -> void:
 
 
 func _test_setup_and_starts() -> void:
-	var scene := GAME.instantiate()
-	scene.map_seed = 71
-	scene.region_count = 7
-	root.add_child(scene)
-	_check(scene._battle._bases.size() == 2, "The normal entry starts with one CPU.")
-	var picker: OptionButton = scene._opponent_picker
 	for count in [2, 4, 1]:
-		picker.select(picker.get_item_index(count))
-		picker.item_selected.emit(picker.selected)
-		for i in count:
-			scene._difficulty_pickers[i].select(i + 1)
-		scene._confirm_setup.pressed.emit()
+		var scene := MATCH.instantiate()
+		scene.map_seed = 71
+		scene.region_count = 7
+		scene.cpu_opponent_count = count
+		scene.cpu_difficulty = 2
+		scene.additional_cpu_difficulties.assign([3, 4, 5])
+		root.add_child(scene)
 		scene.set_process(false)
-		_check(not scene._match_setup.visible and scene._battle._bases.size() == count + 1
-			and scene._cpu_strategies.size() == count and scene._cpu_hp_labels.size() == count
-			and scene._buildings.size() == count + 1, "Setup switches to the selected faction count.")
-		_check(scene.active_map_seed == 71 and scene._layout.cells.size() == 7,
-			"Changing opponent count preserves the configured map and seed.")
+		_check(scene._battle._bases.size() == count + 1 and scene._cpu_strategies.size() == count
+			and scene._cpu_hp_labels.size() == count and scene._buildings.size() == count + 1,
+			"The match starts with the configured faction count.")
 		var bases := {}
 		var accents := {}
 		var territory_count := 0
@@ -77,20 +70,12 @@ func _test_setup_and_starts() -> void:
 		_check(bases.size() == count + 1 and accents.size() == count + 1
 			and territory_count == count + 1 and territory_count < scene._layout.cells.size(),
 			"Starts and colors are distinct with neutral expansion space.")
-		scene._open_match_setup(false)
+		scene.free()
 
 	var packed := TerritoryLayout.new(17, 5, TerritoryLayout.DEFAULT_SIZE, 1, 1, 4)
 	var over_limit := TerritoryLayout.new(17, 24, TerritoryLayout.DEFAULT_SIZE, 1, 1, 5)
 	_check(not packed.configuration_error.is_empty() and packed.starting_territories.is_empty()
 		and not over_limit.configuration_error.is_empty(), "Invalid counts are rejected before assigning starts.")
-	scene._region_count_field.text = "5"
-	picker.select(picker.get_item_index(4))
-	picker.item_selected.emit(picker.selected)
-	var previous: MatchBattle = scene._battle
-	scene._confirm_setup.pressed.emit()
-	_check(scene._match_setup.visible and scene._battle == previous and scene.cpu_opponent_count == 1,
-		"An invalid setup leaves the active match intact.")
-	scene.free()
 
 
 func _test_claims_and_elimination() -> void:

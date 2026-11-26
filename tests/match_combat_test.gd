@@ -711,8 +711,6 @@ func _test_match_end_and_restart() -> void:
 		"Ending a match stops simulation and purchases while leaving Restart available.")
 
 	_click(restart)
-	await process_frame
-	_click(scene.get_node("%MatchSetup").get_node("%Confirm"))
 	_check(scene.is_processing(), "Restart re-enables automatic processing after Victory.")
 	scene.set_process(false)
 	_check_full_reset(scene, initial_owners)
@@ -735,8 +733,6 @@ func _test_match_end_and_restart() -> void:
 		"Both first barracks deploy on schedule with fresh unit IDs and match time.")
 
 	_click(restart)
-	await process_frame
-	_click(scene.get_node("%MatchSetup").get_node("%Confirm"))
 	scene.set_process(false)
 	_check_full_reset(scene, initial_owners)
 	scene._process(8.0)
@@ -753,8 +749,6 @@ func _test_match_end_and_restart() -> void:
 		and player_hp.text == "Player base · 0 HP" and cpu_hp.text == "CPU base · 80 HP",
 		"The idle replay ends in Defeat when the CPU destroys the player base.")
 	_click(restart)
-	await process_frame
-	_click(scene.get_node("%MatchSetup").get_node("%Confirm"))
 	_check(scene.is_processing(), "Restart re-enables automatic processing after Defeat.")
 	_check_full_reset(scene, initial_owners)
 	scene.free()
