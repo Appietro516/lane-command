@@ -3,6 +3,7 @@ extends RefCounted
 
 signal unit_produced(unit: Unit)
 signal unit_removed(unit_id: int)
+signal attack_resolved(attack: AttackResolved)
 signal step_finished
 signal base_destroyed(side: MatchRegion.Owner)
 signal outpost_destroyed(outpost: Outpost)
@@ -83,6 +84,29 @@ class Unit:
 		attack_interval = definition.cooldown
 		side = owner
 		position = spawn_position
+
+
+## Position snapshots are in map coordinates at the attack step, before movement.
+## BASE_TARGET is shared by both bases. target_side identifies the one hit.
+class AttackResolved:
+	var attacker_id: int
+	var attacker_type: StringName
+	var attacker_side: MatchRegion.Owner
+	var target_id: int
+	var target_side: MatchRegion.Owner
+	var attack_position: Vector2
+	var impact_position: Vector2
+	var simulation_time: float
+
+	func _init(unit: Unit, victim_side: MatchRegion.Owner, impact: Vector2, time: float) -> void:
+		attacker_id = unit.id
+		attacker_type = unit.type_id
+		attacker_side = unit.side
+		target_id = unit.target
+		target_side = victim_side
+		attack_position = unit.position
+		impact_position = impact
+		simulation_time = time
 
 
 class BuildingHealth:
@@ -526,6 +550,8 @@ func _step_combat() -> void:
 	var attacks: Array[Unit] = []
 	for unit in units:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
+		if unit.hp <= 0.0:
+			continue
 		if unit.type_id == UnitCatalog.SCOUT:
 			if unit.order == Order.MOVE:
 				_route_to(unit, unit.ordered_destination)
@@ -536,25 +562,13 @@ func _step_combat() -> void:
 			attacks.append(unit)
 
 	_fire_fortifications(units, cells)
+	# Attacks committed while alive still resolve if the attacker falls this step.
+	# Resolve against the same positions used to authorize range and facing.
+	var report_attacks := attack_resolved.has_connections()
+	for unit in attacks:
+		_resolve_attack(unit, report_attacks)
 	for unit in units:
 		_move(unit)
-
-	# A unit killed this step still resolves the attack it planned.
-	for unit in attacks:
-		var damage := stats.value(unit.side, FactionStats.UNIT_DPS, _base_dps(unit)) * unit.attack_interval
-		if unit.target < NO_TARGET:
-			damage *= unit.definition.structure_damage_multiplier
-		if unit.target == BASE_TARGET:
-			var side := _opponent(unit.side)
-			_base_health[side].hp = maxf(0.0, base_hp(side) - damage)
-		elif unit.target < BASE_TARGET:
-			var building: BuildingHealth = _outposts.get(unit.target)
-			if building == null:
-				building = _fortifications[unit.target]
-			building.hp = maxf(0.0, building.hp - damage)
-		else:
-			_units[unit.target].hp -= damage
-		unit.cooldown = unit.attack_interval
 
 	for unit in units:
 		if unit.hp <= 0:
@@ -600,6 +614,44 @@ func _step_combat() -> void:
 	if base_hp(CPU) == 0:
 		stats.remove_source(base_source_id(CPU))
 		base_destroyed.emit(CPU)
+
+
+func _resolve_attack(unit: Unit, report_attack: bool) -> void:
+	var damage := stats.value(unit.side, FactionStats.UNIT_DPS, _base_dps(unit)) * unit.attack_interval
+	if damage <= 0.0:
+		unit.cooldown = unit.attack_interval
+		return
+
+	var target_side := _opponent(unit.side)
+	var impact: Vector2
+	if unit.target > NO_TARGET:
+		var target := _units[unit.target]
+		if target.hp <= 0.0:
+			return
+		target.hp -= damage
+		impact = target.position
+	else:
+		var building: BuildingHealth
+		if unit.target == BASE_TARGET:
+			building = _base_health[target_side]
+			impact = _bases[target_side]
+		else:
+			var outpost := get_outpost(unit.target)
+			if outpost != null:
+				building = outpost
+				impact = outpost.position
+			else:
+				var structure := get_fortification(unit.target)
+				building = structure
+				impact = structure.position
+		if building.hp <= 0.0:
+			return
+		damage *= unit.definition.structure_damage_multiplier
+		building.hp = maxf(0.0, building.hp - damage)
+
+	unit.cooldown = unit.attack_interval
+	if report_attack:
+		attack_resolved.emit(AttackResolved.new(unit, target_side, impact, _elapsed_time))
 
 
 func _nearby_enemies(units: Array[Unit], cells: Dictionary[Vector3i, Array], position: Vector2,
@@ -745,7 +797,7 @@ func _plan_local_engagement(unit: Unit, units: Array[Unit]) -> bool:
 	var best_route := PackedVector2Array()
 	var routes := _unit_navigation(unit)
 	for opponent in units:
-		if opponent.side == unit.side:
+		if opponent.side == unit.side or opponent.hp <= 0.0:
 			continue
 		var distance := unit.position.distance_squared_to(opponent.position)
 		if distance > detection_squared:

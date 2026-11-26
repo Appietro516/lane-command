@@ -55,6 +55,7 @@ const BUILDINGS := {
 }
 const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
 const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
+const UnitAttackEffects := preload("res://match/unit_attack_effects.gd")
 const UnitCatalog := preload("res://match/unit_catalog.gd")
 const DEFAULT_REGION_BUILDING_CAPACITY := 5
 const BASE_KIND := &"base"
@@ -211,6 +212,7 @@ var _build_options: Dictionary[StringName, Button] = {}
 	PLAYER: $Buildings/Player,
 	CPU: $Buildings/CPU,
 }
+@onready var _unit_attack_effects := UnitAttackEffects.new()
 @onready var _shot_effects := Node3D.new()
 @onready var _regions: Node3D = $Regions
 @onready var _units: Node3D = $Units
@@ -300,6 +302,8 @@ func _ready() -> void:
 	add_child(_range_ring)
 	add_child(_splash_ring)
 	add_child(_shot_effects)
+	add_child(_unit_attack_effects)
+	_unit_attack_effects.global_transform = _regions.global_transform
 	_tracer_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_tracer_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tracer_material.albedo_color = Color("#fff0b8")
@@ -514,10 +518,12 @@ func restart_match() -> void:
 		_battle.step_finished.disconnect(_advance_narrative_time)
 		_battle.unit_produced.disconnect(_spawn_unit)
 		_battle.unit_removed.disconnect(_remove_unit)
+		_battle.attack_resolved.disconnect(_unit_attack_effects.record)
 		_battle.base_destroyed.disconnect(_hide_base)
 		_battle.outpost_destroyed.disconnect(_lose_region)
 		_battle.fortification_destroyed.disconnect(_remove_fortification)
 		_battle.fortification_fired.disconnect(_show_fortification_shot)
+	_unit_attack_effects.clear()
 	for shot in _shot_effects.get_children():
 		_shot_effects.remove_child(shot)
 		shot.queue_free()
@@ -569,6 +575,7 @@ func restart_match() -> void:
 	_battle.target_priority = unit_target_priority
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
+	_battle.attack_resolved.connect(_unit_attack_effects.record)
 	_battle.base_destroyed.connect(_hide_base)
 	_battle.outpost_destroyed.connect(_lose_region)
 	_battle.fortification_destroyed.connect(_remove_fortification)
@@ -617,6 +624,7 @@ func _process(delta: float) -> void:
 		_select_fortification(MatchBattle.NO_TARGET)
 		set_process(false)
 
+	_unit_attack_effects.render_at(_battle.elapsed_time())
 	for unit in _battle.active_units():
 		_update_unit_view(unit, _unit_views[unit.id])
 	_refresh_hud()
