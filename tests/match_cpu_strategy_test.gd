@@ -34,12 +34,16 @@ func _run() -> void:
 
 	scene = Fixture.instantiate()
 	root.add_child(scene)
+	var production_limit: int = scene.cpu_production_limit
+	# Exercise both guns with slots available after the opening production purchases.
+	scene.cpu_production_limit = 2
 	_test_defense(scene)
 	var defense := _snapshot(scene)
 	scene.restart_match()
 	_test_defense(scene)
 	_check(defense == _snapshot(scene), "The same pressure produces the same walls after restart.")
 	_test_defense_replacement(scene)
+	scene.cpu_production_limit = production_limit
 	_test_blocked_placement(scene)
 	_test_scarcity(scene)
 	scene.free()
@@ -125,15 +129,19 @@ func _test_losses(scene: Node) -> void:
 		_check(false, "The recovery fixture requires a working mine and owned outpost.")
 		return
 	var mine: MatchBattle.Fortification = mines[0]
-	var outpost: MatchBattle.Outpost = scene._outposts_by_region.values()[0]
-	var region: MatchRegion = scene.get_region(outpost.region_id)
-	var point := region.interior_point(func(site: Vector2) -> bool:
-		return scene._placement_block_reason(CPU, &"generator", scene._world_position(site)).is_empty())
-	scene.economy.advance(60.0)
-	if not scene.try_place_building(CPU, &"generator", scene._world_position(point)):
-		_check(false, "The recovery fixture needs a producer at the outpost.")
+	var outpost: MatchBattle.Outpost
+	var installed: MatchBattle.Fortification
+	for placed in scene._fortifications.values():
+		if placed.defense == mine or placed.defense.kind not in PRODUCERS:
+			continue
+		outpost = scene._outposts_by_region.get(placed.regions[0])
+		if outpost != null:
+			installed = placed.defense
+			break
+	if installed == null:
+		_check(false, "The recovery fixture needs a resource producer at an outpost.")
 		return
-	var installed: MatchBattle.Fortification = _structures(scene, &"generator").back()
+	scene.economy.advance(60.0)
 	scene.cpu_expansion_limit = 0
 	mine.hp = 0.0
 	outpost.hp = 0.0
@@ -314,6 +322,10 @@ func _seed_force(scene: Node, side: MatchRegion.Owner, type: StringName, count: 
 
 
 func _check_ownership(scene: Node) -> void:
+	for region_id in scene._regions_by_id:
+		if scene.owns_region(CPU, region_id):
+			var occupancy: Dictionary = scene.region_occupancy(region_id)
+			_check(occupancy.used <= occupancy.capacity, "CPU construction stays within each region's capacity.")
 	for placed in scene._fortifications.values():
 		if placed.defense.side == CPU:
 			for region_id in placed.regions:

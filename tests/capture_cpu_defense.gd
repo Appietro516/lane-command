@@ -7,6 +7,7 @@ const PLAYER := MatchRegion.Owner.PLAYER
 
 
 func setup(scene: Node) -> void:
+	scene.cpu_production_limit = 2
 	# The fast-forwarded steps share a rendered frame. Skip accumulating expired effects.
 	scene._battle.fortification_fired.disconnect(scene._show_fortification_shot)
 	var shots := exercise(scene, 9)

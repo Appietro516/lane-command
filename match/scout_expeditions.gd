@@ -36,6 +36,7 @@ var duration: float
 var replacement_delay: float
 var _battle: MatchBattle
 var _economy: MatchEconomy
+var _outpost_slot_block_reason: Callable
 var _regions: Dictionary[StringName, MatchRegion]
 
 
@@ -44,6 +45,7 @@ func _init(battle: MatchBattle, economy: MatchEconomy,
 	_battle = battle
 	_economy = economy
 	_regions = regions
+	_outpost_slot_block_reason = settings.outpost_slot_block_reason
 	claim_cost = {MatchEconomy.ENERGY: settings.claim_energy}
 	replacement_cost = {MatchEconomy.ENERGY: settings.replacement_energy}
 	duration = settings.duration
@@ -85,7 +87,7 @@ func eligibility(side: MatchRegion.Owner, region_id: StringName) -> String:
 		return "Match ended"
 	for neighbor in region.neighbor_ids:
 		if _regions[neighbor].region_owner == side:
-			return ""
+			return _outpost_slot_block_reason.call(region_id)
 	return "Not adjacent"
 
 
@@ -112,6 +114,11 @@ func dispatch(side: MatchRegion.Owner, unit_id: int, region_id: StringName) -> S
 	var routes := _battle._unit_navigation(unit)
 	var region := _regions[region_id]
 	var site := region.interior_point(func(point: Vector2) -> bool:
+		# Claims reserve space in the target region for the whole outpost.
+		var footprint := Rect2(point - MatchBattle.OUTPOST_FOOTPRINT, MatchBattle.OUTPOST_FOOTPRINT * 2.0)
+		for corner in BattleNavigation.corners_of(footprint):
+			if not Geometry2D.is_point_in_polygon(corner, region.polygon):
+				return false
 		if not _battle.outpost_site_clear(point):
 			return false
 		return _approach(region, routes, unit.position, point).is_finite())

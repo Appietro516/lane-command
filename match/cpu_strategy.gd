@@ -317,13 +317,17 @@ func _producer_for(catalog: Dictionary, resource: StringName) -> StringName:
 func _want_build(scene: Node3D, kind: StringName, regions: Array[MatchRegion], now: float) -> bool:
 	if kind.is_empty() or now < _retry_at.get(kind, 0.0):
 		return false
+	var available: Array[MatchRegion] = regions.filter(func(region: MatchRegion) -> bool:
+		return scene.building_slot_block_reason(kind, [region.region_id]).is_empty())
+	if available.is_empty():
+		return false
 	if not scene._purchase_block_reason(CPU, kind).is_empty():
 		return not is_inf(_save_time(scene.economy, scene._minimum_build_cost(kind)))
 	var definition: Dictionary = scene.BUILDINGS[kind]
 	var size: Vector2 = Rules.PROFILES.get(kind, definition).size
-	var start := 0 if regions.size() <= REGION_SITE_BUDGET else _rng.randi_range(0, regions.size() - 1)
-	for i in range(mini(regions.size(), REGION_SITE_BUDGET)):
-		var region := regions[(start + i) % regions.size()]
+	var start := 0 if available.size() <= REGION_SITE_BUDGET else _rng.randi_range(0, available.size() - 1)
+	for i in range(mini(available.size(), REGION_SITE_BUDGET)):
+		var region := available[(start + i) % available.size()]
 		var center := _site(region)
 		for attempt in range(SAMPLES_PER_REGION):
 			var edge := _rng.randi_range(0, region.polygon.size() - 1)

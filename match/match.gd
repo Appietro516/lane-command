@@ -56,6 +56,15 @@ const BUILDINGS := {
 const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
 const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
 const UnitCatalog := preload("res://match/unit_catalog.gd")
+const DEFAULT_REGION_BUILDING_CAPACITY := 5
+const BASE_KIND := &"base"
+const OUTPOST_KIND := &"outpost"
+const LEGENDARY_KIND := &"legendary"
+const FIXED_STRUCTURE_LABELS := {
+	BASE_KIND: "Base",
+	OUTPOST_KIND: "Outpost",
+	LEGENDARY_KIND: "Legendary",
+}
 const STARTING_BASE := preload("res://match/starting_base.tscn")
 const OUTPOST := preload("res://match/outpost.tscn")
 const LANDMARK := preload("res://match/legendary_landmark.tscn")
@@ -87,6 +96,7 @@ const OUTCOME_LABELS := {
 class PlacedFortification:
 	var defense: MatchBattle.Fortification
 	var view: Node3D
+	# Ownership requirements for activation. Occupancy tracks the physical footprint separately.
 	var regions: Array[StringName]
 
 
@@ -101,6 +111,7 @@ var narrative_events: NarrativeEvents
 @export var map_height := TerritoryLayout.DEFAULT_SIZE.y
 @export_range(TerritoryLayout.MIN_REGIONS, TerritoryLayout.MAX_REGIONS)
 var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
+@export_range(1, 128) var region_building_capacity := DEFAULT_REGION_BUILDING_CAPACITY
 @export_range(1, TerritoryLayout.MAX_REGIONS) var player_start_count := 1
 @export_range(1, TerritoryLayout.MAX_REGIONS) var cpu_start_count := 1
 @export_group("Legendary Landmarks", "legendary_")
@@ -152,6 +163,8 @@ var _initial_owners: Dictionary[StringName, MatchRegion.Owner] = {}
 var _landmarks: Dictionary[StringName, LegendaryLandmark] = {}
 var _outposts_by_region: Dictionary[StringName, MatchBattle.Outpost] = {}
 var _outpost_views: Dictionary[StringName, Node3D] = {}
+# Each region indexes its physically present structures by stable source ID.
+var _region_structures: Dictionary[StringName, Dictionary] = {}
 var _fortifications: Dictionary[int, PlacedFortification] = {}
 var _fortification_ids: Dictionary[Node3D, int] = {}
 var _selected_fortification := MatchBattle.NO_TARGET
@@ -214,6 +227,7 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _unit_claim_progress: ProgressBar = %UnitClaimProgress
 @onready var _region_claim_progress: ProgressBar = %RegionClaimProgress
 @onready var _region_label: Label = %SelectedRegion
+@onready var _region_slots: Label = %RegionSlots
 @onready var _landmark_panel: PanelContainer = %LandmarkInspection
 @onready var _landmark_details: Label = %LandmarkDetails
 @onready var _legendary_summary: Label = %LegendarySummary
@@ -233,7 +247,7 @@ func _ready() -> void:
 	_stat_sources.toggled.connect(func(open: bool) -> void:
 		_stat_source_scroll.visible = open
 		_stat_source_scroll.scroll_vertical = 0)
-	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label, _legendary_summary,
+	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label, _region_slots, _legendary_summary,
 			_landmark_details]:
 		label.mouse_filter = Control.MOUSE_FILTER_PASS
 	for building_id in BUILDINGS:
@@ -310,8 +324,10 @@ func _generate_map() -> void:
 		_regions.add_child(region)
 		_regions_by_id[cell.id] = region
 		_initial_owners[cell.id] = region.region_owner
+		_region_structures[cell.id] = {}
 		if cell.id == TerritoryLayout.PLAYER_START or cell.id == TerritoryLayout.CPU_START:
 			_add_starting_base(region)
+	_register_starting_bases()
 	_generate_landmarks()
 
 
@@ -348,6 +364,8 @@ func _generate_landmarks() -> void:
 		eligible[next] = eligible[i]
 		if legendary_spawn_probability < 1.0 and rng.randf() >= legendary_spawn_probability:
 			continue
+		if not building_slot_block_reason(LEGENDARY_KIND, [region.region_id]).is_empty():
+			continue
 		var outpost_site := region.interior_point() if region.region_owner == MatchRegion.Owner.NEUTRAL \
 			else Vector2.INF
 		var point := region.interior_point(_landmark_site_clear.bind(region, outpost_site, occupied))
@@ -359,6 +377,7 @@ func _generate_landmarks() -> void:
 		landmark.global_position = _world_position(point)
 		_landmarks[region.region_id] = landmark
 		occupied.append(landmark.footprint)
+		_register_region_structure(landmark.source_id, LEGENDARY_KIND, [region.region_id])
 
 
 func _landmark_site_clear(point: Vector2, region: MatchRegion, outpost_site: Vector2,
@@ -396,6 +415,17 @@ func _add_starting_base(region: MatchRegion) -> void:
 	_bases[side] = base
 
 
+func _register_starting_bases() -> void:
+	for side in _bases:
+		var center := _map_position(_bases[side].global_position)
+		var footprint := Fortifications.footprint(center, MatchBattle.BASE_FOOTPRINT * 2.0)
+		_register_region_structure(_base_structure_id(side), BASE_KIND, _footprint_regions(footprint))
+
+
+func _base_structure_id(side: MatchRegion.Owner) -> StringName:
+	return StringName("base/%d" % side)
+
+
 func restart_match() -> void:
 	if narrative_events != null:
 		narrative_events.close()
@@ -416,6 +446,11 @@ func restart_match() -> void:
 	for view in _outpost_views.values():
 		view.get_parent().remove_child(view)
 		view.queue_free()
+	for structures in _region_structures.values():
+		structures.clear()
+	_register_starting_bases()
+	for landmark in _landmarks.values():
+		_register_region_structure(landmark.source_id, LEGENDARY_KIND, [landmark.region_id])
 	_outpost_views.clear()
 	_outposts_by_region.clear()
 	_show_income_sources(&"")
@@ -463,6 +498,7 @@ func restart_match() -> void:
 	_battle.step_finished.connect(_advance_narrative_time)
 	_expeditions = ScoutExpeditions.new(_battle, economy, _regions_by_id, {
 		"claim_energy": claim_energy,
+		"outpost_slot_block_reason": _outpost_slot_block_reason,
 		"duration": claim_duration,
 		"replacement_energy": scout_replacement_energy,
 		"replacement_delay": scout_replacement_delay,
@@ -512,21 +548,23 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 	if not BUILDINGS.has(building_id) or building_id == Fortifications.WALL:
 		return false
 
+	if not world_position.is_finite():
+		return false
 	var ground := _map_plane().project(world_position)
 	var position := _map_position(ground)
+	var definition: Dictionary = BUILDINGS[building_id]
+	var profile: Dictionary = Fortifications.PROFILES.get(building_id, definition)
+	var polygon := Fortifications.footprint(position, profile.size)
+	var covered := _footprint_regions(polygon)
+	if not _building_site_block_reason(side, building_id, position, polygon, covered).is_empty():
+		return false
 	if Fortifications.PROFILES.has(building_id):
-		var polygon := Fortifications.footprint(position, Fortifications.PROFILES[building_id].size)
-		var regions := _owned_footprint_regions(side, polygon)
-		if not _gun_block_reason(side, building_id, polygon, regions).is_empty() \
-				or not economy.try_spend(side, _minimum_build_cost(building_id)):
+		if not economy.try_spend(side, profile.cost):
 			return false
-		_add_fortification(side, building_id, position, 0.0, regions)
+		_add_fortification(side, building_id, position, 0.0, covered)
 		_refresh_hud()
 		return true
 
-	if not _placement_block_reason(side, building_id, ground).is_empty():
-		return false
-	var definition: Dictionary = BUILDINGS[building_id]
 	var region_id := region_at_world_position(ground)
 	var structure: MatchBattle.Fortification
 	var purchased := economy.try_build(side, definition.cost) if building_id == &"barracks" \
@@ -537,7 +575,7 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 		structure = _battle.add_producer(building_id, definition, side, position)
 	else:
 		structure = _battle.add_structure(building_id, definition, side, position)
-	_add_structure_view(structure, [region_id])
+	_add_structure_view(structure, [region_id], covered)
 	var income: Dictionary = definition.get("income", {})
 	for resource_id in income:
 		faction_stats.set_modifier(structure.source_id, side, resource_id,
@@ -549,27 +587,27 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 
 func _placement_block_reason(side: MatchRegion.Owner, building_id: StringName,
 		world_position: Vector3) -> String:
-	if not owns_region(side, region_at_world_position(world_position)):
+	if not world_position.is_finite():
 		return "Choose a spot in your territory"
 	var position := _map_position(world_position)
-	if Fortifications.PROFILES.has(building_id):
-		var polygon := Fortifications.footprint(position, Fortifications.PROFILES[building_id].size)
-		return _gun_block_reason(side, building_id, polygon, _owned_footprint_regions(side, polygon))
-	var definition: Dictionary = BUILDINGS[building_id]
-	if definition.has("income"):
-		if not _battle.fortification_site_clear(Fortifications.footprint(position, definition.size)):
-			return "Keep structures and spawn exits clear"
-		return _purchase_block_reason(side, building_id)
-	if not _battle.producer_site_clear(position, definition):
-		return "Keep structures and spawn exits clear"
-	return _purchase_block_reason(side, building_id)
+	var definition: Dictionary = Fortifications.PROFILES.get(building_id, BUILDINGS[building_id])
+	var polygon := Fortifications.footprint(position, definition.size)
+	return _building_site_block_reason(side, building_id, position, polygon, _footprint_regions(polygon))
 
 
-func _gun_block_reason(side: MatchRegion.Owner, building_id: StringName,
-		polygon: PackedVector2Array, regions: Array[StringName]) -> String:
-	if regions.is_empty():
+func _building_site_block_reason(side: MatchRegion.Owner, building_id: StringName, position: Vector2,
+		polygon: PackedVector2Array, covered: Array[StringName]) -> String:
+	if not position.is_finite() or not _buildings.has(side) or not owns_region(side, _layout.region_at(position)):
+		return "Choose a spot in your territory"
+	if Fortifications.PROFILES.has(building_id) and not _owns_footprint(side, polygon, covered):
 		return "Keep the footprint in your territory"
-	if not _battle.fortification_site_clear(polygon):
+	var slot_reason := building_slot_block_reason(building_id, covered)
+	if not slot_reason.is_empty():
+		return slot_reason
+	var definition: Dictionary = BUILDINGS[building_id]
+	var clear := _battle.producer_site_clear(position, definition) if definition.has("unit_type") \
+		else _battle.fortification_site_clear(polygon)
+	if not clear:
 		return "Keep structures and spawn exits clear"
 	return _purchase_block_reason(side, building_id)
 
@@ -588,21 +626,91 @@ func _minimum_build_cost(building_id: StringName) -> Dictionary:
 	return Fortifications.PROFILES.get(building_id, BUILDINGS[building_id]).cost
 
 
-func _owned_footprint_regions(side: MatchRegion.Owner,
-		polygon: PackedVector2Array) -> Array[StringName]:
+func _footprint_regions(polygon: PackedVector2Array) -> Array[StringName]:
 	var covered: Array[StringName] = []
-	if not _buildings.has(side):
-		return covered
-	for point in polygon:
-		if not _layout.bounds.has_point(point):
-			return []
 	for region_id in _regions_by_id:
-		var region := get_region(region_id)
-		if not Geometry2D.intersect_polygons(polygon, region.polygon).is_empty():
-			if region.region_owner != side:
-				return []
+		if not Geometry2D.intersect_polygons(polygon, get_region(region_id).polygon).is_empty():
 			covered.append(region_id)
 	return covered
+
+
+func _owns_footprint(side: MatchRegion.Owner, polygon: PackedVector2Array,
+		covered: Array[StringName]) -> bool:
+	if not _buildings.has(side) or covered.is_empty():
+		return false
+	for point in polygon:
+		if not _layout.bounds.has_point(point):
+			return false
+	for region_id in covered:
+		if not owns_region(side, region_id):
+			return false
+	return true
+
+
+static func _building_slot_cost(kind: StringName) -> int:
+	return 0 if kind == Fortifications.WALL else 1
+
+
+func _register_region_structure(id: StringName, kind: StringName, covered: Array[StringName],
+		fort: MatchBattle.Fortification = null) -> void:
+	var entry := {"kind": kind, "fort": fort}
+	for region_id in covered:
+		_region_structures[region_id][id] = entry
+
+
+func _unregister_region_structure(id: StringName) -> void:
+	for structures in _region_structures.values():
+		structures.erase(id)
+
+
+func region_occupancy(region_id: StringName) -> Dictionary:
+	var used := 0
+	var by_kind := {}
+	var inactive := {}
+	for entry in _region_structures.get(region_id, {}).values():
+		var kind: StringName = entry.kind
+		used += _building_slot_cost(kind)
+		by_kind[kind] = by_kind.get(kind, 0) + 1
+		var fort := entry.fort as MatchBattle.Fortification
+		if (fort != null and not fort.active) or (kind == LEGENDARY_KIND
+				and owns_region(MatchRegion.Owner.NEUTRAL, region_id)):
+			inactive[kind] = inactive.get(kind, 0) + 1
+	var capacity := maxi(1, region_building_capacity)
+	return {"used": used, "capacity": capacity, "free": maxi(0, capacity - used),
+		"by_kind": by_kind, "inactive": inactive}
+
+
+func building_slot_block_reason(kind: StringName, covered: Array,
+		claim_region: StringName = &"") -> String:
+	var cost := _building_slot_cost(kind)
+	if cost == 0:
+		return ""
+	for region_id: StringName in covered:
+		var occupancy := region_occupancy(region_id)
+		var reserve := int(owns_region(MatchRegion.Owner.NEUTRAL, region_id) and region_id != claim_region)
+		if occupancy.free < cost + reserve:
+			if reserve > 0 and occupancy.free >= cost:
+				return "%s needs a slot for its outpost" % str(region_id).capitalize()
+			return "%s is full (%d/%d slots)" % [
+				str(region_id).capitalize(), occupancy.used, occupancy.capacity]
+	return ""
+
+
+func _outpost_slot_block_reason(region_id: StringName) -> String:
+	return building_slot_block_reason(OUTPOST_KIND, [region_id], region_id)
+
+
+func _has_building_capacity(side: MatchRegion.Owner, kind: StringName) -> bool:
+	for region_id in _regions_by_id:
+		if owns_region(side, region_id) and building_slot_block_reason(kind, [region_id]).is_empty():
+			return true
+	return false
+
+
+func _catalog_block_reason(side: MatchRegion.Owner, kind: StringName) -> String:
+	if _building_slot_cost(kind) > 0 and not _has_building_capacity(side, kind):
+		return "All owned regions are full"
+	return _purchase_block_reason(side, kind)
 
 
 func _wall_plan(side: MatchRegion.Owner, start: Vector2, end: Vector2) -> Dictionary:
@@ -627,12 +735,15 @@ func _wall_plan(side: MatchRegion.Owner, start: Vector2, end: Vector2) -> Dictio
 		var center := start + step * (i + 0.5)
 		var polygon := Fortifications.footprint(center, Fortifications.PROFILES[Fortifications.WALL].size,
 			plan.angle)
-		var regions := _owned_footprint_regions(side, polygon)
-		if regions.is_empty():
+		var regions := _footprint_regions(polygon)
+		if not _owns_footprint(side, polygon, regions):
 			plan.reason = "Keep the entire wall in your territory"
 			return plan
 		if not _battle.fortification_site_clear(polygon):
 			plan.reason = "Keep structures and spawn exits clear"
+			return plan
+		plan.reason = building_slot_block_reason(Fortifications.WALL, regions)
+		if not plan.reason.is_empty():
 			return plan
 		plan.segments.append({"center": center, "regions": regions})
 	plan.reason = economy.cost_block_reason(side, plan.cost)
@@ -651,10 +762,12 @@ func try_place_wall(side: MatchRegion.Owner, world_start: Vector3, world_end: Ve
 
 func _add_fortification(side: MatchRegion.Owner, kind: StringName, center: Vector2, angle: float,
 		regions: Array[StringName]) -> void:
-	_add_structure_view(_battle.add_fortification(kind, side, center, angle), regions)
+	_add_structure_view(_battle.add_fortification(kind, side, center, angle), regions, regions)
 
 
-func _add_structure_view(defense: MatchBattle.Fortification, regions: Array[StringName]) -> void:
+func _add_structure_view(defense: MatchBattle.Fortification, regions: Array[StringName],
+		covered: Array[StringName]) -> void:
+	_register_region_structure(defense.source_id, defense.kind, covered, defense)
 	var view := BUILDINGS[defense.kind].scene.instantiate() as Node3D
 	_buildings[defense.side].add_child(view)
 	view.global_position = _world_position(defense.position)
@@ -678,6 +791,7 @@ func _remove_fortification(defense: MatchBattle.Fortification) -> void:
 		return
 	if defense.kind == &"barracks":
 		economy.remove_barracks(defense.side)
+	_unregister_region_structure(defense.source_id)
 	_fortifications.erase(defense.id)
 	_fortification_ids.erase(placed.view)
 	placed.view.get_parent().remove_child(placed.view)
@@ -727,7 +841,7 @@ func _toggle_build_menu() -> void:
 
 
 func _begin_placement(building_id: StringName) -> void:
-	if not _purchase_block_reason(PLAYER, building_id).is_empty():
+	if not _catalog_block_reason(PLAYER, building_id).is_empty():
 		return
 	_cancel_placement()
 	_placement_id = building_id
@@ -763,7 +877,7 @@ func _update_placement_preview(pointer: Vector2) -> void:
 		_update_wall_preview(pointer)
 		return
 	var definition: Dictionary = Fortifications.PROFILES.get(_placement_id, BUILDINGS[_placement_id])
-	var reason := _purchase_block_reason(PLAYER, _placement_id)
+	var reason := _catalog_block_reason(PLAYER, _placement_id)
 	_preview.hide()
 	if pointer != Vector2.INF:
 		var point: Variant = _ground_point(pointer)
@@ -840,6 +954,8 @@ func _dispatch_selected_scout() -> void:
 func _complete_claim(side: MatchRegion.Owner, region_id: StringName, scout_id: int,
 		point: Vector2) -> void:
 	var outpost := _battle.add_outpost(region_id, side, point, maxi(1, outpost_hp))
+	var footprint := Fortifications.footprint(point, MatchBattle.OUTPOST_FOOTPRINT * 2.0)
+	_register_region_structure(outpost.source_id, OUTPOST_KIND, _footprint_regions(footprint))
 	_outposts_by_region[region_id] = outpost
 	var view := OUTPOST.instantiate() as Node3D
 	view.get_node("Beacon").material_override = FACTION_ACCENTS[side]
@@ -867,6 +983,7 @@ func _lose_region(outpost: MatchBattle.Outpost) -> void:
 	view.queue_free()
 	_outpost_views.erase(region_id)
 	_outposts_by_region.erase(region_id)
+	_unregister_region_structure(outpost.source_id)
 	_set_region_owner(region_id, MatchRegion.Owner.NEUTRAL)
 
 
@@ -1417,6 +1534,7 @@ func _remove_unit(unit_id: int) -> void:
 
 
 func _hide_base(side: MatchRegion.Owner) -> void:
+	_unregister_region_structure(_base_structure_id(side))
 	_bases[side].hide()
 	narrative_events.close()
 
@@ -1573,7 +1691,7 @@ func _refresh_hud() -> void:
 	_refresh_resource_readouts()
 	_barracks_label.text = "Barracks %d" % economy.barracks_count(PLAYER)
 	for building_id in _build_options:
-		var reason := _purchase_block_reason(PLAYER, building_id)
+		var reason := _catalog_block_reason(PLAYER, building_id)
 		_build_options[building_id].disabled = not reason.is_empty()
 		_build_options[building_id].tooltip_text = reason
 		var definition: Dictionary = BUILDINGS[building_id]
@@ -1608,23 +1726,25 @@ func _refresh_claim_control() -> void:
 	_update_claim_progress(_region_claim_progress, expedition)
 	if expedition != null:
 		reason = _expedition_text(expedition)
-	var tooltip := ""
-	if _regions_by_id.has(_selected_region_id):
-		var region := get_region(_selected_region_id)
-		var title := str(_selected_region_id).capitalize()
-		if region.region_owner == MatchRegion.Owner.NEUTRAL:
+	var displayed_region := _selected_region_id if _regions_by_id.has(_selected_region_id) \
+		else TerritoryLayout.PLAYER_START
+	var occupancy := region_occupancy(displayed_region)
+	var slots := "Slots %d/%d · %d free" % [occupancy.used, occupancy.capacity, occupancy.free]
+	_region_slots.text = slots if displayed_region == _selected_region_id else "Base " + slots.to_lower()
+	_region_slots.tooltip_text = _slot_breakdown(occupancy)
+	_region_label.tooltip_text = ""
+	if displayed_region == _selected_region_id:
+		var title := str(displayed_region).capitalize()
+		if owns_region(MatchRegion.Owner.NEUTRAL, displayed_region):
 			title += " · Neutral"
-		var outpost := _outposts_by_region.get(_selected_region_id) as MatchBattle.Outpost
+		var outpost := _outposts_by_region.get(displayed_region) as MatchBattle.Outpost
 		if outpost != null:
 			var health := outpost.health_stat()
-			reason += "\nOutpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(health.total)]
-			tooltip = _breakdown_text("Maximum HP", health)
-		_region_label.text = "%s\n%s" % [
-			title, reason,
-		]
+			reason = "Outpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(health.total)]
+			_region_label.tooltip_text = _breakdown_text("Maximum HP", health)
+		_region_label.text = "%s\n%s" % [title, reason]
 	else:
 		_region_label.text = reason
-	_region_label.tooltip_text = tooltip
 	var landmark := _landmarks.get(_selected_region_id) as LegendaryLandmark
 	_landmark_panel.visible = landmark != null
 	if landmark != null:
@@ -1642,6 +1762,30 @@ func _refresh_claim_control() -> void:
 		_landmark_details.tooltip_text = _breakdown_text("Landmark contribution", contribution,
 			"/s" if is_income else "", is_income)
 
+
+
+func _slot_breakdown(occupancy: Dictionary) -> String:
+	var lines := PackedStringArray()
+	if occupancy.free == 0:
+		lines.append("Region full")
+	for kind: StringName in occupancy.by_kind:
+		if _building_slot_cost(kind) == 0:
+			continue
+		var definition: Dictionary = Fortifications.PROFILES.get(kind, BUILDINGS.get(kind, {}))
+		var label: String = FIXED_STRUCTURE_LABELS.get(kind, definition.get("label", str(kind)))
+		var count: int = occupancy.by_kind[kind]
+		lines.append(_slot_breakdown_line(label, count, occupancy.inactive.get(kind, 0)))
+	var wall_count: int = occupancy.by_kind.get(Fortifications.WALL, 0)
+	lines.append(_slot_breakdown_line("Wall segments (0 slots)", wall_count,
+		occupancy.inactive.get(Fortifications.WALL, 0)))
+	return "\n".join(lines)
+
+
+func _slot_breakdown_line(label: String, count: int, inactive: int) -> String:
+	var line := "%s × %d" % [label, count]
+	if inactive > 0:
+		line += " (%d inactive)" % inactive
+	return line
 
 
 func _use_scout_slot(index: int) -> void:

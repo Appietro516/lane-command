@@ -268,9 +268,10 @@ anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
 offset_left = -600.0
-offset_top = -98.0
+offset_top = -108.0
 offset_right = 600.0
 offset_bottom = -14.0
+grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
@@ -311,12 +312,18 @@ layout_mode = 2
 [node name="RegionReadouts" type="VBoxContainer" parent="HUD/EconomyPanel/ReadoutsAndControls"]
 layout_mode = 2
 size_flags_vertical = 4
+theme_override_constants/separation = 0
 
 [node name="SelectedRegion" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(152, 0)
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
+
+[node name="RegionSlots" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
 
 [node name="RegionClaimProgress" type="ProgressBar" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
 unique_name_in_owner = true
@@ -339,9 +346,9 @@ anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
 offset_left = -600.0
-offset_top = -106.0
+offset_top = -116.0
 offset_right = -250.0
-offset_bottom = -106.0
+offset_bottom = -116.0
 grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
@@ -376,7 +383,7 @@ anchor_bottom = 1.0
 offset_left = -154.0
 offset_top = -154.0
 offset_right = 206.0
-offset_bottom = -106.0
+offset_bottom = -116.0
 grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
@@ -391,7 +398,7 @@ horizontal_scroll_mode = 0
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 6
+theme_override_constants/separation = 4
 
 [node name="PlacementPanel" type="PanelContainer" parent="HUD"]
 unique_name_in_owner = true
@@ -403,7 +410,7 @@ anchor_bottom = 1.0
 offset_left = -235.0
 offset_top = -160.0
 offset_right = 235.0
-offset_bottom = -106.0
+offset_bottom = -116.0
 grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
@@ -431,9 +438,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -325.0
-offset_top = -106.0
+offset_top = -116.0
 offset_right = -40.0
-offset_bottom = -106.0
+offset_bottom = -116.0
 grow_vertical = 0
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
