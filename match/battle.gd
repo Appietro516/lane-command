@@ -164,6 +164,7 @@ class Fortification extends BuildingHealth:
 class ProductionTimer extends Fortification:
 	var elapsed := 0.0
 	var unit_type: StringName
+	var default_stance := Stance.SEEK_NEAREST
 
 	func interval(economy: MatchEconomy) -> float:
 		return economy.production_interval(side) if kind == &"barracks" else profile.interval
@@ -296,6 +297,16 @@ func get_fortification(id: int) -> Fortification:
 	return _fortifications.get(id)
 
 
+## Configure an owned producer, including one paused by loss of territory.
+func set_producer_stance(side: MatchRegion.Owner, id: int, stance: Stance) -> bool:
+	var timer := get_fortification(id) as ProductionTimer
+	if is_finished() or not is_side_active(side) or timer == null or timer.side != side \
+			or timer.hp <= 0.0 or not Stance.values().has(stance):
+		return false
+	timer.default_stance = stance
+	return true
+
+
 func set_fortification_active(fort: Fortification, active: bool) -> void:
 	if fort.active == active or not _fortifications.has(fort.id):
 		return
@@ -383,14 +394,15 @@ func outpost_site_clear(position: Vector2) -> bool:
 ## Deploy a catalog unit for either faction. Pass an economy for paid production.
 ## Invalid spawns leave Food and unit IDs untouched.
 func spawn_unit(side: MatchRegion.Owner, position: Vector2,
-		type_id := UnitCatalog.INFANTRY, economy: MatchEconomy = null) -> Unit:
-	if type_id == UnitCatalog.SCOUT:
+		type_id := UnitCatalog.INFANTRY, economy: MatchEconomy = null,
+		stance := Stance.SEEK_NEAREST) -> Unit:
+	if type_id == UnitCatalog.SCOUT or not Stance.values().has(stance):
 		return null
-	return _spawn_unit(side, position, type_id, economy)
+	return _spawn_unit(side, position, type_id, economy, stance)
 
 
 func _spawn_unit(side: MatchRegion.Owner, position: Vector2, type_id: StringName,
-		economy: MatchEconomy = null) -> Unit:
+		economy: MatchEconomy = null, stance := Stance.SEEK_NEAREST) -> Unit:
 	var definition: Dictionary = UnitCatalog.DEFINITIONS.get(type_id, {})
 	if is_finished() or not is_side_active(side) or definition.is_empty():
 		return null
@@ -401,6 +413,7 @@ func _spawn_unit(side: MatchRegion.Owner, position: Vector2, type_id: StringName
 	if economy != null and not economy.try_spend(side, {MatchEconomy.FOOD: definition.food}):
 		return null
 	var unit := Unit.new(_next_unit_id, side, position, type_id)
+	unit.stance = stance
 	unit.hp = _unit_max_hp(unit)
 	unit.heading = position.direction_to(_bases[nearest_hostile_base(side, position)])
 	if type_id != UnitCatalog.SCOUT:
@@ -631,7 +644,7 @@ func _advance_production(delta: float, economy: MatchEconomy) -> void:
 			var hostile := nearest_hostile_base(timer.side, timer.position)
 			var direction := timer.position.direction_to(_bases[hostile])
 			var position := _spawn_position(timer, direction)
-			if spawn_unit(timer.side, position, timer.unit_type, economy) == null:
+			if spawn_unit(timer.side, position, timer.unit_type, economy, timer.default_stance) == null:
 				timer.elapsed = interval
 				break
 

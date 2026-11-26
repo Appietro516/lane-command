@@ -11,6 +11,7 @@ const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const FOOD := MatchEconomy.FOOD
 const STEP := MatchBattle.STEP
+const Stance := MatchBattle.Stance
 
 var _failures := 0
 
@@ -29,7 +30,7 @@ func _run() -> void:
 	_test_lifecycle(scene)
 	scene.free()
 	if _failures == 0:
-		print("Military construction, automatic deployments, starvation, upgrades, territory, destruction and restart passed.")
+		print("Military construction, deployment stances, starvation, upgrades, territory, destruction and restart passed.")
 	quit(int(_failures > 0))
 
 
@@ -42,6 +43,12 @@ func _test_concurrent_production(scene: Node) -> void:
 		and _stock(economy, CPU) == before, "An unaffordable CPU factory spends nothing.")
 
 	economy.advance(120.0)
+	var defaults := {
+		PLAYER: {&"barracks": Stance.IDLE, &"training_range": Stance.SEEK_STRONGEST,
+			&"heavy_factory": Stance.SEEK_NEAREST},
+		CPU: {&"barracks": Stance.SEEK_STRONGEST, &"training_range": Stance.SEEK_NEAREST,
+			&"heavy_factory": Stance.IDLE},
+	}
 	var deployments := _record_deployments(battle)
 	for side: MatchRegion.Owner in [PLAYER, CPU]:
 		var direction := -1.0 if side == PLAYER else 1.0
@@ -66,6 +73,14 @@ func _test_concurrent_production(scene: Node) -> void:
 	var duplicate := _place(scene, PLAYER, &"training_range", Vector2(-12.8, 5.55))
 	if duplicate == null:
 		return
+	for timer in battle._timers:
+		_check(timer.default_stance == Stance.SEEK_NEAREST, "Every producer starts in Seek Nearest.")
+		if timer != duplicate:
+			_check(battle.set_producer_stance(timer.side, timer.id, defaults[timer.side][timer.kind]),
+				"Both sides configure each producer type through the same API.")
+	_check(not battle.set_producer_stance(CPU, duplicate.id, Stance.IDLE)
+		and not battle.set_producer_stance(PLAYER, duplicate.id, -1 as Stance)
+		and duplicate.default_stance == Stance.SEEK_NEAREST, "Foreign and invalid settings are rejected.")
 	_check(scene.try_upgrade(PLAYER) and scene.try_upgrade(CPU), "Both factions can fund the Barracks upgrade.")
 	var barracks_option: Button = scene._build_options[&"barracks"]
 	var heavy_option: Button = scene._build_options[&"heavy_factory"]
@@ -81,6 +96,27 @@ func _test_concurrent_production(scene: Node) -> void:
 	battle.advance(1.0, economy)
 	_check(_types(deployments, PLAYER).back() == Catalog.RANGED
 		and _types(deployments, CPU).back() == Catalog.RANGED, "Ranges deploy at their unchanged 4.5s cadence.")
+	var original_range_unit: MatchBattle.Unit
+	var original_range_id: int
+	for entry in deployments:
+		if entry.side == PLAYER and entry.type == Catalog.RANGED:
+			original_range_id = entry.producer_id
+			original_range_unit = battle.get_unit(entry.id)
+			break
+	var picker := scene.get_node("%ProducerStancePicker") as OptionButton
+	if _check(original_range_unit != null, "The first Range deployed a unit."):
+		scene._select_fortification(original_range_id)
+		_check(picker.is_visible_in_tree() and picker.get_selected_id() == Stance.SEEK_STRONGEST
+			and scene.get_node("%UnitIntent").text.contains("Next unit  Ranged")
+			and scene.get_node("%UnitIntent").text.contains("Production"),
+			"The player inspector shows the next unit, countdown and configured behavior.")
+		for index in picker.item_count:
+			_check(not picker.get_popup().get_item_tooltip(index).is_empty(),
+				"Each behavior has a tooltip in the inspector.")
+		_choose_stance(picker, Stance.IDLE)
+		_check(original_range_unit.stance == Stance.SEEK_STRONGEST
+			and duplicate.default_stance == Stance.SEEK_NEAREST,
+			"Editing one Range preserves the first unit's snapshot and the other Range's default.")
 	battle.advance(1.0, economy)
 	_check(_types(deployments, PLAYER) == [Catalog.INFANTRY, Catalog.RANGED, Catalog.INFANTRY, Catalog.RANGED]
 		and _types(deployments, CPU) == [Catalog.INFANTRY, Catalog.RANGED, Catalog.INFANTRY],
@@ -99,6 +135,55 @@ func _test_concurrent_production(scene: Node) -> void:
 			"All types repeat with a single Food charge per deployment.")
 	_check(_types(deployments, PLAYER).count(Catalog.RANGED) == 4
 		and _types(deployments, CPU).count(Catalog.RANGED) == 2, "Each Range completes its own repeated cycles.")
+
+	var idle_infantry := 0
+	var updated_range_deployments := 0
+	for entry in deployments:
+		var expected: Stance = defaults[entry.side][entry.kind]
+		if entry.producer_id == duplicate.id:
+			expected = Stance.SEEK_NEAREST
+		elif original_range_unit != null and entry.producer_id == original_range_id \
+				and entry.id != original_range_unit.id:
+			expected = Stance.IDLE
+			updated_range_deployments += 1
+		_check(entry.stance == expected, "Each spawn signal sees the stance snapshot from its own producer.")
+		if expected == Stance.IDLE:
+			var reserve := battle.get_unit(entry.id)
+			_check(reserve != null and reserve.order == MatchBattle.Order.AUTONOMOUS
+				and reserve.position == entry.spawn_position and reserve.target == MatchBattle.NO_TARGET,
+				"Idle deployments stay at their exit without orders or attacks.")
+			if entry.type == Catalog.INFANTRY:
+				idle_infantry += 1
+	_check(idle_infantry == 4 and updated_range_deployments == 1,
+		"An Idle producer accumulates a reserve and a changed Range applies its new default.")
+	if original_range_unit != null:
+		scene._select_fortification(MatchBattle.NO_TARGET)
+		scene._select_unit(original_range_unit.id)
+		var unit_picker := scene.get_node("%StancePicker") as OptionButton
+		_choose_stance(unit_picker, Stance.SEEK_NEAREST)
+		var range_timer := battle.get_fortification(original_range_id) as MatchBattle.ProductionTimer
+		_check(unit_picker.is_visible_in_tree() and original_range_unit.stance == Stance.SEEK_NEAREST
+			and original_range_unit.order == MatchBattle.Order.AUTONOMOUS and range_timer.default_stance == Stance.IDLE,
+			"Unit inspection can override an inherited stance independently.")
+		scene._select_unit(MatchBattle.NO_TARGET)
+
+	for entry in deployments:
+		if entry.side != CPU or entry.type != Catalog.HEAVY:
+			continue
+		scene._select_fortification(entry.producer_id)
+		_check(not picker.is_visible_in_tree()
+			and scene.get_node("%ProducerStanceLabel").text.contains("Idle"),
+			"CPU producers expose a read-only default in the player inspector.")
+		var id: int = entry.id
+		_check(not battle.issue_move(id, Vector2.ZERO) and not battle.order_hold(PLAYER, id)
+			and not battle.set_unit_stance(PLAYER, id, Stance.SEEK_NEAREST),
+			"Player commands cannot override an enemy deployment.")
+		var cpu_unit := battle.get_unit(id)
+		if cpu_unit != null:
+			_check(battle.order_move(CPU, id, Vector2.ZERO) and cpu_unit.order == MatchBattle.Order.MOVE
+				and battle.order_hold(CPU, id) and cpu_unit.order == MatchBattle.Order.HOLD
+				and cpu_unit.stance == Stance.IDLE, "The CPU can override Idle with shared Move and Hold commands.")
+		break
 
 	var view: Node3D = scene._fortifications[duplicate.id].view
 	var marking := view.get_node("Marking") as Node3D
@@ -120,16 +205,20 @@ func _test_lifecycle(scene: Node) -> void:
 	var factory := _place(scene, PLAYER, &"heavy_factory", point)
 	if factory == null:
 		return
+	_check(battle.set_producer_stance(PLAYER, factory.id, Stance.IDLE), "Configure the frontier factory.")
 	var deployments := _record_deployments(battle)
 	var outpost: MatchBattle.Outpost = scene._outposts_by_region[frontier]
 	battle.advance(2.0, economy)
 	outpost.hp = 0.0
 	battle.advance(8.0, economy)
-	_check(not factory.active and is_equal_approx(factory.elapsed, 2.0) and deployments.is_empty(),
-		"Losing the outpost preserves partial progress without producing.")
+	_check(not factory.active and is_equal_approx(factory.elapsed, 2.0) and deployments.is_empty()
+		and factory.default_stance == Stance.IDLE,
+		"Losing the outpost preserves the setting and partial progress without producing.")
 	scene._select_fortification(factory.id)
 	_check(scene.get_node("%UnitIntent").text.contains("Inactive")
 		and scene.get_node("%UnitIntent").text.contains("Capacity  0 units/s"), "Paused production shows zero capacity.")
+	_check(battle.set_producer_stance(PLAYER, factory.id, Stance.SEEK_STRONGEST),
+		"The owning faction can configure its inactive producer.")
 	_check(ScoutFixture.claim(scene, PLAYER, frontier) and factory.active, "Reclaiming reactivates the original factory.")
 	_check(economy.try_spend(PLAYER, {FOOD: int(economy.stockpile(PLAYER, FOOD))}), "Drain Food.")
 	battle.advance(16.0, economy)
@@ -143,6 +232,8 @@ func _test_lifecycle(scene: Node) -> void:
 	battle.advance(0.0, economy)
 	_check(_types(deployments, PLAYER) == [Catalog.HEAVY] and economy.stockpile(PLAYER, FOOD) == 0.0
 		and is_zero_approx(factory.elapsed), "Exact Food releases the held cycle once.")
+	_check(deployments.size() == 1 and deployments[0].stance == Stance.SEEK_STRONGEST,
+		"The resumed factory deploys with its configured stance.")
 
 	var obstacle := factory.obstacle
 	factory.hp = 0.0
@@ -150,6 +241,7 @@ func _test_lifecycle(scene: Node) -> void:
 	battle.advance(8.0, economy)
 	_check(not factory.active and not battle._timers.has(factory) and not scene._fortifications.has(factory.id)
 		and not battle.navigation._obstacles.has(obstacle) and deployments.size() == 1
+		and not battle.set_producer_stance(PLAYER, factory.id, Stance.IDLE)
 		and economy.stockpile(PLAYER, FOOD) == 20.0, "Destruction removes the timer, view and exit reservation.")
 	scene.restart_match()
 	scene.set_process(false)
@@ -163,12 +255,19 @@ func _test_lifecycle(scene: Node) -> void:
 		return
 	_check(is_zero_approx(barracks.elapsed) and scene.economy.barracks_count(PLAYER) == 1,
 		"The first Barracks after restart starts a fresh cycle.")
-	barracks.hp = 1.0
+	_check(scene._battle.set_producer_stance(PLAYER, barracks.id, Stance.IDLE), "Configure the new Barracks.")
+	scene.restart_match()
+	scene.set_process(false)
+	var fresh := _place(scene, PLAYER, &"barracks", Vector2(-13.0, -1.3))
+	if not _check(fresh != null and fresh.id == barracks.id and fresh.default_stance == Stance.SEEK_NEAREST,
+			"A reused producer ID after restart begins with the original default."):
+		return
+	fresh.hp = 1.0
 	var attacker: MatchBattle.Unit = scene._battle.spawn_unit(CPU,
-		barracks.position + Vector2.UP * 1.25, Catalog.RANGED)
+		fresh.position + Vector2.UP * 1.25, Catalog.RANGED)
 	_check(attacker != null, "A ranged attacker starts outside the Barracks footprint.")
 	scene._battle.advance(STEP, scene.economy)
-	_check(scene.economy.barracks_count(PLAYER) == 0 and not scene._battle._timers.has(barracks),
+	_check(scene.economy.barracks_count(PLAYER) == 0 and not scene._battle._timers.has(fresh),
 		"Combat destruction removes a Barracks and updates its HUD count.")
 
 
@@ -193,7 +292,9 @@ func _record_deployments(battle: MatchBattle) -> Array[Dictionary]:
 	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void:
 		var producer: MatchBattle.ProductionTimer
 		for timer in battle._timers:
-			if timer.side == unit.side and timer.unit_type == unit.type_id and timer.active 					and Rect2(timer.position - timer.spawn_extent(), timer.spawn_extent() * 2.0).has_point(unit.position):
+			if timer.side == unit.side and timer.unit_type == unit.type_id and timer.active \
+					and Rect2(timer.position - timer.spawn_extent(),
+						timer.spawn_extent() * 2.0).has_point(unit.position):
 				producer = timer
 				break
 		var routes := battle.navigation.with_clearance(unit.definition.clearance)
@@ -201,10 +302,18 @@ func _record_deployments(battle: MatchBattle) -> Array[Dictionary]:
 			and not routes.path(unit.position, Vector2.ZERO).is_empty(),
 			"Each unit starts at a matching building exit with a route onto the map.")
 		_check(deployments.is_empty() or unit.id > deployments.back().id, "Every deployment receives a unique unit ID.")
-		deployments.append({"side": unit.side, "type": unit.type_id, "id": unit.id})
-		unit.order = MatchBattle.Order.HOLD
-		unit.ordered_destination = unit.position)
+		if producer == null:
+			return
+		deployments.append({"side": unit.side, "type": unit.type_id, "id": unit.id,
+			"producer_id": producer.id, "kind": producer.kind,
+			"stance": unit.stance, "spawn_position": unit.position})
+		if unit.stance != Stance.IDLE:
+			battle.order_hold(unit.side, unit.id))
 	return deployments
+
+
+func _choose_stance(picker: OptionButton, stance: Stance) -> void:
+	picker.get_popup().index_pressed.emit(picker.get_item_index(stance))
 
 
 func _types(deployments: Array[Dictionary], side: MatchRegion.Owner) -> Array:

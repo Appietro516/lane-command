@@ -251,6 +251,9 @@ var _barracks_menu_interval := -1.0
 @onready var _unit_order_hint: Label = %UnitOrderHint
 @onready var _stance_label: Label = %StanceLabel
 @onready var _stance_picker: OptionButton = %StancePicker
+@onready var _producer_stance: HBoxContainer = %ProducerStance
+@onready var _producer_stance_label: Label = %ProducerStanceLabel
+@onready var _producer_stance_picker: OptionButton = %ProducerStancePicker
 @onready var _tactical_orders: VBoxContainer = %TacticalOrders
 @onready var _resume_stance_toggle: CheckBox = %ResumeStance
 @onready var _stat_sources: Button = %StatSources
@@ -353,8 +356,11 @@ func _ready() -> void:
 	claim_completed.connect(_discover_on_claim)
 	%Overview.pressed.connect(func() -> void: _camera.reset_view())
 	for stance in MatchBattle.Stance.values():
-		_stance_picker.add_item(_stance_name(stance), stance)
+		for picker in [_stance_picker, _producer_stance_picker]:
+			picker.add_item(_stance_name(stance), stance)
+			picker.get_popup().set_item_tooltip(picker.item_count - 1, _stance_tooltip(stance))
 	_stance_picker.item_selected.connect(_apply_selected_stance)
+	_producer_stance_picker.item_selected.connect(_apply_producer_stance)
 	%MoveOrder.pressed.connect(_begin_unit_order.bind(MatchBattle.Order.MOVE))
 	%HoldOrder.pressed.connect(_begin_unit_order.bind(MatchBattle.Order.HOLD))
 	%HoldHere.pressed.connect(_hold_selected_unit)
@@ -1576,12 +1582,14 @@ func _select_fortification(id: int) -> void:
 func _update_fortification_inspection() -> void:
 	var placed: PlacedFortification = _fortifications.get(_selected_fortification)
 	if placed == null or not _placement_id.is_empty():
+		_producer_stance.hide()
 		if _placement_id.is_empty():
 			_hide_ranges()
 		if selected_unit() == null or not _placement_id.is_empty():
 			_unit_panel.hide()
 		return
 	var fort := placed.defense
+	_producer_stance.visible = fort is MatchBattle.ProductionTimer
 	_unit_panel.show()
 	_stat_sources.show()
 	_unit_name.text = "%s %s" % [_side_label(fort.side), fort.profile.label]
@@ -1592,10 +1600,19 @@ func _update_fortification_inspection() -> void:
 	if fort is MatchBattle.ProductionTimer:
 		var production := _production_stat(fort)
 		var unit: Dictionary = UnitCatalog.DEFINITIONS[fort.unit_type]
-		_unit_intent.text += "\n%s · %s per unit\nCapacity  %s units/s" % [
+		_unit_intent.text += "\nNext unit  %s · %s per unit\nCapacity  %s units/s" % [
 			unit.label, MatchEconomy.cost_text({MatchEconomy.FOOD: unit.food}),
 			_stat_number(production.total),
 		]
+		var remaining: float = fort.interval(economy) - fort.elapsed
+		_unit_intent.text += "\nProduction  " + ("%.1fs remaining" % remaining
+			if remaining > MatchBattle.TIME_EPSILON else "Cycle complete")
+		var can_configure := fort.side == PLAYER and not _battle.is_finished()
+		_producer_stance_picker.visible = can_configure
+		_producer_stance_label.text = "Default behavior" if can_configure \
+			else "Default behavior  " + _stance_name(fort.default_stance)
+		if _producer_stance_picker.get_selected_id() != fort.default_stance:
+			_producer_stance_picker.select(_producer_stance_picker.get_item_index(fort.default_stance))
 		details += "\n\n" + _breakdown_text("Production capacity", production, " units/s")
 	for resource_id in fort.profile.get("income", {}):
 		var production := faction_stats.inspect_source(resource_id, fort.source_id)
@@ -1699,6 +1716,11 @@ func _apply_selected_stance(index: int) -> void:
 		_update_unit_selection()
 
 
+func _apply_producer_stance(index: int) -> void:
+	_battle.set_producer_stance(PLAYER, _selected_fortification, _producer_stance_picker.get_item_id(index))
+	_update_fortification_inspection()
+
+
 func _begin_unit_order(order: MatchBattle.Order) -> void:
 	if not _selected_combat_unit_can_receive_orders():
 		return
@@ -1735,6 +1757,17 @@ func _issue_unit_order_at(pointer: Vector2, order: MatchBattle.Order) -> void:
 
 static func _stance_name(stance: MatchBattle.Stance) -> String:
 	return MatchBattle.Stance.keys()[stance].capitalize()
+
+
+static func _stance_tooltip(stance: MatchBattle.Stance) -> String:
+	match stance:
+		MatchBattle.Stance.SEEK_NEAREST:
+			return "Pursue the closest reachable enemy in detection range, or advance on enemy structures."
+		MatchBattle.Stance.SEEK_STRONGEST:
+			return "Pursue the most threatening reachable enemy in detection range, or advance on enemy structures."
+		MatchBattle.Stance.IDLE:
+			return "Stay in reserve without moving or attacking automatically."
+	return ""
 
 
 func _target_label(unit: MatchBattle.Unit) -> String:
