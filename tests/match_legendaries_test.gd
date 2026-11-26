@@ -115,7 +115,11 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	_check(scene._selected_region_id == region_id and details.text.contains("Test Shrine · Region 1")
 		and details.text.contains("Neutral · Inactive"),
 		"Selecting the landmark shows its name, region, and inactive status.")
-	if not ScoutFixture.claim(scene, PLAYER, region_id):
+	var claim := scene.get_node("%Claim") as Button
+	_check(not claim.disabled and scene.selected_unit() == null,
+		"The neutral landmark enables the region's Claim without selecting a scout.")
+	claim.pressed.emit()
+	if not ScoutFixture.finish_claim(scene, PLAYER, region_id):
 		_check(false, "The player can claim the landmark region.")
 		scene.free()
 		return

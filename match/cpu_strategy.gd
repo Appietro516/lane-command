@@ -594,37 +594,36 @@ func _dispatch_best_claim(scene: Node3D, targets: Array[MatchRegion],
 	# with authoritative pathfinding. Backoff lets lower ranks surface.
 	var best: Dictionary = {}
 	for choice in choices.slice(0, difficulty.claim_options):
-		var found := false
-		for scout in observers:
-			var plan := expeditions.claim_route(scout, choice.id)
-			if plan == null:
-				continue
-			var distance := 0.0
-			var previous := scout.position
-			var danger := _route_danger(hazards, scene.cpu_threat_radius, plan.site, plan.site)
-			for waypoint in plan.waypoints:
-				distance += previous.distance_to(waypoint)
-				danger = maxf(danger, _route_danger(hazards, scene.cpu_threat_radius, previous, waypoint))
-				previous = waypoint
-			if danger > scene.cpu_scout_max_danger:
-				continue
-			found = true
-			var travel := distance / maxf(0.01, battle.unit_speed_stat(scout).total)
-			var development: bool = difficulty.scout_production > 0.0 \
-				and _room_for_production(scene, choice.region, plan.site)
-			var candidate := {"id": choice.id, "unit_id": scout.id, "recovery": choice.recovery,
-				"score": choice.value + _claim_route_value(scene, travel, danger)
-					+ float(development) * scene.cpu_scout_production_weight * difficulty.scout_production}
-			if best.is_empty() or _prefer_claim(candidate, best):
-				best = candidate
-		if not found:
+		var rank_route := _rank_claim_route.bind(scene, choice.region, hazards)
+		var plan := expeditions.preview_claim(CPU, choice.id, rank_route)
+		if plan == null:
 			_claim_retry_at[choice.id] = now + scene.cpu_placement_retry
+			continue
+		var candidate := {"id": choice.id, "recovery": choice.recovery,
+			"score": choice.value - plan.rank, "rank_route": rank_route}
+		if best.is_empty() or _prefer_claim(candidate, best):
+			best = candidate
 	if best.is_empty():
 		return false
-	if scene.dispatch_scout(CPU, best.unit_id, best.id):
+	if scene.dispatch_scout(CPU, best.id, best.rank_route).is_empty():
 		return true
 	_claim_retry_at[best.id] = now + scene.cpu_placement_retry
 	return false
+
+
+func _rank_claim_route(unit: MatchBattle.Unit, plan: ScoutExpeditions.ClaimRoute, scene: Node3D,
+		region: MatchRegion, hazards: PackedVector2Array) -> float:
+	var previous := unit.position
+	var danger := _route_danger(hazards, scene.cpu_threat_radius, plan.site, plan.site)
+	for waypoint in plan.waypoints:
+		danger = maxf(danger, _route_danger(hazards, scene.cpu_threat_radius, previous, waypoint))
+		previous = waypoint
+	if danger > scene.cpu_scout_max_danger:
+		return INF
+	var development: bool = difficulty.scout_production > 0.0 \
+		and _room_for_production(scene, region, plan.site)
+	return -(_claim_route_value(scene, plan.travel_time, danger)
+		+ float(development) * scene.cpu_scout_production_weight * difficulty.scout_production)
 
 
 func _claim_region_value(scene: Node3D, region: MatchRegion) -> float:

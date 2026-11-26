@@ -6,10 +6,7 @@ const Catalog := preload("res://match/unit_catalog.gd")
 
 
 static func dispatch(scene: Node, side: MatchRegion.Owner, region_id: StringName) -> bool:
-	for scout in scene._expeditions.available(side):
-		if scene.dispatch_scout(side, scout.unit_id, region_id):
-			return true
-	return false
+	return scene.dispatch_scout(side, region_id).is_empty()
 
 
 static func finish_claim(scene: Node, side: MatchRegion.Owner, region_id: StringName) -> bool:

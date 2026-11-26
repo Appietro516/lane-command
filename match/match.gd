@@ -316,7 +316,7 @@ func _ready() -> void:
 	_tracer_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tracer_material.albedo_color = Color("#fff0b8")
 	_upgrade_button.pressed.connect(func() -> void: try_upgrade(PLAYER))
-	_claim_button.pressed.connect(_dispatch_selected_scout)
+	_claim_button.pressed.connect(_claim_selected_region)
 	_recall_button.pressed.connect(func() -> void:
 		if _expeditions.recall(PLAYER, _selected_unit_id):
 			_refresh_hud())
@@ -1042,12 +1042,12 @@ func try_upgrade(side: MatchRegion.Owner) -> bool:
 	return true
 
 
-func dispatch_scout(side: MatchRegion.Owner, scout_id: int, region_id: StringName) -> bool:
-	return _expeditions.dispatch(side, scout_id, region_id).is_empty()
+func dispatch_scout(side: MatchRegion.Owner, region_id: StringName, rank_route := Callable()) -> String:
+	return _expeditions.dispatch(side, region_id, rank_route)
 
 
-func _dispatch_selected_scout() -> void:
-	var reason := _expeditions.dispatch(PLAYER, _selected_unit_id, _selected_region_id)
+func _claim_selected_region() -> void:
+	var reason := dispatch_scout(PLAYER, _selected_region_id)
 	if not reason.is_empty():
 		_show_expedition_notice(PLAYER, reason)
 	else:
@@ -1243,7 +1243,7 @@ func _pick_map(pointer: Vector2) -> void:
 	if unit != null and not _battle.is_finished():
 		_select_fortification(MatchBattle.NO_TARGET)
 		_select_unit(id)
-		if unit.type_id != UnitCatalog.SCOUT:
+		if unit.type_id != UnitCatalog.SCOUT and not owns_region(MatchRegion.Owner.NEUTRAL, _selected_region_id):
 			_select_region(&"")
 	else:
 		var building := _pick_building(pointer)
@@ -1897,7 +1897,7 @@ func _refresh_hud() -> void:
 
 
 func _refresh_claim_control() -> void:
-	var reason := _expeditions.block_reason(PLAYER, _selected_unit_id, _selected_region_id)
+	var reason := _expeditions.block_reason(PLAYER, _selected_region_id)
 	_claim_button.disabled = not reason.is_empty()
 	_claim_button.tooltip_text = reason
 	var expedition := _expeditions.assignments.get(_selected_region_id) as ScoutExpeditions.Scout
@@ -1992,7 +1992,7 @@ func _refresh_scout_roster() -> void:
 	for index in _scout_buttons.size():
 		var scout: ScoutExpeditions.Scout = _expeditions.slots[PLAYER][index]
 		var button := _scout_buttons[index]
-		var state: String = ScoutExpeditions.State.keys()[scout.state].capitalize()
+		var state := _scout_state_text(scout)
 		button.disabled = _battle.is_finished()
 		button.tooltip_text = "Select Scout"
 		if scout.state == ScoutExpeditions.State.DEAD:
@@ -2010,17 +2010,24 @@ func _update_scout_inspection(unit: MatchBattle.Unit, scout: ScoutExpeditions.Sc
 	_unit_stats.text = "HP  %s / %s · Noncombat\nSpeed  %s units/s" % [
 		_stat_number(unit.hp), _stat_number(health.total), _stat_number(_battle.unit_speed_stat(unit).total)]
 	_unit_intent.text = _expedition_text(scout) + " · " + str(scout.region_id).capitalize() \
-		if scout.assigned() else ScoutExpeditions.State.keys()[scout.state].capitalize()
+		if scout.assigned() else _scout_state_text(scout)
 	_recall_button.visible = scout.side == PLAYER and scout.assigned() and not _battle.is_finished()
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
-	_unit_order_hint.text = "Select a neutral region to claim\nRight-click ground to move"
+	_unit_order_hint.text = "Right-click ground to move"
 	_update_claim_progress(_unit_claim_progress, scout)
 	if not unit.waypoints.is_empty():
 		_draw_unit_route(unit)
 
 
+func _scout_state_text(scout: ScoutExpeditions.Scout) -> String:
+	var unit := _battle.get_unit(scout.unit_id)
+	if scout.state == ScoutExpeditions.State.AVAILABLE and unit != null and not unit.waypoints.is_empty():
+		return "Moving"
+	return ScoutExpeditions.State.keys()[scout.state].capitalize()
+
+
 func _expedition_text(scout: ScoutExpeditions.Scout) -> String:
-	return "◆ %s · %ds" % [ScoutExpeditions.State.keys()[scout.state].capitalize(),
+	return "◆ %s · %ds" % [_scout_state_text(scout),
 		ceili(_expeditions.eta(scout) - MatchBattle.TIME_EPSILON)]
 
 

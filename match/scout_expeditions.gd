@@ -30,8 +30,11 @@ class Scout:
 
 
 class ClaimRoute:
+	var unit_id: int
 	var site: Vector2
 	var waypoints: PackedVector2Array
+	var travel_time: float
+	var rank: float
 
 
 var slots: Dictionary[MatchRegion.Owner, Array] = {}
@@ -78,12 +81,16 @@ func scout_for(unit_id: int) -> Scout:
 func available(side: MatchRegion.Owner) -> Array[Scout]:
 	var scouts: Array[Scout] = []
 	for scout: Scout in slots.get(side, []):
-		if scout.state == State.AVAILABLE:
+		var unit := _battle.get_unit(scout.unit_id)
+		if scout.state == State.AVAILABLE and unit != null and unit.hp > 0.0 \
+				and not unit.scout_committed and unit.waypoints.is_empty():
 			scouts.append(scout)
 	return scouts
 
 
 func eligibility(side: MatchRegion.Owner, region_id: StringName) -> String:
+	if not slots.has(side):
+		return "Invalid faction"
 	var region := _regions.get(region_id) as MatchRegion
 	if region == null:
 		return "Select a region"
@@ -97,32 +104,29 @@ func eligibility(side: MatchRegion.Owner, region_id: StringName) -> String:
 	return "Not adjacent"
 
 
-func block_reason(side: MatchRegion.Owner, unit_id: int, region_id: StringName) -> String:
+func block_reason(side: MatchRegion.Owner, region_id: StringName) -> String:
 	var reason := eligibility(side, region_id)
 	if not reason.is_empty():
 		return reason
 	if assignments.has(region_id):
 		return "Expedition assigned"
-	var scout := scout_for(unit_id)
-	if scout == null or scout.side != side:
-		return "Select an available Scout"
-	if scout.state != State.AVAILABLE or _battle.get_unit(unit_id) == null:
-		return "Scout is busy"
+	if available(side).is_empty():
+		return "No scouts available"
 	return _economy.cost_block_reason(side, claim_cost)
 
 
-func dispatch(side: MatchRegion.Owner, unit_id: int, region_id: StringName) -> String:
-	var reason := block_reason(side, unit_id, region_id)
+func dispatch(side: MatchRegion.Owner, region_id: StringName, rank_route := Callable()) -> String:
+	var reason := block_reason(side, region_id)
 	if not reason.is_empty():
 		return reason
-	var scout := scout_for(unit_id)
-	var unit := _battle.get_unit(unit_id)
-	var plan := claim_route(unit, region_id)
+	var plan := _best_route(side, region_id, rank_route)
 	if plan == null:
 		return "No reachable outpost site"
 	if not _economy.try_spend(side, claim_cost):
 		return _economy.cost_block_reason(side, claim_cost)
 
+	var scout := scout_for(plan.unit_id)
+	var unit := _battle.get_unit(plan.unit_id)
 	scout.departure = unit.position
 	scout.region_id = region_id
 	scout.site = plan.site
@@ -134,8 +138,30 @@ func dispatch(side: MatchRegion.Owner, unit_id: int, region_id: StringName) -> S
 	return ""
 
 
-## Probe the same site and route as dispatch, without spending Energy or reserving the region.
-func claim_route(unit: MatchBattle.Unit, region_id: StringName) -> ClaimRoute:
+## Preview the route dispatch would choose. An optional ranker can prefer safer routes
+## or reject a route by returning INF. Lower ranks win, then lower unit IDs.
+func preview_claim(side: MatchRegion.Owner, region_id: StringName,
+		rank_route := Callable()) -> ClaimRoute:
+	if not block_reason(side, region_id).is_empty():
+		return null
+	return _best_route(side, region_id, rank_route)
+
+
+func _best_route(side: MatchRegion.Owner, region_id: StringName, rank_route: Callable) -> ClaimRoute:
+	var best: ClaimRoute
+	for scout in available(side):
+		var unit := _battle.get_unit(scout.unit_id)
+		var plan := _claim_route(unit, region_id)
+		if plan == null:
+			continue
+		plan.rank = rank_route.call(unit, plan) if rank_route.is_valid() else plan.travel_time
+		if is_finite(plan.rank) and (best == null or plan.rank < best.rank
+				or (plan.rank == best.rank and plan.unit_id < best.unit_id)):
+			best = plan
+	return best
+
+
+func _claim_route(unit: MatchBattle.Unit, region_id: StringName) -> ClaimRoute:
 	var routes := _battle._unit_navigation(unit)
 	var region := _regions[region_id]
 	var site := region.interior_point(func(point: Vector2) -> bool:
@@ -150,8 +176,15 @@ func claim_route(unit: MatchBattle.Unit, region_id: StringName) -> ClaimRoute:
 	if not site.is_finite():
 		return null
 	var plan := ClaimRoute.new()
+	plan.unit_id = unit.id
 	plan.site = site
 	plan.waypoints = _approach_route(region, routes, unit.position, site)
+	var previous := unit.position
+	var distance := 0.0
+	for waypoint in plan.waypoints:
+		distance += previous.distance_to(waypoint)
+		previous = waypoint
+	plan.travel_time = distance / maxf(0.01, _battle.unit_speed_stat(unit).total)
 	return plan
 
 

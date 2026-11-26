@@ -211,8 +211,11 @@ func _test_concurrent_claims() -> void:
 	second.remaining = MatchBattle.STEP
 	scene._advance_simulation(1.0)
 	var events: NarrativeEvents = scene.narrative_events
-	var first_id := _id(PLAYER, FIRST)
-	var second_id := _id(PLAYER, SECOND)
+	# Simultaneous completions are emitted in roster order.
+	var roster: Array = scene._expeditions.slots[PLAYER]
+	var first_completes_first := roster.find(first) < roster.find(second)
+	var first_id := _id(PLAYER, FIRST if first_completes_first else SECOND)
+	var second_id := _id(PLAYER, SECOND if first_completes_first else FIRST)
 	if _check(paused and events.pending_player_id() == first_id and events.instance(second_id).has("event_id")
 			and scene._outposts_by_region.size() == 2, "Both completions finish the same step and enter the FIFO."):
 		_choose_free(events)
