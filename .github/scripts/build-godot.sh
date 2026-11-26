@@ -26,13 +26,34 @@ if any(Path(".").glob("*.csproj")) or any(
 PY
 
 run_godot() {
-    local log
+    local log godot_status
     log=$(mktemp)
-    if ! "$godot" --headless --path . "$@" 2>&1 | tee "$log" ||
-        grep -Eq '^[[:space:]]*(SCRIPT ERROR|ERROR):' "$log"; then
+
+    # Keep the actual Godot exit code even though stdout is also captured by tee.
+    # A completed export can emit a nonfatal resource-leak diagnostic at shutdown;
+    # that should not prevent publishing a valid executable and Web build.
+    set +e
+    "$godot" --headless --path . "$@" 2>&1 | tee "$log"
+    godot_status=${PIPESTATUS[0]}
+    set -e
+
+    if (( godot_status != 0 )); then
         rm -f "$log"
-        echo "Godot failed during $*." >&2
+        echo "Godot exited with status $godot_status during $*." >&2
         return 1
+    fi
+
+    if grep -Eq '^[[:space:]]*(SCRIPT ERROR|ERROR):' "$log"; then
+        # Only allow the exact, post-savepack shutdown diagnostic, and only for
+        # a successful export that actually produced the requested artifact.
+        if [[ ${1:-} == "--export-release" && -s ${@: -1} ]] &&
+            python3 .github/scripts/validate-export-log.py "$log"; then
+            echo "WARNING: Godot reported a post-export resource leak; the export completed."
+        else
+            rm -f "$log"
+            echo "Godot reported an error during $*." >&2
+            return 1
+        fi
     fi
     rm -f "$log"
 }
