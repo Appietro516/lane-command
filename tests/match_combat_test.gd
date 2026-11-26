@@ -492,8 +492,9 @@ func _test_tactical_hud() -> void:
 	_check(unit.stance == MatchBattle.Stance.SEEK_STRONGEST, "The HUD can reassign an offensive stance.")
 	_click_at_world(scene._unit_views[rival.id].global_position)
 	_check(scene.selected_unit() == rival and not picker.is_visible_in_tree()
-		and not move.is_visible_in_tree() and scene.get_node("%StanceLabel").text.contains("Idle"),
-		"CPU inspection shows the current stance without player commands.")
+		and not move.is_visible_in_tree() and rival.stance != MatchBattle.Stance.IDLE
+		and scene.get_node("%StanceLabel").text.contains(scene._stance_name(rival.stance)),
+		"CPU inspection shows the stance chosen by the planner without player commands.")
 	scene._select_unit(unit.id)
 	scene._begin_unit_order(MatchBattle.Order.HOLD)
 	scene.restart_match()

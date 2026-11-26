@@ -1,5 +1,5 @@
 extends RefCounted
-## One construction, claim, or upgrade per decision. All mutations go through match APIs.
+## Economic decisions and tactical orders for one CPU faction.
 
 const Rules := preload("res://match/fortification_rules.gd")
 const ScoutExpeditions := preload("res://match/scout_expeditions.gd")
@@ -10,6 +10,7 @@ const FOOD := MatchEconomy.FOOD
 const BARRACKS := &"barracks"
 const UnitCatalog := preload("res://match/unit_catalog.gd")
 const DifficultyProfile := preload("res://match/difficulty_profile.gd")
+const CpuTactics := preload("res://match/cpu_tactics.gd")
 const RESPONSE_RESERVE := {ENERGY: 10, MATERIALS: 6}
 const REGION_SITE_BUDGET := 5
 const DEFENSE_HUB_BUDGET := 8
@@ -19,16 +20,6 @@ const WALL_BYPASS := Vector2(0.45, 0.18)
 const MIN_MORTAR_TARGETS := 2
 const MIN_WALL_TARGETS := 2
 const CLAIM_INTERRUPTION_RETRY := 24.0
-
-
-class Threat:
-	var region: MatchRegion
-	var hub: Vector2
-	var enemies := PackedVector2Array()
-	var composition := {}
-	var nearest := Vector2.INF
-	var score := 0.0
-	var allies := 0
 
 
 class Production:
@@ -69,6 +60,7 @@ var _next_defense := 0.0
 var _next_claim := 0.0
 var _next_replacement := 0.0
 var _claim_retry_at: Dictionary[StringName, float] = {}
+var _tactics := CpuTactics.new()
 
 
 func _init(map_seed: int, level := DifficultyProfile.DEFAULT_LEVEL,
@@ -82,16 +74,26 @@ func decide(scene: Node3D) -> void:
 	var battle: MatchBattle = scene._battle
 	if battle.is_finished() or not battle.is_side_active(side):
 		return
-	var economy: MatchEconomy = scene.economy
 	var now := battle.elapsed_time()
 	var owned: Array[MatchRegion] = []
-	var frontiers: Dictionary[StringName, MatchRegion] = {}
-	var base: Vector2 = battle._bases[side]
-	var claims := 0
 	for region: MatchRegion in scene._regions_by_id.values():
-		if region.region_owner != side:
-			continue
-		owned.append(region)
+		if region.region_owner == side:
+			owned.append(region)
+	# Filter hostile observations here when the match introduces fog of war.
+	var units := battle.active_units()
+	var threats := _threats(scene, owned, units)
+	_plan_economy(scene, owned, units, threats, now)
+	_tactics.decide(scene, side, difficulty, owned, units, threats, now)
+
+
+func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle.Unit],
+		threats: Array[CpuTactics.Threat], now: float) -> void:
+	var battle: MatchBattle = scene._battle
+	var economy: MatchEconomy = scene.economy
+	var base: Vector2 = battle._bases[side]
+	var frontiers: Dictionary[StringName, MatchRegion] = {}
+	var claims := 0
+	for region in owned:
 		if region.region_id not in scene._layout.starting_territories[side - MatchRegion.Owner.PLAYER]:
 			claims += 1
 		for id in region.neighbor_ids:
@@ -99,10 +101,6 @@ func decide(scene: Node3D) -> void:
 			if neighbor.region_owner == NEUTRAL:
 				frontiers[id] = neighbor
 
-	# This is the current full-visibility view. Filter hostile observations here
-	# when the match introduces fog of war.
-	var units := battle.active_units()
-	var threats := _threats(scene, owned, units)
 	var sites := owned.duplicate()
 	sites.sort_custom(func(a: MatchRegion, b: MatchRegion) -> bool:
 		return _site(a).distance_squared_to(base) < _site(b).distance_squared_to(base))
@@ -126,14 +124,14 @@ func decide(scene: Node3D) -> void:
 		counts[unit.type_id] = counts.get(unit.type_id, 0) + 1
 		if unit.side == side:
 			army += 1
-	var front: Threat = threats.front() if not threats.is_empty() else null
+	var front: CpuTactics.Threat = threats.front() if not threats.is_empty() else null
 	var under_pressure := front != null and front.score > float(difficulty.threat_threshold)
 
 	var expeditions: ScoutExpeditions = scene._expeditions
 	for expedition in expeditions.assignments.values():
 		if expedition.side == side:
 			claims += 1
-	var covered := under_pressure and _has_cover(scene, front.hub)
+	var covered := under_pressure and CpuTactics.has_cover(scene, side, front.hub)
 	var options := _military_options(scene, production, allies, enemies, front, covered, now)
 	var food_producer := _producer_for(catalog, FOOD)
 	if (production.active == 0 and production.total < scene.cpu_production_limit
@@ -217,7 +215,7 @@ func _build_military(scene: Node3D, options: Array[Dictionary], food_producer: S
 
 
 func _military_options(scene: Node3D, production: Production, allies: Dictionary,
-		enemies: Dictionary, front: Threat, covered: bool, now: float) -> Array[Dictionary]:
+		enemies: Dictionary, front: CpuTactics.Threat, covered: bool, now: float) -> Array[Dictionary]:
 	var economy: MatchEconomy = scene.economy
 	var army := 0
 	for count: int in allies.values():
@@ -366,15 +364,15 @@ func _want_build(scene: Node3D, kind: StringName, regions: Array[MatchRegion], n
 	return false
 
 
-func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle.Unit]) -> Array[Threat]:
-	var threats: Array[Threat] = []
+func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle.Unit]) -> Array[CpuTactics.Threat]:
+	var threats: Array[CpuTactics.Threat] = []
 	var radius_squared: float = scene.cpu_threat_radius ** 2
 	for region in owned:
-		var hub := Threat.new()
+		var hub := CpuTactics.Threat.new()
 		hub.region = region
 		var outpost: MatchBattle.Outpost = scene._outposts_by_region.get(region.region_id)
 		var hp: float
-		if outpost != null:
+		if outpost != null and outpost.side == side and outpost.hp > 0.0:
 			hub.hub = outpost.position
 			hp = outpost.hp / outpost.max_hp
 		elif region.region_id == scene._layout.starting_territories[side - MatchRegion.Owner.PLAYER][0]:
@@ -384,7 +382,7 @@ func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle
 			continue
 		var nearest_distance := INF
 		for unit in units:
-			if unit.type_id == UnitCatalog.SCOUT:
+			if unit.type_id == UnitCatalog.SCOUT or unit.hp <= 0.0:
 				continue
 			var distance := hub.hub.distance_squared_to(unit.position)
 			if distance > radius_squared:
@@ -401,21 +399,13 @@ func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle
 			hub.score = hub.enemies.size() + 1.0 - nearest_distance / radius_squared \
 				+ (1.0 - hp) * 2.0 - hub.allies * 0.5
 			threats.append(hub)
-	threats.sort_custom(func(a: Threat, b: Threat) -> bool: return a.score > b.score)
+	threats.sort_custom(func(a: CpuTactics.Threat, b: CpuTactics.Threat) -> bool:
+		return a.region.region_id < b.region.region_id if a.score == b.score else a.score > b.score)
 	return threats
 
 
-func _has_cover(scene: Node3D, hub: Vector2) -> bool:
-	for placed in scene._fortifications.values():
-		var fort: MatchBattle.Fortification = placed.defense
-		if (fort.side == side and fort.active and fort.profile.has("range")
-				and fort.position.distance_squared_to(hub) <= float(fort.profile.range) ** 2):
-			return true
-	return false
-
-
-func _defend(scene: Node3D, threats: Array[Threat], unit_buffer: int, now: float) -> bool:
-	for threat: Threat in threats.slice(0, DEFENSE_HUB_BUDGET):
+func _defend(scene: Node3D, threats: Array[CpuTactics.Threat], unit_buffer: int, now: float) -> bool:
+	for threat: CpuTactics.Threat in threats.slice(0, DEFENSE_HUB_BUDGET):
 		if difficulty.threat_threshold > 0.0 and threat.score <= difficulty.threat_threshold:
 			break
 		var counts := {}
@@ -450,7 +440,7 @@ func _defend(scene: Node3D, threats: Array[Threat], unit_buffer: int, now: float
 	return false
 
 
-func _try_gun(scene: Node3D, kind: StringName, threat: Threat) -> bool:
+func _try_gun(scene: Node3D, kind: StringName, threat: CpuTactics.Threat) -> bool:
 	var profile: Dictionary = Rules.PROFILES[kind]
 	var battle: MatchBattle = scene._battle
 	var forward := _approach(threat, battle._bases[battle.nearest_hostile_base(side, threat.hub)])
@@ -485,7 +475,7 @@ func _try_gun(scene: Node3D, kind: StringName, threat: Threat) -> bool:
 	return best.is_finite() and scene.try_place_building(side, kind, scene._world_position(best))
 
 
-func _try_wall(scene: Node3D, threat: Threat) -> bool:
+func _try_wall(scene: Node3D, threat: CpuTactics.Threat) -> bool:
 	var battle: MatchBattle = scene._battle
 	var forward := _approach(threat, battle._bases[battle.nearest_hostile_base(side, threat.hub)])
 	for bearing: float in [0.0, 0.35, -0.35, 0.65, -0.65]:
@@ -717,7 +707,7 @@ func _dormant_buildings(scene: Node3D, frontiers: Dictionary[StringName, MatchRe
 	return dormant
 
 
-func _approach(threat: Threat, fallback: Vector2) -> Vector2:
+func _approach(threat: CpuTactics.Threat, fallback: Vector2) -> Vector2:
 	var direction := threat.hub.direction_to(threat.nearest)
 	return threat.hub.direction_to(fallback) if direction.is_zero_approx() else direction
 
