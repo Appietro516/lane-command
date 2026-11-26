@@ -12,7 +12,6 @@ func setup(scene: Node) -> void:
 	assert(not state.is_empty())
 	scene._select_unit(state.unit.id)
 	scene._refresh_hud()
-	scene.get_node("%Resources/energy").pressed.emit()
 	scene.get_node("%StatSources").button_pressed = true
 
 

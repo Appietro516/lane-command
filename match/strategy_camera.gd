@@ -7,6 +7,8 @@ const PAN_SPEED := 0.75
 const RESPONSE := 14.0
 const CAMERA_DISTANCE := 32.0
 
+var menu_navigation := false
+
 var _map_bounds := Rect2(-TerritoryLayout.DEFAULT_SIZE / 2.0, TerritoryLayout.DEFAULT_SIZE)
 var _focus := Vector2.ZERO
 var _target_focus := Vector2.ZERO
@@ -56,7 +58,7 @@ func _update_overview_size() -> void:
 
 
 func _process(delta: float) -> void:
-	if not _dragging:
+	if not _dragging and not menu_navigation:
 		var direction := Input.get_vector("camera_left", "camera_right", "camera_up", "camera_down")
 		_pan(direction * size * PAN_SPEED * delta)
 	var weight := 1.0 - exp(-RESPONSE * delta)
@@ -85,8 +87,8 @@ func _input(event: InputEvent) -> void:
 		if event.is_action_pressed("camera_overview"):
 			reset_view()
 			get_viewport().set_input_as_handled()
-		elif event.is_action("camera_left") or event.is_action("camera_right") \
-				or event.is_action("camera_up") or event.is_action("camera_down"):
+		elif not menu_navigation and (event.is_action("camera_left") or event.is_action("camera_right") \
+				or event.is_action("camera_up") or event.is_action("camera_down")):
 			get_viewport().set_input_as_handled()
 	if not _dragging:
 		return

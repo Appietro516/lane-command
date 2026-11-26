@@ -631,7 +631,10 @@ func _test_match_scene() -> void:
 	scene._refresh_hud()
 	_click(scene.get_node("%Build"))
 	await process_frame
-	_click(scene.get_node("%BuildList").get_child(0))
+	var barracks_option: Button = scene._build_options[&"barracks"]
+	(scene.get_node("%BuildScroll") as ScrollContainer).ensure_control_visible(barracks_option)
+	await process_frame
+	_click(barracks_option)
 	_check(scene._preview != null and scene.selected_unit() == player and not panel.visible,
 		"Entering placement hides inspection and retains the previous selection.")
 	_click_at_world(player_view.global_position)
@@ -787,9 +790,9 @@ func _check_full_reset(scene: Node, initial_owners: Array) -> void:
 	_check(scene.get_node("%PlayerHP").text == "Player base · 80 HP"
 		and scene.get_node("%CPUHP").text == "CPU base · 80 HP"
 		and scene.get_node("%Resources/energy/Stockpile").text == "Energy 50"
-		and scene.get_node("%BarracksCount").text == "Barracks 0"
+		and not scene.has_node("%BarracksCount")
 		and not scene.get_node("%Outcome").visible and not scene.get_node("%Build").disabled
-		and scene.get_node("%Upgrade").disabled and scene.get_node("%Upgrade").text == "Upgrade\n60 Energy + 15 Food",
+		and scene.get_node("%Upgrade").disabled and scene.get_node("%Upgrade").text == "Upgrade Barracks\n60 Energy + 15 Food",
 		"The HUD refreshes to its starting readouts and purchase controls.")
 
 

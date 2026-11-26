@@ -140,6 +140,8 @@ func _test_catalog_and_drag(scene: Node) -> void:
 	await process_frame
 	await process_frame
 	_check(menu.visible and not wall.disabled and not mortar.disabled, "Build exposes the four catalog options.")
+	(scene.get_node("%BuildScroll") as ScrollContainer).ensure_control_visible(mortar)
+	await process_frame
 	_click(mortar.get_global_rect().get_center())
 	_check(scene._placement_id == Rules.MORTAR and scene._pending_pick == Vector2.INF
 		and _stock(scene.economy) == initial and scene._selected_region_id == TerritoryLayout.PLAYER_START,
@@ -206,6 +208,9 @@ func _test_catalog_and_drag(scene: Node) -> void:
 	scene._refresh_hud()
 	_check(not wall.disabled and not mortar.disabled and scene.economy.energy(PLAYER) > before_income.x,
 		"Tiles automatically re-enable when stockpiles recover.")
+	await process_frame
+	(scene.get_node("%BuildScroll") as ScrollContainer).ensure_control_visible(wall)
+	await process_frame
 	_click(wall.get_global_rect().get_center())
 	_mouse(camera.unproject_position(Vector3(-13, 0, -2.0)), MOUSE_BUTTON_LEFT, true)
 	_mouse(camera.unproject_position(Vector3(-13, 0, 0.4)), MOUSE_BUTTON_LEFT, false)

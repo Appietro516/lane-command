@@ -30,10 +30,10 @@ shading_mode = 0
 albedo_color = Color(1, 0.89, 0.65, 1)
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_hud"]
-content_margin_left = 24.0
-content_margin_top = 12.0
-content_margin_right = 16.0
-content_margin_bottom = 12.0
+content_margin_left = 12.0
+content_margin_top = 10.0
+content_margin_right = 12.0
+content_margin_bottom = 10.0
 bg_color = Color(0.13, 0.17, 0.22, 1)
 corner_radius_top_left = 8
 corner_radius_top_right = 8
@@ -78,219 +78,270 @@ cast_shadow = 0
 
 [node name="HUD" type="CanvasLayer" parent="."]
 
-[node name="CameraPanel" type="PanelContainer" parent="HUD"]
-offset_left = 24.0
-offset_top = 24.0
-mouse_force_pass_scroll_events = false
-theme_override_styles/panel = SubResource("StyleBox_hud")
-
-[node name="Controls" type="HBoxContainer" parent="HUD/CameraPanel"]
-layout_mode = 2
-theme_override_constants/separation = 12
-
-[node name="Overview" type="Button" parent="HUD/CameraPanel/Controls"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Overview"
-tooltip_text = "Center the map and zoom out (Home)"
-
-[node name="CameraControls" type="Label" parent="HUD/CameraPanel/Controls"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
-theme_override_font_sizes/font_size = 14
-text = "WASD / arrows to pan
-Middle drag · scroll zoom"
-
 [node name="ClaimMarkers" type="Control" parent="HUD"]
 unique_name_in_owner = true
 mouse_filter = 2
 
-[node name="ScoutRoster" type="PanelContainer" parent="HUD"]
-offset_left = 24.0
-offset_top = 98.0
-offset_right = 265.0
-offset_bottom = 98.0
+[node name="TopBar" type="BoxContainer" parent="HUD"]
+unique_name_in_owner = true
+anchor_right = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = 16.0
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="MatchPanel" type="PanelContainer" parent="HUD/TopBar"]
+layout_mode = 2
+size_flags_horizontal = 0
+mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
-[node name="Readouts" type="VBoxContainer" parent="HUD/ScoutRoster"]
+[node name="StatusAndRestart" type="HBoxContainer" parent="HUD/TopBar/MatchPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="PlayerHP" type="Label" parent="HUD/TopBar/MatchPanel/StatusAndRestart"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.49, 0.88, 1, 1)
+theme_override_font_sizes/font_size = 16
+
+[node name="CPUHP" type="Label" parent="HUD/TopBar/MatchPanel/StatusAndRestart"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(1, 0.68, 0.56, 1)
+theme_override_font_sizes/font_size = 16
+
+[node name="Outcome" type="Label" parent="HUD/TopBar/MatchPanel/StatusAndRestart"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(0.99, 0.81, 0.49, 1)
+theme_override_font_sizes/font_size = 24
+
+[node name="MatchControls" type="VBoxContainer" parent="HUD/TopBar/MatchPanel/StatusAndRestart"]
+layout_mode = 2
+size_flags_vertical = 4
+
+[node name="Restart" type="Button" parent="HUD/TopBar/MatchPanel/StatusAndRestart/MatchControls"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Restart…"
+tooltip_text = "Choose CPU difficulty and start a new match"
+
+[node name="ActiveDifficulty" type="Label" parent="HUD/TopBar/MatchPanel/StatusAndRestart/MatchControls"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
+theme_override_font_sizes/font_size = 14
+horizontal_alignment = 1
+
+[node name="ScoutRoster" type="PanelContainer" parent="HUD/TopBar"]
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_styles/panel = SubResource("StyleBox_hud")
+
+[node name="ScoutAndCamera" type="HBoxContainer" parent="HUD/TopBar/ScoutRoster"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Readouts" type="VBoxContainer" parent="HUD/TopBar/ScoutRoster/ScoutAndCamera"]
 layout_mode = 2
 
-[node name="ScoutCount" type="Label" parent="HUD/ScoutRoster/Readouts"]
+[node name="ScoutCount" type="Label" parent="HUD/TopBar/ScoutRoster/ScoutAndCamera/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="ScoutSlots" type="HBoxContainer" parent="HUD/ScoutRoster/Readouts"]
+[node name="ScoutSlots" type="HBoxContainer" parent="HUD/TopBar/ScoutRoster/ScoutAndCamera/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="ScoutNotice" type="Label" parent="HUD/ScoutRoster/Readouts"]
+[node name="ScoutNotice" type="Label" parent="HUD/TopBar/ScoutRoster/ScoutAndCamera/Readouts"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 autowrap_mode = 3
 
-[node name="MatchPanel" type="PanelContainer" parent="HUD"]
-anchor_left = 0.5
-anchor_right = 0.5
-offset_left = -312.0
-offset_top = 24.0
-offset_right = 312.0
-offset_bottom = 92.0
-mouse_force_pass_scroll_events = false
-theme_override_styles/panel = SubResource("StyleBox_hud")
-
-[node name="StatusAndRestart" type="HBoxContainer" parent="HUD/MatchPanel"]
-layout_mode = 2
-theme_override_constants/separation = 16
-
-[node name="PlayerHP" type="Label" parent="HUD/MatchPanel/StatusAndRestart"]
+[node name="Overview" type="Button" parent="HUD/TopBar/ScoutRoster/ScoutAndCamera"]
 unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.49, 0.88, 1, 1)
-theme_override_font_sizes/font_size = 18
-
-[node name="CPUHP" type="Label" parent="HUD/MatchPanel/StatusAndRestart"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(1, 0.68, 0.56, 1)
-theme_override_font_sizes/font_size = 18
-
-[node name="Outcome" type="Label" parent="HUD/MatchPanel/StatusAndRestart"]
-unique_name_in_owner = true
-visible = false
-custom_minimum_size = Vector2(104, 0)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.99, 0.81, 0.49, 1)
-theme_override_font_sizes/font_size = 24
-
-[node name="MatchControls" type="VBoxContainer" parent="HUD/MatchPanel/StatusAndRestart"]
 layout_mode = 2
 size_flags_vertical = 4
+text = "Overview"
+tooltip_text = "Home for overview. WASD / arrows to pan. Middle drag to pan, scroll to zoom."
 
-[node name="Restart" type="Button" parent="HUD/MatchPanel/StatusAndRestart/MatchControls"]
+[node name="ContextScroll" type="ScrollContainer" parent="HUD"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(104, 0)
-layout_mode = 2
-theme_override_font_sizes/font_size = 18
-text = "Restart…"
-tooltip_text = "Choose CPU difficulty and start a new match"
-
-[node name="ActiveDifficulty" type="Label" parent="HUD/MatchPanel/StatusAndRestart/MatchControls"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
-theme_override_font_sizes/font_size = 14
-horizontal_alignment = 1
-
-[node name="LegendaryBonuses" type="PanelContainer" parent="HUD"]
 visible = false
-anchor_left = 0.5
-anchor_right = 0.5
-offset_left = -161.0
-offset_top = 100.0
-offset_right = 161.0
-offset_bottom = 100.0
+follow_focus = true
+horizontal_scroll_mode = 0
+mouse_force_pass_scroll_events = false
+
+[node name="Cards" type="VBoxContainer" parent="HUD/ContextScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="RegionInspection" type="PanelContainer" parent="HUD/ContextScroll/Cards"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
-[node name="LegendarySummary" type="Label" parent="HUD/LegendaryBonuses"]
+[node name="Readouts" type="VBoxContainer" parent="HUD/ContextScroll/Cards/RegionInspection"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="RegionHeader" type="HBoxContainer" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts"]
+layout_mode = 2
+
+[node name="SelectedRegion" type="Label" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts/RegionHeader"]
 unique_name_in_owner = true
 layout_mode = 2
-horizontal_alignment = 1
-theme_override_colors/font_color = Color(1, 0.83, 0.49, 1)
-theme_override_font_sizes/font_size = 15
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 19
+autowrap_mode = 3
 
-[node name="UnitInspection" type="PanelContainer" parent="HUD"]
+[node name="CloseRegion" type="Button" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts/RegionHeader"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 0
+text = "Close"
+tooltip_text = "Clear region selection (Esc)"
+
+[node name="RegionSlots" type="Label" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+
+[node name="RegionClaimProgress" type="ProgressBar" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts"]
 unique_name_in_owner = true
 visible = false
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -318.0
-offset_top = 24.0
-offset_right = -24.0
-offset_bottom = 24.0
+layout_mode = 2
+show_percentage = false
+custom_minimum_size = Vector2(0, 8)
+
+[node name="Claim" type="Button" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+
+[node name="RegionStatus" type="Label" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 3
+theme_override_colors/font_color = Color(0.73, 0.84, 0.90, 1)
+
+[node name="LandmarkDetails" type="Label" parent="HUD/ContextScroll/Cards/RegionInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.89, 0.68, 1)
+autowrap_mode = 3
+
+[node name="UnitInspection" type="PanelContainer" parent="HUD/ContextScroll/Cards"]
+layout_mode = 2
+unique_name_in_owner = true
+visible = false
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
-[node name="Readouts" type="VBoxContainer" parent="HUD/UnitInspection"]
+[node name="Readouts" type="VBoxContainer" parent="HUD/ContextScroll/Cards/UnitInspection"]
 layout_mode = 2
 mouse_filter = 2
 theme_override_constants/separation = 4
 
-[node name="UnitName" type="Label" parent="HUD/UnitInspection/Readouts"]
+[node name="UnitHeader" type="HBoxContainer" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
+layout_mode = 2
+
+[node name="UnitName" type="Label" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/UnitHeader"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 19
+autowrap_mode = 3
 
-[node name="UnitStats" type="Label" parent="HUD/UnitInspection/Readouts"]
+[node name="CloseInspection" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/UnitHeader"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_vertical = 0
+text = "Close"
+tooltip_text = "Clear unit or building selection (Esc)"
 
-[node name="Divider" type="HSeparator" parent="HUD/UnitInspection/Readouts"]
+[node name="UnitStats" type="Label" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="Divider" type="HSeparator" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 layout_mode = 2
 mouse_filter = 2
 
-[node name="UnitIntent" type="Label" parent="HUD/UnitInspection/Readouts"]
+[node name="UnitIntent" type="Label" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
+autowrap_mode = 3
 
-[node name="UnitStance" type="HBoxContainer" parent="HUD/UnitInspection/Readouts"]
+[node name="UnitStance" type="HBoxContainer" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 layout_mode = 2
 mouse_filter = 2
 theme_override_constants/separation = 8
 
-[node name="StanceLabel" type="Label" parent="HUD/UnitInspection/Readouts/UnitStance"]
+[node name="StanceLabel" type="Label" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/UnitStance"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Stance"
 
-[node name="StancePicker" type="OptionButton" parent="HUD/UnitInspection/Readouts/UnitStance"]
+[node name="StancePicker" type="OptionButton" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/UnitStance"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 allow_reselect = true
 tooltip_text = "Choose a stance to end the current order and apply it immediately."
 
-[node name="TacticalOrders" type="VBoxContainer" parent="HUD/UnitInspection/Readouts"]
+[node name="TacticalOrders" type="VBoxContainer" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 mouse_filter = 2
 
-[node name="Commands" type="HBoxContainer" parent="HUD/UnitInspection/Readouts/TacticalOrders"]
+[node name="Commands" type="HBoxContainer" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/TacticalOrders"]
 layout_mode = 2
 mouse_filter = 2
 
-[node name="MoveOrder" type="Button" parent="HUD/UnitInspection/Readouts/TacticalOrders/Commands"]
+[node name="MoveOrder" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/TacticalOrders/Commands"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Move"
 tooltip_text = "Choose a destination on the map."
 
-[node name="HoldHere" type="Button" parent="HUD/UnitInspection/Readouts/TacticalOrders/Commands"]
+[node name="HoldHere" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/TacticalOrders/Commands"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Hold here"
 tooltip_text = "Defend from the unit's current position."
 
-[node name="HoldOrder" type="Button" parent="HUD/UnitInspection/Readouts/TacticalOrders/Commands"]
+[node name="HoldOrder" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/TacticalOrders/Commands"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Hold at…"
 tooltip_text = "Choose a position to travel to and defend."
 
-[node name="ResumeStance" type="CheckBox" parent="HUD/UnitInspection/Readouts/TacticalOrders"]
+[node name="ResumeStance" type="CheckBox" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/TacticalOrders"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Resume stance after Move"
 tooltip_text = "Leave unchecked to hold at the destination."
 
-[node name="UnitOrderHint" type="Label" parent="HUD/UnitInspection/Readouts"]
+[node name="UnitOrderHint" type="Label" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
@@ -298,135 +349,93 @@ theme_override_font_sizes/font_size = 14
 autowrap_mode = 3
 text = "Right-click ground to move"
 
-[node name="UnitClaimProgress" type="ProgressBar" parent="HUD/UnitInspection/Readouts"]
+[node name="UnitClaimProgress" type="ProgressBar" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 show_percentage = false
 custom_minimum_size = Vector2(0, 8)
 
-[node name="Recall" type="Button" parent="HUD/UnitInspection/Readouts"]
+[node name="Recall" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 text = "Recall Scout"
 tooltip_text = "The expedition ends and its Energy remains spent."
 
-[node name="StatSources" type="Button" parent="HUD/UnitInspection/Readouts"]
+[node name="StatSources" type="Button" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
 toggle_mode = true
 text = "Stat sources"
 
-[node name="StatSourceScroll" type="ScrollContainer" parent="HUD/UnitInspection/Readouts"]
+[node name="StatSourceScroll" type="ScrollContainer" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
 horizontal_scroll_mode = 0
 
-[node name="StatSourceText" type="Label" parent="HUD/UnitInspection/Readouts/StatSourceScroll"]
+[node name="StatSourceText" type="Label" parent="HUD/ContextScroll/Cards/UnitInspection/Readouts/StatSourceScroll"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 autowrap_mode = 3
 
 [node name="EconomyPanel" type="PanelContainer" parent="HUD"]
-anchor_left = 0.5
-anchor_top = 1.0
-anchor_right = 0.5
-anchor_bottom = 1.0
-offset_left = -600.0
-offset_top = -108.0
-offset_right = 600.0
-offset_bottom = -14.0
+unique_name_in_owner = true
 grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
-[node name="ReadoutsAndControls" type="HBoxContainer" parent="HUD/EconomyPanel"]
+[node name="ReadoutsAndControls" type="BoxContainer" parent="HUD/EconomyPanel"]
 layout_mode = 2
-theme_override_constants/separation = 12
+alignment = 1
+theme_override_constants/separation = 8
 
 [node name="Resources" type="HBoxContainer" parent="HUD/EconomyPanel/ReadoutsAndControls"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 4
 theme_override_constants/separation = 10
 
-[node name="ResourceDivider" type="VSeparator" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+[node name="Actions" type="HBoxContainer" parent="HUD/EconomyPanel/ReadoutsAndControls"]
 layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 8
 
-[node name="BarracksCount" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+[node name="Build" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls/Actions"]
 unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_font_sizes/font_size = 18
-
-[node name="Build" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 0)
+custom_minimum_size = Vector2(108, 52)
 layout_mode = 2
 theme_override_font_sizes/font_size = 18
 text = "Build"
 
-[node name="Upgrade" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls"]
+[node name="Upgrade" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls/Actions"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(208, 0)
+custom_minimum_size = Vector2(164, 52)
 layout_mode = 2
-theme_override_font_sizes/font_size = 18
-
-[node name="RegionDivider" type="VSeparator" parent="HUD/EconomyPanel/ReadoutsAndControls"]
-layout_mode = 2
-
-[node name="RegionReadouts" type="VBoxContainer" parent="HUD/EconomyPanel/ReadoutsAndControls"]
-layout_mode = 2
-size_flags_vertical = 4
-theme_override_constants/separation = 0
-
-[node name="SelectedRegion" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(152, 0)
-layout_mode = 2
-theme_override_font_sizes/font_size = 16
-
-[node name="RegionSlots" type="Label" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 14
-
-[node name="RegionClaimProgress" type="ProgressBar" parent="HUD/EconomyPanel/ReadoutsAndControls/RegionReadouts"]
-unique_name_in_owner = true
-visible = false
-layout_mode = 2
-show_percentage = false
-custom_minimum_size = Vector2(0, 8)
-
-[node name="Claim" type="Button" parent="HUD/EconomyPanel/ReadoutsAndControls"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 0)
-layout_mode = 2
-theme_override_font_sizes/font_size = 18
+theme_override_font_sizes/font_size = 15
 
 [node name="IncomeSources" type="PanelContainer" parent="HUD"]
 unique_name_in_owner = true
 visible = false
-anchor_left = 0.5
-anchor_top = 1.0
-anchor_right = 0.5
-anchor_bottom = 1.0
-offset_left = -600.0
-offset_top = -116.0
-offset_right = -250.0
-offset_bottom = -116.0
-grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
 [node name="Readouts" type="VBoxContainer" parent="HUD/IncomeSources"]
 layout_mode = 2
 
+[node name="CloseIncome" type="Button" parent="HUD/IncomeSources/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 8
+text = "Close"
+
 [node name="IncomeSourceScroll" type="ScrollContainer" parent="HUD/IncomeSources/Readouts"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 2
 horizontal_scroll_mode = 0
 
 [node name="IncomeSourceText" type="Label" parent="HUD/IncomeSources/Readouts/IncomeSourceScroll"]
@@ -435,34 +444,38 @@ layout_mode = 2
 size_flags_horizontal = 3
 autowrap_mode = 3
 
-[node name="PurchaseHint" type="Label" parent="HUD/IncomeSources/Readouts"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.73, 0.8, 0.85, 1)
-theme_override_font_sizes/font_size = 14
-text = "Purchases debit stockpiles separately."
-
 [node name="BuildMenu" type="PanelContainer" parent="HUD"]
 unique_name_in_owner = true
 visible = false
-anchor_left = 0.5
-anchor_top = 1.0
-anchor_right = 0.5
-anchor_bottom = 1.0
-offset_left = -154.0
-offset_top = -154.0
-offset_right = 206.0
-offset_bottom = -116.0
-grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
-[node name="BuildScroll" type="ScrollContainer" parent="HUD/BuildMenu"]
+[node name="Readouts" type="VBoxContainer" parent="HUD/BuildMenu"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Header" type="HBoxContainer" parent="HUD/BuildMenu/Readouts"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="HUD/BuildMenu/Readouts/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 20
+text = "Build"
+
+[node name="CloseBuild" type="Button" parent="HUD/BuildMenu/Readouts/Header"]
 unique_name_in_owner = true
 layout_mode = 2
+text = "Close"
+
+[node name="BuildScroll" type="ScrollContainer" parent="HUD/BuildMenu/Readouts"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
 follow_focus = true
 horizontal_scroll_mode = 0
 
-[node name="BuildList" type="VBoxContainer" parent="HUD/BuildMenu/BuildScroll"]
+[node name="BuildList" type="VBoxContainer" parent="HUD/BuildMenu/Readouts/BuildScroll"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -471,52 +484,23 @@ theme_override_constants/separation = 4
 [node name="PlacementPanel" type="PanelContainer" parent="HUD"]
 unique_name_in_owner = true
 visible = false
-anchor_left = 0.5
-anchor_top = 1.0
-anchor_right = 0.5
-anchor_bottom = 1.0
-offset_left = -235.0
-offset_top = -160.0
-offset_right = 235.0
-offset_bottom = -116.0
-grow_vertical = 0
 mouse_force_pass_scroll_events = false
 theme_override_styles/panel = SubResource("StyleBox_hud")
 
 [node name="PlacementControls" type="HBoxContainer" parent="HUD/PlacementPanel"]
 layout_mode = 2
-theme_override_constants/separation = 16
+theme_override_constants/separation = 12
 
 [node name="PlacementStatus" type="Label" parent="HUD/PlacementPanel/PlacementControls"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_font_sizes/font_size = 18
+autowrap_mode = 3
 
 [node name="CancelPlacement" type="Button" parent="HUD/PlacementPanel/PlacementControls"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Cancel"
-
-[node name="LandmarkInspection" type="PanelContainer" parent="HUD"]
-unique_name_in_owner = true
-visible = false
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -325.0
-offset_top = -116.0
-offset_right = -40.0
-offset_bottom = -116.0
-grow_vertical = 0
-theme_override_styles/panel = SubResource("StyleBox_hud")
-
-[node name="LandmarkDetails" type="Label" parent="HUD/LandmarkInspection"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.89, 0.68, 1)
-autowrap_mode = 3
 
 [node name="NarrativeOverlay" type="CanvasLayer" parent="."]
 layer = 10

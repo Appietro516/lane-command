@@ -62,6 +62,7 @@ func _test_lifecycle(scene: Node) -> void:
 	var economy: MatchEconomy = scene.economy
 	var region: MatchRegion = scene.get_region(CONTESTED)
 	var selection := scene.get_node("%SelectedRegion") as Label
+	var region_status := scene.get_node("%RegionStatus") as Label
 	var claim_button := scene.get_node("%Claim") as Button
 	var tile := region.geometry.material_override as StandardMaterial3D
 	var player_buildings := scene.get_node("Buildings/Player")
@@ -83,7 +84,7 @@ func _test_lifecycle(scene: Node) -> void:
 		"The claim creates one visible, configurable outpost in the claimed region.")
 	_check(economy.energy(PLAYER) == 0.0 and scene.owns_region(PLAYER, CONTESTED)
 		and tile.albedo_color == MatchRegion.OWNER_COLORS[PLAYER]
-		and claim_button.disabled and selection.text.contains("Outpost · 6/6 HP"),
+		and claim_button.disabled and region_status.text.contains("Outpost · 6/6 HP"),
 		"The claim spends the configured cost and immediately updates ownership, color and selection.")
 
 	economy.advance(50.0)
@@ -115,7 +116,7 @@ func _test_lifecycle(scene: Node) -> void:
 			break
 		battle.advance(MatchBattle.STEP, economy)
 	scene._refresh_hud()
-	_check(hub.hp == MatchBattle.ATTACK_DAMAGE and selection.text.contains("Outpost · 3/6 HP")
+	_check(hub.hp == MatchBattle.ATTACK_DAMAGE and region_status.text.contains("Outpost · 3/6 HP")
 		and scene._target_label(cpu_unit).contains("Player outpost · 3/6 HP"),
 		"A normal CPU attack deals damage and both inspection surfaces show the remaining HP.")
 	battle.advance(1.0, economy)
@@ -123,7 +124,7 @@ func _test_lifecycle(scene: Node) -> void:
 		and cpu_unit.target != hub.id and battle.navigation.is_passable(hub.position),
 		"Combat removes the destroyed hub, its footprint, and the unit's discarded target.")
 	_check(scene.owns_region(NEUTRAL, CONTESTED) and tile.albedo_color == MatchRegion.OWNER_COLORS[NEUTRAL]
-		and selection.text.contains("Neutral") and not selection.text.contains("Outpost")
+		and selection.text.contains("Neutral") and not region_status.text.contains("Outpost")
 		and not claim_button.disabled, "Loss immediately updates the selected tile and claim control.")
 	_check(scene._expeditions.eligibility(PLAYER, BEYOND) == "Not adjacent"
 		and not scene.try_place_building(PLAYER, BARRACKS, build_point),
@@ -178,7 +179,7 @@ func _test_lifecycle(scene: Node) -> void:
 		and scene.owns_region(CPU, TerritoryLayout.CPU_START)
 		and scene._battle.base_hp(PLAYER) == MatchBattle.BASE_HP
 		and scene._battle.base_hp(CPU) == MatchBattle.BASE_HP
-		and player_buildings.get_child_count() == 0 and selection.text == "Select a region",
+		and player_buildings.get_child_count() == 0 and not selection.is_visible_in_tree(),
 		"Restart clears the outposts, buildings and selection and restores both starting bases.")
 
 

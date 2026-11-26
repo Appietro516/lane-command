@@ -53,6 +53,19 @@ const BUILDINGS := {
 		"icon": preload("res://match/fortifications/wall.svg"),
 	},
 }
+# Order within each section is part of the menu layout.
+const BUILD_SECTIONS := [
+	{ "id": &"economy", "label": "Economy", "entries": [&"generator", &"mine", &"farm"] },
+	{ "id": &"military", "label": "Military", "entries": [&"barracks", &"training_range", &"heavy_factory"] },
+	{ "id": &"fortifications", "label": "Fortifications", "entries": [
+		Fortifications.NEST, Fortifications.MORTAR, Fortifications.WALL,
+	] },
+	{ "id": &"other", "label": "Other", "entries": [] },
+]
+const HUD_MARGIN := 16.0
+const HUD_GAP := 8.0
+const HUD_DOCK_WIDTH := 408.0
+
 const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
 const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
 const UnitAttackEffects := preload("res://match/unit_attack_effects.gd")
@@ -211,6 +224,8 @@ var _cpu_strategy: CpuStrategy
 var cpu_difficulty := DifficultyProfile.DEFAULT_LEVEL
 var _process_mode_before_setup: ProcessMode
 var _build_options: Dictionary[StringName, Button] = {}
+var _build_descriptions: Dictionary[StringName, String] = {}
+var _barracks_menu_interval := -1.0
 
 @onready var _buildings: Dictionary[MatchRegion.Owner, Node3D] = {
 	PLAYER: $Buildings/Player,
@@ -238,10 +253,15 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _income_sources: PanelContainer = %IncomeSources
 @onready var _income_source_scroll: ScrollContainer = %IncomeSourceScroll
 @onready var _income_source_text: Label = %IncomeSourceText
-@onready var _barracks_label: Label = %BarracksCount
 @onready var _build_button: Button = %Build
 @onready var _build_menu: PanelContainer = %BuildMenu
 @onready var _build_list: VBoxContainer = %BuildList
+@onready var _build_scroll: ScrollContainer = %BuildScroll
+@onready var _context_scroll: ScrollContainer = %ContextScroll
+@onready var _context_cards: VBoxContainer = %Cards
+@onready var _top_bar: BoxContainer = %TopBar
+@onready var _economy_panel: PanelContainer = %EconomyPanel
+@onready var _economy_row: BoxContainer = _economy_panel.get_node(^"ReadoutsAndControls")
 @onready var _placement_panel: PanelContainer = %PlacementPanel
 @onready var _placement_label: Label = %PlacementStatus
 @onready var _upgrade_button: Button = %Upgrade
@@ -253,9 +273,9 @@ var _build_options: Dictionary[StringName, Button] = {}
 @onready var _region_claim_progress: ProgressBar = %RegionClaimProgress
 @onready var _region_label: Label = %SelectedRegion
 @onready var _region_slots: Label = %RegionSlots
-@onready var _landmark_panel: PanelContainer = %LandmarkInspection
+@onready var _region_panel: PanelContainer = %RegionInspection
+@onready var _region_status: Label = %RegionStatus
 @onready var _landmark_details: Label = %LandmarkDetails
-@onready var _legendary_summary: Label = %LegendarySummary
 @onready var _camera: StrategyCamera = $Camera
 @onready var _player_hp_label: Label = %PlayerHP
 @onready var _cpu_hp_label: Label = %CPUHP
@@ -278,30 +298,16 @@ func _ready() -> void:
 	_stat_sources.toggled.connect(func(open: bool) -> void:
 		_stat_source_scroll.visible = open
 		_stat_source_scroll.scroll_vertical = 0)
-	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label, _region_slots, _legendary_summary,
+	for label in [_unit_stats, _player_hp_label, _cpu_hp_label, _region_label, _region_slots,
 			_landmark_details]:
 		label.mouse_filter = Control.MOUSE_FILTER_PASS
-	for building_id in BUILDINGS:
-		var definition: Dictionary = BUILDINGS[building_id]
-		var option := Button.new()
-		var profile: Dictionary = Fortifications.PROFILES.get(building_id, definition)
-		option.text = "%s · %s" % [profile.label, MatchEconomy.cost_text(_minimum_build_cost(building_id))]
-		option.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		if building_id == Fortifications.WALL:
-			option.text += " minimum"
-		if definition.has("icon"):
-			option.icon = definition.icon
-		var effect: String = profile.get("description", "")
-		if definition.has("income"):
-			effect = _income_text(definition.income)
-		if not effect.is_empty():
-			option.text += "\n" + effect
-		option.pressed.connect(_begin_placement.bind(building_id))
-		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_build_list.add_child(option)
-		_build_options[building_id] = option
+	_create_build_options()
 	_build_button.pressed.connect(_toggle_build_menu)
-	%CancelPlacement.pressed.connect(_cancel_placement)
+	%CloseBuild.pressed.connect(_dismiss_build)
+	%CloseIncome.pressed.connect(_close_income_sources)
+	%CloseRegion.pressed.connect(_clear_region_selection)
+	%CloseInspection.pressed.connect(_clear_inspection)
+	%CancelPlacement.pressed.connect(_dismiss_build)
 	_preview_material = StandardMaterial3D.new()
 	_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -343,7 +349,14 @@ func _ready() -> void:
 	%MoveOrder.pressed.connect(_begin_unit_order.bind(MatchBattle.Order.MOVE))
 	%HoldOrder.pressed.connect(_begin_unit_order.bind(MatchBattle.Order.HOLD))
 	%HoldHere.pressed.connect(_hold_selected_unit)
-	_unit_panel.minimum_size_changed.connect(_fit_unit_panel)
+	get_viewport().size_changed.connect(_queue_hud_layout)
+	_top_bar.resized.connect(_queue_hud_layout)
+	_economy_panel.resized.connect(_queue_hud_layout)
+	_economy_panel.minimum_size_changed.connect(_queue_hud_layout)
+	_context_cards.minimum_size_changed.connect(_queue_hud_layout)
+	_build_list.minimum_size_changed.connect(_queue_hud_layout)
+	_income_sources.minimum_size_changed.connect(_queue_hud_layout)
+	_placement_panel.minimum_size_changed.connect(_queue_hud_layout)
 	restart_match()
 	if show_match_setup_on_start:
 		_open_match_setup(true)
@@ -352,8 +365,8 @@ func _ready() -> void:
 func _open_match_setup(initial: bool) -> void:
 	if _match_setup.visible:
 		return
-	_pending_pick = Vector2.INF
-	_clear_wall_drag()
+	_cancel_placement()
+	_show_income_sources(&"")
 	_camera.end_drag()
 	_difficulty_picker.select(_difficulty_picker.get_item_index(cpu_difficulty))
 	_describe_difficulty(_difficulty_picker.selected)
@@ -607,11 +620,9 @@ func restart_match() -> void:
 	_expeditions.expedition_completed.connect(_complete_claim)
 	_expeditions.expedition_failed.connect(_show_expedition_notice)
 	_expeditions.assignment_interrupted.connect(_cpu_strategy.on_assignment_interrupted)
-	_claim_button.text = "Claim\n%s" % MatchEconomy.cost_text(_expeditions.claim_cost)
+	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_cost)
 	_scout_notice.hide()
-	_refresh_legendary_summary()
 	_refresh_hud()
-	%BuildScroll.custom_minimum_size.y = minf(_build_list.get_combined_minimum_size().y, 550.0)
 	set_process(true)
 
 
@@ -932,15 +943,133 @@ func _world_position(point: Vector2) -> Vector3:
 	return _regions.to_global(Vector3(point.x, 0.0, point.y))
 
 
+func _create_build_options() -> void:
+	for section: Dictionary in BUILD_SECTIONS:
+		if section.entries.is_empty():
+			continue
+		var group := VBoxContainer.new()
+		group.name = section.id
+		group.add_theme_constant_override("separation", 3)
+		_build_list.add_child(group)
+		var heading := Label.new()
+		heading.text = section.label
+		heading.add_theme_color_override("font_color", Color("#f3ce89"))
+		heading.add_theme_font_size_override("font_size", 16)
+		group.add_child(heading)
+		for building_id: StringName in section.entries:
+			var option := Button.new()
+			option.name = building_id
+			option.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			option.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			option.add_theme_font_size_override("font_size", 14)
+			option.icon = BUILDINGS[building_id].get("icon")
+			option.pressed.connect(_begin_placement.bind(building_id))
+			group.add_child(option)
+			_build_options[building_id] = option
+			_build_descriptions[building_id] = _build_description(building_id)
+
+
+func _build_description(building_id: StringName, barracks_interval := -1.0) -> String:
+	var definition: Dictionary = BUILDINGS[building_id]
+	var profile: Dictionary = Fortifications.PROFILES.get(building_id, definition)
+	var price := MatchEconomy.cost_text(_minimum_build_cost(building_id))
+	if building_id == Fortifications.WALL:
+		price += " per segment"
+	var effect: String = profile.get("description", "")
+	if definition.has("income"):
+		effect = _income_text(definition.income)
+	elif definition.has("unit_type"):
+		var interval: float = barracks_interval if barracks_interval >= 0.0 else definition.interval
+		var unit: Dictionary = UnitCatalog.DEFINITIONS[definition.unit_type]
+		effect = "%s every %ss · %s per unit" % [
+			unit.label, _stat_number(interval), MatchEconomy.cost_text({MatchEconomy.FOOD: unit.food}),
+		]
+	return "%s · %s\n%s" % [profile.label, price, effect]
+
+
+func _refresh_build_options() -> void:
+	var interval := economy.production_interval(PLAYER)
+	if _barracks_menu_interval != interval:
+		_barracks_menu_interval = interval
+		_build_descriptions[&"barracks"] = _build_description(&"barracks", interval)
+
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	var needs_focus := false
+	var availability_changed := false
+	for building_id: StringName in _build_options:
+		var option := _build_options[building_id]
+		var reason := _catalog_block_reason(PLAYER, building_id)
+		var disabled := not reason.is_empty()
+		var description := _build_descriptions[building_id]
+		if disabled:
+			description += "\n" + reason
+		if option.text != description:
+			option.text = description
+		if option.disabled != disabled:
+			option.disabled = disabled
+			option.focus_mode = Control.FOCUS_NONE if disabled else Control.FOCUS_ALL
+			needs_focus = needs_focus or (option == focus_owner and disabled)
+			availability_changed = true
+		option.tooltip_text = reason
+
+	if _build_menu.visible:
+		if availability_changed:
+			_link_build_focus()
+		if needs_focus:
+			_focus_build_menu()
+
+
+func _link_build_focus() -> void:
+	var stops: Array[Button] = [%CloseBuild]
+	for section: Dictionary in BUILD_SECTIONS:
+		for id: StringName in section.entries:
+			if not _build_options[id].disabled:
+				stops.append(_build_options[id])
+	for index in stops.size():
+		var option := stops[index]
+		option.focus_previous = option.get_path_to(stops[posmod(index - 1, stops.size())])
+		option.focus_next = option.get_path_to(stops[(index + 1) % stops.size()])
+		option.focus_neighbor_top = option.focus_previous
+		option.focus_neighbor_bottom = option.focus_next
+		option.focus_neighbor_left = ^"."
+		option.focus_neighbor_right = ^"."
+
+
+func _focus_build_menu() -> void:
+	var close := %CloseBuild as Button
+	var option := close.get_node(close.focus_next) as Button
+	option.grab_focus()
+	if option != close:
+		_reveal_focused_build_option(option)
+
+
+func _reveal_focused_build_option(option: Button) -> void:
+	# Containers sort after the menu becomes visible. Read the row's final bounds.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if _build_menu.visible and option.has_focus():
+		_build_scroll.ensure_control_visible(option)
+
+
 func _toggle_build_menu() -> void:
-	var opening := not _build_menu.visible
+	if _build_menu.visible:
+		_dismiss_build()
+		return
 	_cancel_placement()
-	_build_menu.visible = opening
-	if opening:
-		for option in _build_options.values():
-			if not option.disabled:
-				option.grab_focus()
-				break
+	_show_income_sources(&"")
+	_build_menu.show()
+	_camera.menu_navigation = true
+	_layout_hud()
+	_update_context_visibility()
+	_queue_hud_layout()
+	_link_build_focus()
+	_focus_build_menu()
+	_build_scroll.scroll_vertical = 0
+
+
+func _dismiss_build() -> void:
+	_cancel_placement()
+	_build_button.grab_focus()
 
 
 func _begin_placement(building_id: StringName) -> void:
@@ -972,8 +1101,10 @@ func _cancel_placement() -> void:
 	_clear_wall_drag()
 	_placement_panel.hide()
 	_build_menu.hide()
+	_camera.menu_navigation = false
 	_update_unit_selection()
 	_update_fortification_inspection()
+	_update_context_visibility()
 
 
 func _update_placement_preview(pointer: Vector2) -> void:
@@ -993,14 +1124,15 @@ func _update_placement_preview(pointer: Vector2) -> void:
 	if reason.is_empty():
 		reason = "Click to place" if _preview.visible else "Choose a spot in your territory"
 	_placement_label.text = "%s · %s" % [definition.label, reason]
-	if definition.has("income"):
-		_placement_label.text += "\n" + _income_text(definition.income)
 	if definition.has("range"):
 		_placement_label.text += "\n" + _range_text(definition)
 		_show_ranges(definition, _map_position(_preview.global_position), _preview.visible)
 	else:
 		_hide_ranges()
-	_placement_panel.show()
+	if not _placement_panel.visible:
+		_placement_panel.show()
+		_update_context_visibility()
+		_queue_hud_layout()
 
 
 func _update_wall_preview(pointer: Vector2) -> void:
@@ -1030,7 +1162,10 @@ func _update_wall_preview(pointer: Vector2) -> void:
 		_preview_material.albedo_color = VALID_PREVIEW if valid else INVALID_PREVIEW
 		_preview.show()
 	_placement_label.text = "Wall · %s\n%s" % [reason, details]
-	_placement_panel.show()
+	if not _placement_panel.visible:
+		_placement_panel.show()
+		_update_context_visibility()
+		_queue_hud_layout()
 
 
 
@@ -1097,7 +1232,6 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner) -> void:
 	var landmark := _landmarks.get(region_id) as LegendaryLandmark
 	if landmark != null:
 		faction_stats.set_source_owner(landmark.source_id, side)
-		_refresh_legendary_summary()
 	for placed in _fortifications.values():
 		if not placed.regions.has(region_id):
 			continue
@@ -1152,7 +1286,7 @@ func _input(event: InputEvent) -> void:
 	if not _camera.is_dragging() and (_preview != null or _build_menu.visible):
 		if event.is_action_pressed("ui_cancel") or (event is InputEventMouseButton
 				and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed):
-			_cancel_placement()
+			_dismiss_build()
 			get_viewport().set_input_as_handled()
 			return
 	if _wall_start.is_finite() and event is InputEventMouseButton \
@@ -1174,7 +1308,7 @@ func _clear_wall_drag() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel") and _income_sources.visible:
-		_show_income_sources(&"")
+		_close_income_sources()
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("ui_cancel") and _pending_unit_order != MatchBattle.Order.AUTONOMOUS:
@@ -1184,8 +1318,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("ui_cancel") and (selected_unit() != null
 			or _selected_fortification != MatchBattle.NO_TARGET):
-		_select_unit(MatchBattle.NO_TARGET)
-		_select_fortification(MatchBattle.NO_TARGET)
+		_clear_inspection()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("ui_cancel") and not _selected_region_id.is_empty():
+		_clear_region_selection()
 		get_viewport().set_input_as_handled()
 	elif _placement_id == Fortifications.WALL and event is InputEventMouseButton \
 			and event.button_index == MOUSE_BUTTON_LEFT:
@@ -1202,7 +1338,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if _build_menu.visible:
-				_build_menu.hide()
+				_dismiss_build()
+			elif _income_sources.visible:
+				_close_income_sources()
 			elif _preview != null:
 				# The camera may move before the next physics tick commits the placement.
 				var point: Variant = _ground_point(event.position)
@@ -1314,6 +1452,7 @@ func _select_unit(id: int) -> void:
 		_resume_stance_toggle.set_pressed_no_signal(false)
 	_selected_unit_id = id
 	_update_unit_selection()
+	_update_context_visibility()
 
 
 func _update_unit_selection() -> void:
@@ -1321,14 +1460,14 @@ func _update_unit_selection() -> void:
 	_unit_selection.visible = unit != null
 	_unit_panel.visible = unit != null
 	_route_mesh.clear_surfaces()
-	_recall_button.hide()
-	_unit_claim_progress.hide()
 	var combat_unit := unit != null and unit.type_id != UnitCatalog.SCOUT
 	var can_command := combat_unit and _selected_unit_can_receive_orders()
 	_stance_label.visible = combat_unit
 	_stance_picker.visible = can_command
 	_tactical_orders.visible = can_command
 	if unit == null:
+		_recall_button.hide()
+		_unit_claim_progress.hide()
 		return
 
 	_unit_selection.global_position = _unit_views[unit.id].global_position
@@ -1340,6 +1479,8 @@ func _update_unit_selection() -> void:
 	if scout != null:
 		_update_scout_inspection(unit, scout)
 		return
+	_recall_button.hide()
+	_unit_claim_progress.hide()
 	_stance_label.text = "Stance" if can_command else "Stance  " + _stance_name(unit.stance)
 	if _stance_picker.get_selected_id() != unit.stance:
 		_stance_picker.select(_stance_picker.get_item_index(unit.stance))
@@ -1370,15 +1511,12 @@ func _update_unit_selection() -> void:
 		_draw_unit_route(unit)
 
 
-func _fit_unit_panel() -> void:
-	_unit_panel.size.y = _unit_panel.get_combined_minimum_size().y
-
-
 func _select_fortification(id: int) -> void:
 	if id != _selected_fortification:
 		_stat_sources.button_pressed = false
 	_selected_fortification = id
 	_update_fortification_inspection()
+	_update_context_visibility()
 
 
 func _update_fortification_inspection() -> void:
@@ -1643,6 +1781,8 @@ func _sync_narrative_dialogue() -> void:
 	if _advancing_battle and _has_narrative_decision():
 		return
 	if _has_narrative_decision() and not _event_dialogue.visible:
+		_cancel_placement()
+		_show_income_sources(&"")
 		_owns_narrative_pause = not get_tree().paused
 		get_tree().paused = true
 		_pending_pick = Vector2.INF
@@ -1746,7 +1886,78 @@ func _create_resource_readouts() -> void:
 		readout.add_child(rate)
 
 
+func _clear_region_selection() -> void:
+	_select_region(&"")
+	_refresh_hud()
+
+
+func _clear_inspection() -> void:
+	_select_unit(MatchBattle.NO_TARGET)
+	_select_fortification(MatchBattle.NO_TARGET)
+	_refresh_hud()
+
+
+func _queue_hud_layout() -> void:
+	var tree := get_tree()
+	if not tree.process_frame.is_connected(_layout_hud):
+		tree.process_frame.connect(_layout_hud, CONNECT_ONE_SHOT)
+
+
+func _layout_hud() -> void:
+	var viewport_size := get_viewport().get_visible_rect().size
+	var hud_width := viewport_size.x - 2.0 * HUD_MARGIN
+	var top_contents := _top_bar.get_child(0) as Control
+	var scout_controls := _top_bar.get_child(1) as Control
+	_top_bar.vertical = top_contents.get_combined_minimum_size().x \
+		+ scout_controls.get_combined_minimum_size().x + _top_bar.get_theme_constant("separation") > hud_width
+	_top_bar.offset_bottom = _top_bar.offset_top + _top_bar.get_combined_minimum_size().y
+	var actions := _economy_row.get_node(^"Actions") as Control
+	var padding := _economy_panel.get_theme_stylebox("panel").get_minimum_size().x
+	var single_row_width := _resource_readouts.get_combined_minimum_size().x \
+		+ actions.get_combined_minimum_size().x + _economy_row.get_theme_constant("separation") + padding
+	var bottom_width := minf(single_row_width, hud_width)
+	_economy_row.vertical = bottom_width < single_row_width
+	_economy_panel.size = Vector2(bottom_width, _economy_panel.get_combined_minimum_size().y)
+	_economy_panel.position = Vector2((viewport_size.x - _economy_panel.size.x) * 0.5,
+		viewport_size.y - HUD_MARGIN - _economy_panel.size.y)
+
+	var top := _top_bar.get_rect().end.y + HUD_GAP
+	var bottom := _economy_panel.position.y - HUD_GAP
+	var dock_width := minf(HUD_DOCK_WIDTH, viewport_size.x - 2.0 * HUD_MARGIN)
+	var dock_origin := Vector2(viewport_size.x - HUD_MARGIN - dock_width, top)
+	var available := maxf(bottom - top, 0.0)
+	_context_scroll.position = dock_origin
+	_context_scroll.size = Vector2(dock_width, minf(available, _context_cards.get_combined_minimum_size().y))
+	_build_menu.position = dock_origin
+	_build_menu.size = Vector2(dock_width, minf(available,
+		_build_menu.get_combined_minimum_size().y + _build_list.get_combined_minimum_size().y))
+	_income_sources.position = dock_origin
+	_income_sources.size = Vector2(dock_width, minf(available,
+		_income_sources.get_combined_minimum_size().y + _income_source_text.get_combined_minimum_size().y))
+
+	_placement_panel.size = Vector2(minf(520.0, bottom_width), _placement_panel.get_combined_minimum_size().y)
+	_placement_panel.position = Vector2((viewport_size.x - _placement_panel.size.x) * 0.5,
+		bottom - _placement_panel.size.y)
+
+
+func _update_context_visibility() -> void:
+	var show_context := (_region_panel.visible or _unit_panel.visible) \
+		and not (_build_menu.visible or _income_sources.visible or _placement_panel.visible)
+	if _context_scroll.visible != show_context:
+		_context_scroll.visible = show_context
+		_queue_hud_layout()
+
+
+func _close_income_sources() -> void:
+	if _income_sources.visible:
+		var readout := _resource_readouts.get_node(NodePath(_selected_resource)) as Button
+		_show_income_sources(&"")
+		readout.grab_focus()
+
+
 func _show_income_sources(resource_id: StringName) -> void:
+	if not resource_id.is_empty():
+		_cancel_placement()
 	_selected_resource = resource_id
 	_income_sources.visible = not resource_id.is_empty()
 	_income_source_scroll.scroll_vertical = 0
@@ -1754,6 +1965,8 @@ func _show_income_sources(resource_id: StringName) -> void:
 		readout.set_pressed_no_signal(readout.name == resource_id)
 	if _income_sources.visible:
 		_refresh_resource_readouts()
+	_update_context_visibility()
+	_queue_hud_layout()
 
 
 func _refresh_resource_readouts() -> void:
@@ -1769,8 +1982,9 @@ func _refresh_resource_readouts() -> void:
 			_income_details[resource_id] = _breakdown_text(resource_label + " income", income, "/s", true)
 			readout.tooltip_text = _income_details[resource_id]
 		if resource_id == _selected_resource:
-			_set_breakdown_text(_income_source_text, _income_source_scroll,
-				_income_details[resource_id], 235.0)
+			if _income_source_text.text != _income_details[resource_id]:
+				_income_source_text.text = _income_details[resource_id]
+				_queue_hud_layout()
 
 
 func _invalidate_income_details(stat: StringName) -> void:
@@ -1842,23 +2056,6 @@ func _legendary_effect(stat: StringName, amount: float) -> String:
 	return _format_amount(amount, " " + label, true)
 
 
-func _refresh_legendary_summary() -> void:
-	_legendary_summary.get_parent().visible = not _landmarks.is_empty()
-	var counts := {PLAYER: 0, CPU: 0}
-	var entries := PackedStringArray()
-	for landmark in _landmarks.values():
-		var contribution := faction_stats.inspect_source(landmark.stat, landmark.source_id)
-		if contribution.breakdown.is_empty() or not contribution.breakdown[0].active:
-			continue
-		var side: MatchRegion.Owner = contribution.breakdown[0].owner
-		counts[side] += 1
-		entries.append("%s · %s (%s) · %s" % [_side_label(side), landmark.display_name,
-			str(landmark.region_id).capitalize(), _legendary_effect(landmark.stat, contribution.total)])
-	_legendary_summary.text = "Legendary bonuses · Player %d · CPU %d" % [counts[PLAYER], counts[CPU]]
-	_legendary_summary.tooltip_text = "Claim landmark regions to activate their bonuses." \
-		if entries.is_empty() else "\n".join(entries)
-
-
 func _refresh_hud() -> void:
 	_player_hp_label.text = "Player base · %s HP" % _stat_number(_battle.base_hp(PLAYER))
 	_cpu_hp_label.text = "CPU base · %s HP" % _stat_number(_battle.base_hp(CPU))
@@ -1867,79 +2064,70 @@ func _refresh_hud() -> void:
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
 	_refresh_resource_readouts()
-	_barracks_label.text = "Barracks %d" % economy.barracks_count(PLAYER)
-	for building_id in _build_options:
-		var reason := _catalog_block_reason(PLAYER, building_id)
-		_build_options[building_id].disabled = not reason.is_empty()
-		_build_options[building_id].tooltip_text = reason
-		var definition: Dictionary = BUILDINGS[building_id]
-		if definition.has("unit_type"):
-			var interval: float = economy.production_interval(PLAYER) if building_id == &"barracks" \
-				else definition.interval
-			var unit: Dictionary = UnitCatalog.DEFINITIONS[definition.unit_type]
-			_build_options[building_id].text = "%s · %s\n%s every %ss · %s per unit" % [
-				definition.label, MatchEconomy.cost_text(definition.cost), unit.label,
-				_stat_number(interval), MatchEconomy.cost_text({MatchEconomy.FOOD: unit.food}),
-			]
+	_refresh_build_options()
 	_build_button.disabled = _battle.is_finished()
 	if selected_unit() != null:
 		_update_unit_selection()
 	_update_fortification_inspection()
+	var upgraded := economy.has_upgrade(PLAYER)
+	var upgrade_reason := economy.cost_block_reason(PLAYER, MatchEconomy.UPGRADE_COST)
+	_upgrade_button.disabled = _battle.is_finished() or upgraded or not upgrade_reason.is_empty()
+	_upgrade_button.text = "Barracks upgraded" if upgraded \
+		else "Upgrade Barracks\n%s" % MatchEconomy.cost_text(MatchEconomy.UPGRADE_COST)
 	_upgrade_button.tooltip_text = "Shortens the Barracks production cycle."
-	_upgrade_button.disabled = _battle.is_finished() or not economy.can_upgrade(PLAYER)
-	_upgrade_button.text = (
-		"Upgraded" if economy.has_upgrade(PLAYER)
-		else "Upgrade\n%s" % MatchEconomy.cost_text(MatchEconomy.UPGRADE_COST)
-	)
+	if not upgraded and not upgrade_reason.is_empty():
+		_upgrade_button.tooltip_text += "\n" + upgrade_reason
 	_refresh_claim_control()
 	_refresh_scout_roster()
 	_refresh_claim_markers()
 
 
 func _refresh_claim_control() -> void:
+	var region := get_region(_selected_region_id)
+	_region_panel.visible = region != null
+	if region == null:
+		_claim_button.disabled = true
+		_update_context_visibility()
+		return
+
 	var reason := _expeditions.block_reason(PLAYER, _selected_region_id)
+	var expedition := _expeditions.assignments.get(_selected_region_id) as ScoutExpeditions.Scout
+	_claim_button.visible = region.region_owner == MatchRegion.Owner.NEUTRAL and expedition == null \
+		and not _battle.is_finished()
 	_claim_button.disabled = not reason.is_empty()
 	_claim_button.tooltip_text = reason
-	var expedition := _expeditions.assignments.get(_selected_region_id) as ScoutExpeditions.Scout
 	_update_claim_progress(_region_claim_progress, expedition)
-	if expedition != null:
-		reason = _expedition_text(expedition)
-	var displayed_region := _selected_region_id if _regions_by_id.has(_selected_region_id) \
-		else TerritoryLayout.PLAYER_START
-	var occupancy := region_occupancy(displayed_region)
-	var slots := "Slots %d/%d · %d free" % [occupancy.used, occupancy.capacity, occupancy.free]
-	_region_slots.text = slots if displayed_region == _selected_region_id else "Base " + slots.to_lower()
+
+	var occupancy := region_occupancy(_selected_region_id)
+	_region_slots.text = "Slots %d/%d%s" % [occupancy.used, occupancy.capacity,
+		" · Full" if occupancy.free == 0 else ""]
 	_region_slots.tooltip_text = _slot_breakdown(occupancy)
+	var owner := "Neutral" if region.region_owner == MatchRegion.Owner.NEUTRAL else _side_label(region.region_owner)
+	_region_label.text = "%s · %s" % [str(_selected_region_id).capitalize(), owner]
 	_region_label.tooltip_text = ""
-	if displayed_region == _selected_region_id:
-		var title := str(displayed_region).capitalize()
-		if owns_region(MatchRegion.Owner.NEUTRAL, displayed_region):
-			title += " · Neutral"
-		var outpost := _outposts_by_region.get(displayed_region) as MatchBattle.Outpost
-		if outpost != null:
-			var health := outpost.health_stat()
-			reason = "Outpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(health.total)]
-			_region_label.tooltip_text = _breakdown_text("Maximum HP", health)
-		_region_label.text = "%s\n%s" % [title, reason]
-	else:
-		_region_label.text = reason
+	_region_status.text = reason if _claim_button.visible else ""
+	if expedition != null:
+		_region_status.text = _expedition_text(expedition)
+	var outpost := _outposts_by_region.get(_selected_region_id) as MatchBattle.Outpost
+	if outpost != null:
+		_region_status.text = "Outpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(outpost.max_hp)]
+		_region_label.tooltip_text = _breakdown_text("Maximum HP", outpost.health_stat())
+	_region_status.visible = not _region_status.text.is_empty()
+
 	var landmark := _landmarks.get(_selected_region_id) as LegendaryLandmark
-	_landmark_panel.visible = landmark != null
+	_landmark_details.visible = landmark != null
 	if landmark != null:
 		var contribution := faction_stats.inspect_source(landmark.stat, landmark.source_id)
 		var side := get_region(landmark.region_id).region_owner
 		var active: bool = not contribution.breakdown.is_empty() and contribution.breakdown[0].active
-		var owner := "Neutral" if side == MatchRegion.Owner.NEUTRAL else "%s-controlled" % _side_label(side)
-		_landmark_details.text = "%s · %s\n%s · %s\n%s" % [landmark.display_name,
-			str(landmark.region_id).capitalize(), owner, "Active" if active else "Inactive",
-			_legendary_effect(landmark.stat, contribution.total)]
-		if not active and not contribution.breakdown.is_empty():
-			_landmark_details.text += "\nOn claim · " + _legendary_effect(landmark.stat,
-				contribution.breakdown[0].configured_magnitude)
+		var controller := "Neutral" if side == MatchRegion.Owner.NEUTRAL else "%s-controlled" % _side_label(side)
+		_landmark_details.text = "%s · %s\n%s" % [landmark.display_name,
+			"Active" if active else "Inactive", _legendary_effect(landmark.stat, contribution.total) if active
+			else "On claim · " + _legendary_effect(landmark.stat, landmark.magnitude)]
 		var is_income := MatchEconomy.RESOURCES.has(landmark.stat)
-		_landmark_details.tooltip_text = _breakdown_text("Landmark contribution", contribution,
-			"/s" if is_income else "", is_income)
-
+		_landmark_details.tooltip_text = controller + "\n" + _breakdown_text(
+			"Landmark contribution", contribution, "/s" if is_income else "", is_income)
+	_update_context_visibility()
 
 
 func _slot_breakdown(occupancy: Dictionary) -> String:
@@ -1958,7 +2146,6 @@ func _slot_breakdown(occupancy: Dictionary) -> String:
 		occupancy.inactive.get(Fortifications.WALL, 0)))
 	return "\n".join(lines)
 
-
 func _slot_breakdown_line(label: String, count: int, inactive: int) -> String:
 	var line := "%s × %d" % [label, count]
 	if inactive > 0:
@@ -1967,6 +2154,8 @@ func _slot_breakdown_line(label: String, count: int, inactive: int) -> String:
 
 
 func _use_scout_slot(index: int) -> void:
+	_cancel_placement()
+	_show_income_sources(&"")
 	var scout: ScoutExpeditions.Scout = _expeditions.slots[PLAYER][index]
 	if scout.state == ScoutExpeditions.State.DEAD:
 		if not _expeditions.replace(PLAYER, index):
@@ -2009,12 +2198,17 @@ func _update_scout_inspection(unit: MatchBattle.Unit, scout: ScoutExpeditions.Sc
 	var health := _battle.unit_health_stat(unit)
 	_unit_stats.text = "HP  %s / %s · Noncombat\nSpeed  %s units/s" % [
 		_stat_number(unit.hp), _stat_number(health.total), _stat_number(_battle.unit_speed_stat(unit).total)]
-	_unit_intent.text = _expedition_text(scout) + " · " + str(scout.region_id).capitalize() \
-		if scout.assigned() else _scout_state_text(scout)
+	var region_has_progress := scout.assigned() and scout.region_id == _selected_region_id
+	if region_has_progress:
+		_unit_intent.text = "Expedition to " + str(scout.region_id).capitalize()
+	elif scout.assigned():
+		_unit_intent.text = _expedition_text(scout) + " · " + str(scout.region_id).capitalize()
+	else:
+		_unit_intent.text = _scout_state_text(scout)
 	_recall_button.visible = scout.side == PLAYER and scout.assigned() and not _battle.is_finished()
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
 	_unit_order_hint.text = "Right-click ground to move"
-	_update_claim_progress(_unit_claim_progress, scout)
+	_update_claim_progress(_unit_claim_progress, null if region_has_progress else scout)
 	if not unit.waypoints.is_empty():
 		_draw_unit_route(unit)
 

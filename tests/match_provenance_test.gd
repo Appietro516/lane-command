@@ -58,10 +58,11 @@ func _run() -> void:
 	scene._refresh_hud()
 	await process_frame
 	await process_frame
-	_click(energy.get_global_rect().get_center())
 	_click(sources.get_global_rect().get_center())
-	_check(income_text.is_visible_in_tree() and stat_text.is_visible_in_tree(),
-		"Clicking the HUD readout and inspector button opens both panels.")
+	_check(stat_text.is_visible_in_tree(), "Stat Sources opens the selected unit's breakdown.")
+	_click(energy.get_global_rect().get_center())
+	_check(income_text.is_visible_in_tree() and not stat_text.is_visible_in_tree(),
+		"Clicking a resource gives the income details priority over inspection.")
 	var income := economy.income_stat(PLAYER, ENERGY)
 	_check(income.breakdown.size() == 4 and _matches(income, economy.income_rate(PLAYER, ENERGY))
 		and income_text.text.count("Generator #") == 2 and income_text.text.contains(landmark.display_name)
@@ -114,8 +115,9 @@ func _run() -> void:
 		"The producer inspector explains its health cap and paused output.")
 	scene._select_region(region_id)
 	scene._refresh_hud()
+	_click(energy.get_global_rect().get_center())
 	var landmark_text: String = scene.get_node("%LandmarkDetails").text
-	_check(landmark_text.contains("Neutral · Inactive\n+0/s Energy")
+	_check(landmark_text.contains("Inactive")
 		and landmark_text.contains("On claim · +1/s Energy"),
 		"Landmark inspection distinguishes current and potential contributions.")
 

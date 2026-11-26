@@ -106,14 +106,14 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	var stats: FactionStats = scene.faction_stats
 	var economy: MatchEconomy = scene.economy
 	var details := scene.get_node("%LandmarkDetails") as Label
-	var summary := scene.get_node("%LegendarySummary") as Label
+	var region_title := scene.get_node("%SelectedRegion") as Label
 	var camera := root.get_camera_3d()
 	var mesh := landmark.get_node("Crystal/Upper") as MeshInstance3D
 	var pointer := camera.unproject_position(mesh.global_position)
 	_check(scene._pick_building(pointer) == landmark, "The landmark model is clickable through the camera.")
 	scene._pick_map(pointer)
-	_check(scene._selected_region_id == region_id and details.text.contains("Test Shrine · Region 1")
-		and details.text.contains("Neutral · Inactive"),
+	_check(scene._selected_region_id == region_id and region_title.text.contains("Region 1 · Neutral")
+		and details.text.contains("Test Shrine · Inactive"),
 		"Selecting the landmark shows its name, region, and inactive status.")
 	var claim := scene.get_node("%Claim") as Button
 	_check(not claim.disabled and scene.selected_unit() == null,
@@ -126,8 +126,7 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	var outpost := scene._outposts_by_region[region_id] as MatchBattle.Outpost
 	_check(not landmark.footprint.intersects(Rect2(outpost.position - MatchBattle.OUTPOST_FOOTPRINT,
 		MatchBattle.OUTPOST_FOOTPRINT * 2.0)), "The claim outpost stands apart from the landmark.")
-	_check(details.text.contains("Player-controlled · Active") and summary.text.contains("Player 1 · CPU 0")
-		and summary.tooltip_text.contains("Test Shrine"), "Claiming updates landmark details and active bonuses.")
+	_check(details.text.contains("Test Shrine · Active") and region_title.text.contains("Player"), "Claiming updates landmark details and active bonuses.")
 	_check(stats.value(PLAYER, stat, 80.0) == 80.0 + amount and stats.value(CPU, stat, 80.0) == 80.0,
 		"The claimed modifier applies only to the controlling faction.")
 	var source: Dictionary = stats.inspect(PLAYER, stat, 80.0).breakdown[1]
@@ -180,18 +179,19 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	_check(battle.get_outpost(outpost.id) == null and scene.owns_region(NEUTRAL, region_id)
 		and scene._landmarks[region_id] == landmark and landmark.is_visible_in_tree()
 		and barracks.is_inside_tree(), "Destroying the outpost preserves both the landmark and the barracks.")
-	_check(stats.value(PLAYER, stat, 80.0) == 80.0 and summary.text.contains("Player 0 · CPU 0")
-		and details.text.contains("Neutral · Inactive"), "Outpost loss immediately revokes the source.")
+	_check(stats.value(PLAYER, stat, 80.0) == 80.0 and region_title.text.contains("Neutral")
+		and details.text.contains("Test Shrine · Inactive"), "Outpost loss immediately revokes the source.")
 	enemy.hp = 0.0
 	_check(ScoutFixture.claim(scene, CPU, region_id) and stats.value(CPU, stat, 80.0) == 80.0 + amount
-		and stats.value(PLAYER, stat, 80.0) == 80.0 and details.text.contains("CPU-controlled · Active"),
+		and stats.value(PLAYER, stat, 80.0) == 80.0 and region_title.text.contains("CPU")
+		and details.text.contains("Test Shrine · Active"),
 		"The CPU reclaims the same source without a stale player modifier.")
 	scene.restart_match()
 	_check(scene.faction_stats != stats and snapshot == _snapshot(scene)
 		and scene._landmarks[region_id] == landmark and scene.owns_region(NEUTRAL, region_id)
 		and scene.faction_stats.value(CPU, stat, 80.0) == 80.0
 		and scene.faction_stats.value(PLAYER, stat, 80.0) == 80.0
-		and not scene.get_node("%LandmarkInspection").visible,
+		and not details.is_visible_in_tree(),
 		"Restart keeps the original landmarks and rolls and restores the neutral effects and selection.")
 	scene.free()
 

@@ -84,16 +84,17 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	await process_frame
 	var battle: MatchBattle = scene._battle
 	var claim := scene.get_node("%Claim") as Button
-	var selection := scene.get_node("%SelectedRegion") as Label
+	var selection := scene.get_node("%RegionStatus") as Label
 	var region_progress := scene.get_node("%RegionClaimProgress") as ProgressBar
 	var inspector_progress := scene.get_node("%UnitClaimProgress") as ProgressBar
 	var camera := root.get_camera_3d()
-	_check(claim.disabled and claim.text == "Claim\n50 Energy", "Claim displays the configured price.")
+	_check(claim.disabled and claim.text == "Claim · 50 Energy", "Claim displays the configured price.")
 	_click(camera.unproject_position(scene.get_region(FRONTIER).global_position))
 	_check(claim.disabled and selection.text.contains("Not adjacent"), "Distant neutral regions remain ineligible.")
 	_click(camera.unproject_position(scene.get_region(FIRST).global_position))
 	_check(not claim.disabled and scene.selected_unit() == null,
 		"Selecting an eligible region enables Claim without a selected unit.")
+	await process_frame
 	_click(claim.get_global_rect().get_center())
 	var first := scene._expeditions.assignments.get(FIRST) as Expeditions.Scout
 	_check(first != null and first.state == Expeditions.State.TRAVELING and scene.economy.energy(PLAYER) == 0.0
@@ -115,6 +116,7 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	_click(camera.unproject_position(scene.get_region(OTHER).global_position))
 	_click(camera.unproject_position(scene._unit_views[infantry.id].global_position))
 	_check(not claim.disabled and scene.selected_unit() == infantry, "Claim remains available while inspecting infantry.")
+	await process_frame
 	_click(claim.get_global_rect().get_center())
 	var second := scene._expeditions.assignments.get(OTHER) as Expeditions.Scout
 	_check(second != null and second != first and second.state == Expeditions.State.TRAVELING
@@ -127,6 +129,7 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	var frontier: MatchRegion = scene.get_region(FRONTIER)
 	frontier.neighbor_ids.append(TerritoryLayout.PLAYER_START)
 	_click(camera.unproject_position(frontier.global_position))
+	await process_frame
 	_click(claim.get_global_rect().get_center())
 	_check(claim.disabled and selection.text.contains("No scouts available")
 		and scene.dispatch_scout(PLAYER, FRONTIER) == "No scouts available"
@@ -144,8 +147,8 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	scene._process(0.0)
 	_check(second.state == Expeditions.State.CLAIMING and second.remaining == 20.0
 		and scene.region_at_world_position(scene._world_position(battle.get_unit(second.unit_id).position)) == OTHER
-		and scene._claim_markers.size() == 2 and inspector_progress.visible and region_progress.visible,
-		"Arrival starts the 20-second claim and shows the region and inspector indicators.")
+		and scene._claim_markers.size() == 2 and not inspector_progress.visible and region_progress.visible,
+		"Arrival starts the 20-second claim and shows claim progress once in the selected region.")
 	var build_point: Vector3 = scene.get_region(OTHER).global_position + Vector3(0, 0, 2)
 	scene.economy.advance(15.0)
 	_check(not scene.try_place_building(PLAYER, &"generator", build_point),
@@ -153,8 +156,8 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	battle.advance(5.0, scene.economy)
 	scene._process(0.0)
 	_check(region_progress.value >= 24.0 and region_progress.value <= 26.0
-		and inspector_progress.value == region_progress.value and selection.text.contains("15s"),
-		"Both inspectors show live progress and remaining time.")
+		and not inspector_progress.visible and selection.text.contains("15s"),
+		"The region card shows live progress and remaining time.")
 	paused = true
 	scene.set_process(true)
 	var paused_progress := second.remaining

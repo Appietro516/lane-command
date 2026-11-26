@@ -25,6 +25,7 @@ func _run() -> void:
 	await _test_match_controls()
 	await _test_claimed_placement()
 	await _test_producers()
+	await _test_build_navigation()
 	_test_food_starvation()
 	_test_cpu_purchases()
 	_test_symmetric_production()
@@ -136,7 +137,6 @@ func _test_match_controls() -> void:
 	var income_label := match_scene.get_node("%Resources/energy/Rate") as Label
 	var materials_label := match_scene.get_node("%Resources/materials/Stockpile") as Label
 	var food_label := match_scene.get_node("%Resources/food/Stockpile") as Label
-	var barracks_label: Label = match_scene.get_node("%BarracksCount")
 	var player_buildings := match_scene.get_node("Buildings/Player")
 	var cpu_buildings := match_scene.get_node("Buildings/CPU")
 	var placement_panel := match_scene.get_node("%PlacementPanel") as PanelContainer
@@ -147,7 +147,7 @@ func _test_match_controls() -> void:
 		and materials_label.text == "Materials 30" and food_label.text == "Food 20"
 		and match_scene.get_node("%Resources/materials/Rate").text == "+2/s"
 		and match_scene.get_node("%Resources/food/Rate").text == "+1/s"
-		and barracks_label.text == "Barracks 0", "The HUD renders initial economy values. Rates were %s, %s, %s." % [
+		and not match_scene.has_node("%BarracksCount"), "The HUD renders initial economy values. Rates were %s, %s, %s." % [
 			income_label.text, match_scene.get_node("%Resources/materials/Rate").text,
 			match_scene.get_node("%Resources/food/Rate").text,
 		])
@@ -195,7 +195,7 @@ func _test_match_controls() -> void:
 	_check(player_buildings.get_child_count() == 1
 		and _building_at(player_buildings, first_position),
 		"The barracks appears at the unsnapped cursor position.")
-	_check(energy_label.text == "Energy 10" and barracks_label.text == "Barracks 1"
+	_check(energy_label.text == "Energy 10"
 		and materials_label.text == "Materials 10" and income_label.text == "+3/s"
 		and not build.disabled and match_scene._build_options[&"barracks"].disabled
 		and upgrade.disabled and not placement_panel.visible,
@@ -208,7 +208,7 @@ func _test_match_controls() -> void:
 	_click(upgrade)
 	_check_state(match_scene.economy, PLAYER, [1.0, 1, 2.5], "Upgrade button")
 	_check(energy_label.text == "Energy 1" and food_label.text == "Food 6"
-		and upgrade.disabled and upgrade.text == "Upgraded",
+		and upgrade.disabled and upgrade.text == "Barracks upgraded",
 		"Upgrade updates the HUD immediately.")
 
 	_check(cpu_buildings.get_child_count() >= 2 and match_scene.economy.barracks_count(CPU) >= 1,
@@ -219,7 +219,7 @@ func _test_match_controls() -> void:
 	await _click_world(second_position)
 	_check_state(match_scene.economy, PLAYER, [0.0, 2, 2.5], "Second placed barracks")
 	_check(_building_at(player_buildings, second_position)
-		and barracks_label.text == "Barracks 2" and not build.disabled
+		and not build.disabled
 		and match_scene._build_options[&"barracks"].disabled and upgrade.disabled,
 		"The second freeform placement works and the menu still checks affordability.")
 
@@ -233,7 +233,7 @@ func _test_match_controls() -> void:
 	_check(_stockpiles(match_scene.economy, PLAYER) == stock and placement_panel.visible,
 		"An invalid third placement preserves all resources and keeps placement active.")
 	await _click_world(Vector3(-12.0, 0.0, -3.65))
-	_check(barracks_label.text == "Barracks 3" and player_buildings.get_child_count() == 3
+	_check(player_buildings.get_child_count() == 3
 		and energy_label.text == "Energy 2" and not placement_panel.visible,
 		"The Build menu places the third barracks and charges the normal price.")
 	stock = _stockpiles(match_scene.economy, PLAYER)
@@ -256,6 +256,8 @@ func _test_claimed_placement() -> void:
 	var claimed_position := start.global_position.lerp(region.global_position, 0.505)
 	scene._use_scout_slot(0)
 	await _click_world(claimed_position)
+	await process_frame
+	await process_frame
 	_click(scene.get_node("%Claim"))
 	_check(ScoutFixture.finish_claim(scene, PLAYER, region.region_id), "A successful expedition transfers the clicked region.")
 	scene.economy.advance(27.0)
@@ -415,17 +417,85 @@ func _test_food_starvation() -> void:
 		"The ready barracks spends Food once when affordable without banking additional spawns.")
 
 
+func _test_build_navigation() -> void:
+	var old_scale := root.content_scale_size
+	root.content_scale_size = Vector2i(800, 540)
+	var scene := MATCH_FIXTURE.instantiate()
+	root.add_child(scene)
+	scene.set_process(false)
+	scene.economy.advance(30.0)
+	scene._refresh_hud()
+	var launch := scene.get_node("%Build") as Button
+	var menu := scene.get_node("%BuildMenu") as Control
+	var list := scene.get_node("%BuildList") as VBoxContainer
+	var scroll := scene.get_node("%BuildScroll") as ScrollContainer
+	await process_frame
+	await process_frame
+	_click(launch)
+	await process_frame
+	await process_frame
+	var generator: Button = scene._build_options[&"generator"]
+	var wall: Button = scene._build_options[&"wall"]
+	_check(list.get_child(0).name == &"economy" and list.get_child(1).name == &"military"
+		and list.get_child(2).name == &"fortifications" and list.get_child_count() == 3
+		and root.gui_get_focus_owner() == generator
+		and scroll.get_global_rect().encloses(generator.get_global_rect()),
+		"The ordered sections omit empty Other and focus the first eligible entry.")
+	for step in 8:
+		_press_key(KEY_DOWN)
+		await process_frame
+	var offset := scroll.scroll_vertical
+	_check(root.gui_get_focus_owner() == wall and offset > 0
+		and scroll.get_global_rect().encloses(wall.get_global_rect()),
+		"Arrow navigation reaches Wall and scrolls it into view.")
+	scene._refresh_hud()
+	_check(root.gui_get_focus_owner() == wall and scroll.scroll_vertical == offset,
+		"An affordability refresh preserves the focused row and its scroll position.")
+	_press_key(KEY_ENTER)
+	_check(not menu.visible and scene._placement_id == &"wall", "The focused item enters placement.")
+	_press_key(KEY_ESCAPE)
+	_check(root.gui_get_focus_owner() == launch and scene._placement_id.is_empty(),
+		"Escape cancels placement and restores Build focus.")
+
+	# Only Farm is affordable. Disabled options must stay visible and out of the focus chain.
+	var stock := _stockpiles(scene.economy, PLAYER)
+	_check(scene.economy.try_spend(PLAYER, {ENERGY: int(stock[ENERGY]), MATERIALS: int(stock[MATERIALS]) - 20}),
+		"The fixture can spend down to Farm only.")
+	scene._refresh_hud()
+	_click(launch)
+	await process_frame
+	var farm: Button = scene._build_options[&"farm"]
+	_check(root.gui_get_focus_owner() == farm and generator.disabled
+		and generator.focus_mode == Control.FOCUS_NONE and not generator.tooltip_text.is_empty()
+		and generator.text.contains(generator.tooltip_text), "Disabled entries explain why and yield focus.")
+	_press_key(KEY_ESCAPE)
+	scene.free()
+	root.content_scale_size = old_scale
+
+
+func _press_key(keycode: Key) -> void:
+	var event := InputEventKey.new()
+	event.keycode = keycode
+	event.pressed = true
+	root.push_input(event, true)
+	event = event.duplicate() as InputEventKey
+	event.pressed = false
+	root.push_input(event, true)
+
+
 func _choose_barracks(build: Button) -> void:
 	_click(build)
 	var scene := build.owner
 	var list := scene.get_node("%BuildList") as VBoxContainer
-	var option := list.get_child(0) as Button
+	var option: Button = scene._build_options[&"barracks"]
 	await process_frame
 	await process_frame
-	_check(list.is_visible_in_tree() and list.get_child_count() == scene.BUILDINGS.size()
+	_check(list.is_visible_in_tree() and list.get_child_count() == 3 and scene._build_options.size() == scene.BUILDINGS.size()
 		and option.text.begins_with("Barracks · 40 Energy + 20 Materials\nInfantry every ")
 		and option.text.ends_with("s · 4 Food per unit"),
 		"Build opens the catalog menu with the configured price.")
+	(scene.get_node("%BuildScroll") as ScrollContainer).ensure_control_visible(option)
+	await process_frame
 	_click(option)
 	await process_frame
 
@@ -615,8 +685,7 @@ func _test_expanded_production() -> void:
 			and _stockpiles(scene.economy, side) == {ENERGY: 50.0, MATERIALS: 30.0, FOOD: 20.0}
 			and scene._buildings[side].get_child_count() == 0,
 			"Restart clears expanded production and restores the starting economy for both factions.")
-	_check(ScoutFixture.combat_units(scene._battle).is_empty()
-		and scene.get_node("%BarracksCount").text == "Barracks 0", "Restart clears units and the HUD count.")
+	_check(ScoutFixture.combat_units(scene._battle).is_empty(), "Restart clears combat units.")
 	scene.free()
 
 

@@ -61,7 +61,7 @@ func _test_catalog_and_walls() -> void:
 	var slots := scene.get_node("%RegionSlots") as Label
 	var farm: Button = scene._build_options[FARM]
 	var wall: Button = scene._build_options[Rules.WALL]
-	_check(slots.text.contains("5/5") and slots.text.contains("0 free")
+	_check(slots.text.contains("5/5") and slots.text.contains("Full")
 		and slots.tooltip_text.contains("Heavy Factory") and slots.tooltip_text.contains("Region full")
 		and farm.disabled and farm.tooltip_text.contains("full") and not wall.disabled,
 		"HUD shows regional counts and explains the disabled catalog, while the wall stays available.")
