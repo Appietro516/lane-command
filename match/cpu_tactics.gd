@@ -308,6 +308,21 @@ func _set_producer_stances(scene: Node3D, side: MatchRegion.Owner, danger: Array
 			stance = Stance.IDLE
 		if timer.default_stance != stance:
 			battle.set_producer_stance(side, timer.id, stance)
+		if timer != reserve_producer:
+			if timer.rally_point.is_finite():
+				battle.set_producer_rally(side, timer.id, Vector2.INF)
+			continue
+		var anchor := _site(rally)
+		if timer.rally_point.distance_squared_to(anchor) <= 3.0 ** 2:
+			continue
+		var facing := anchor.direction_to(timer.position)
+		if facing.is_zero_approx():
+			facing = Vector2.RIGHT
+		for angle: float in ORDER_ANGLES:
+			var point := anchor + facing.rotated(angle) * 2.3
+			if scene._layout.region_at(point) == rally.region_id \
+					and battle.set_producer_rally(side, timer.id, point):
+				break
 
 
 static func has_cover(scene: Node3D, side: MatchRegion.Owner, hub: Vector2) -> bool:

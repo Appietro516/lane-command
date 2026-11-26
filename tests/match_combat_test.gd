@@ -456,7 +456,8 @@ func _test_tactical_hud() -> void:
 	var move := scene.get_node("%MoveOrder") as Button
 	var resume := scene.get_node("%ResumeStance") as CheckBox
 	_check(scene.selected_unit() == unit and picker.visible and hold.visible and hold_at.visible
-		and move.visible and resume.visible, "Selecting a combat unit exposes the tactical HUD.")
+		and move.visible and resume.visible and resume.button_pressed,
+		"Selecting a combat unit exposes the tactical HUD and defaults to resuming stance.")
 	_click(picker)
 	await process_frame
 	var popup := picker.get_popup()
@@ -476,7 +477,6 @@ func _test_tactical_hud() -> void:
 	_check(unit.order == MatchBattle.Order.HOLD
 		and unit.ordered_destination.is_equal_approx(Vector2(-2, -2)) and not unit.waypoints.is_empty(),
 		"Hold at accepts a map click and exposes its route.")
-	_click(resume)
 	_click(move)
 	await process_frame
 	_click_at_world(Vector3(-2, 0, 2))
@@ -502,7 +502,7 @@ func _test_tactical_hud() -> void:
 	var fresh: MatchBattle.Unit = scene._battle.spawn_unit(PLAYER, Vector2(-4, 0), Catalog.HEAVY)
 	scene._select_unit(fresh.id)
 	_check(fresh.stance == MatchBattle.Stance.SEEK_NEAREST and fresh.order == MatchBattle.Order.AUTONOMOUS
-		and picker.text == "Seek Nearest" and not resume.button_pressed
+		and picker.text == "Seek Nearest" and resume.button_pressed
 		and scene._pending_unit_order == MatchBattle.Order.AUTONOMOUS,
 		"Restart clears the tactical order, stance and pending click mode.")
 	scene.free()
@@ -589,6 +589,7 @@ func _test_match_scene() -> void:
 		"Clicking a building footprint or enemy unit preserves the prior order.")
 	scene._process(0.5)
 	var first_position := player_view.position
+	scene.get_node("%ResumeStance").button_pressed = false
 	var replacement := Vector3(-7.0, 0.0, -5.0)
 	_click_at_world(replacement, MOUSE_BUTTON_RIGHT)
 	scene._process(2.0)

@@ -34,6 +34,7 @@ const DEFAULT_THREAT_WEIGHTS := Vector2(2.0, 0.25)
 const MILITARY_UNIT_CAP := 48
 const LOCAL_REPATH_INTERVAL := 0.12
 const LOCAL_ROUTE_PROBES := 4
+const FORMATION_ROUTES_PER_STEP := 4
 const BASE_FOOTPRINT := Vector2(1.5, 1.5)
 const BARRACKS_FOOTPRINT := Vector2(1.41, 0.91)
 const SPAWN_EXIT_OFFSET := 0.08
@@ -73,6 +74,7 @@ class Unit:
 	var stance := Stance.SEEK_NEAREST
 	var order := Order.AUTONOMOUS
 	var resume_stance_on_arrival := false
+	var following_rally := false
 	var ordered_destination := Vector2.INF
 	var movement_destination := Vector2.INF
 	var waypoints := PackedVector2Array()
@@ -182,6 +184,7 @@ class ProductionTimer extends Fortification:
 	var elapsed := 0.0
 	var unit_type: StringName
 	var default_stance := Stance.SEEK_NEAREST
+	var rally_point := Vector2.INF
 
 	func interval(economy: MatchEconomy) -> float:
 		return economy.production_interval(side) if kind == &"barracks" else profile.interval
@@ -202,6 +205,7 @@ var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
 var _base_health: Dictionary[MatchRegion.Owner, BuildingHealth] = {}
 var _timers: Array[ProductionTimer] = []
 var _units: Dictionary[int, Unit] = {}
+var _queued_orders: Dictionary[int, Dictionary] = {}
 var _military_count: Dictionary[MatchRegion.Owner, int] = {}
 var _unit_grid := BattleSpatialGrid.new()
 var _structure_grid := BattleSpatialGrid.new()
@@ -331,6 +335,23 @@ func set_producer_stance(side: MatchRegion.Owner, id: int, stance: Stance) -> bo
 			or timer.hp <= 0.0 or not Stance.values().has(stance):
 		return false
 	timer.default_stance = stance
+	return true
+
+
+## Infinity clears a producer's rally. Finite points must be reachable from its exit.
+func set_producer_rally(side: MatchRegion.Owner, id: int, point: Vector2) -> bool:
+	var timer := get_fortification(id) as ProductionTimer
+	if is_finished() or not is_side_active(side) or timer == null or timer.side != side or timer.hp <= 0.0:
+		return false
+	if point == timer.rally_point:
+		return true
+	if point != Vector2.INF:
+		var direction := timer.position.direction_to(point)
+		var spawn := _spawn_position(timer, direction)
+		var clearance: float = UnitCatalog.DEFINITIONS[timer.unit_type].clearance
+		if navigation.with_clearance(clearance).path(spawn, point).is_empty():
+			return false
+	timer.rally_point = point
 	return true
 
 
@@ -518,6 +539,79 @@ func order_hold(side: MatchRegion.Owner, id: int, destination: Variant = null) -
 	return true
 
 
+## Assign formation slots immediately and stagger route searches across fixed steps.
+func order_formation(side: MatchRegion.Owner, ids: Array, destination: Vector2,
+		order: Order, resume_stance: bool) -> int:
+	if not navigation.contains(destination) or order not in [Order.MOVE, Order.HOLD]:
+		return 0
+	var members: Array[Unit] = []
+	var center := Vector2.ZERO
+	var spacing := 0.6
+	for id in ids:
+		var unit := _commandable_unit(side, id)
+		if unit == null or (order == Order.HOLD and unit.type_id == UnitCatalog.SCOUT):
+			continue
+		members.append(unit)
+		center += unit.position
+		spacing = maxf(spacing, float(unit.definition.clearance) * 2.0 + 0.35)
+	if members.is_empty():
+		return 0
+	var forward := (center / members.size()).direction_to(destination)
+	if forward.is_zero_approx():
+		forward = Vector2.UP
+	var right := forward.orthogonal()
+	members.sort_custom(func(a: Unit, b: Unit) -> bool:
+		var across_a := a.position.dot(right)
+		var across_b := b.position.dot(right)
+		return a.id < b.id if across_a == across_b else across_a < across_b)
+	var slots: Array[Vector2] = [destination]
+	var rings := ceili(sqrt(members.size())) + 1
+	for ring in range(1, rings + 1):
+		for index in 8 * ring:
+			var angle := TAU * index / (8 * ring)
+			slots.append(destination + (right * cos(angle) + forward * sin(angle)) * spacing * ring)
+	# Choose the nearest available slot to each unit's offset across the formation.
+	var assigned := 0
+	var columns := ceili(sqrt(members.size()))
+	for index in members.size():
+		var unit := members[index]
+		var desired := destination + right * spacing * clampf((index - (members.size() - 1) * 0.5)
+			/ columns, -columns * 0.5, columns * 0.5)
+		var routes := _unit_navigation(unit)
+		var best := -1
+		var distance := INF
+		for candidate in slots.size():
+			var score := desired.distance_squared_to(slots[candidate])
+			if score < distance and routes.is_passable(slots[candidate]):
+				best = candidate
+				distance = score
+		if best < 0:
+			continue
+		_queued_orders[unit.id] = {"point": slots[best], "order": order, "resume": resume_stance,
+			"rally": false}
+		slots.remove_at(best)
+		assigned += 1
+	return assigned
+
+
+func _process_queued_orders() -> void:
+	var budget := FORMATION_ROUTES_PER_STEP
+	for id in _queued_orders.keys():
+		var request := _queued_orders[id]
+		_queued_orders.erase(id)
+		var unit := get_unit(id)
+		if unit == null or _commandable_unit(unit.side, id) == null:
+			continue
+		var route := _unit_navigation(unit).path(unit.position, request.point)
+		if not route.is_empty():
+			_set_order(unit, request.order, request.point, route)
+			unit.resume_stance_on_arrival = request.resume
+			unit.following_rally = request.rally
+		budget -= 1
+		if budget == 0:
+			break
+
+
 func _commandable_unit(side: MatchRegion.Owner, id: int) -> Unit:
 	var unit := get_unit(id)
 	if is_finished() or unit == null or unit.side != side or unit.scout_committed or unit.hp <= 0.0:
@@ -530,6 +624,8 @@ func _order_move(unit: Unit, destination: Vector2, route: PackedVector2Array) ->
 
 
 func _set_order(unit: Unit, order: Order, destination: Vector2, route: PackedVector2Array) -> void:
+	_queued_orders.erase(unit.id)
+	unit.following_rally = false
 	unit.chase_target = NO_TARGET
 	unit.order = order
 	unit.ordered_destination = destination
@@ -680,14 +776,21 @@ func _advance_production(delta: float, economy: MatchEconomy) -> void:
 				break
 			timer.elapsed = maxf(0.0, timer.elapsed - interval)
 			var hostile := nearest_hostile_base(timer.side, timer.position)
-			var direction := timer.position.direction_to(_bases[hostile])
+			var goal := timer.rally_point if timer.rally_point.is_finite() else _bases[hostile]
+			var direction := timer.position.direction_to(goal)
 			var position := _spawn_position(timer, direction)
-			if spawn_unit(timer.side, position, timer.unit_type, economy, timer.default_stance) == null:
+			var unit := spawn_unit(timer.side, position, timer.unit_type, economy, timer.default_stance)
+			if unit == null:
 				timer.elapsed = interval
 				break
+			if timer.rally_point.is_finite():
+				_queued_orders[unit.id] = {"point": timer.rally_point, "order": Order.MOVE,
+					"resume": true, "rally": true}
 
 
 func _spawn_position(timer: ProductionTimer, direction: Vector2) -> Vector2:
+	if direction.is_zero_approx():
+		direction = Vector2.RIGHT
 	var exits := [direction, Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]
 	var clearance: float = UnitCatalog.DEFINITIONS[timer.unit_type].clearance
 	var routes := navigation.with_clearance(clearance)
@@ -707,6 +810,7 @@ func _spawn_position(timer: ProductionTimer, direction: Vector2) -> Vector2:
 
 func _step_combat(economy: MatchEconomy) -> void:
 	# Plan against the same positions before either side moves or takes damage.
+	_process_queued_orders()
 	var units := active_units()
 	var attacks: Array[Unit] = []
 	_combat_step += 1
@@ -775,6 +879,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 			_unit_grid.erase(unit.id, unit._cell, unit.side)
 			unit._grid = null
 			_units.erase(unit.id)
+			_queued_orders.erase(unit.id)
 			if unit.type_id != UnitCatalog.SCOUT:
 				_military_count[unit.side] -= 1
 			unit_removed.emit(unit.id)
@@ -946,6 +1051,10 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 			if unit.blocked_revision == navigation.revision and not unit.wall_approach.is_empty():
 				return _plan_breach(unit, unit.ordered_destination, true)
 			_route_to(unit, unit.ordered_destination)
+			if unit.following_rally:
+				if unit.waypoints.is_empty() and unit.position != unit.ordered_destination:
+					_resume_stance(unit)
+				return false
 			return unit.type_id != UnitCatalog.SCOUT and unit.waypoints.is_empty() \
 				and unit.position != unit.ordered_destination \
 				and _plan_breach(unit, unit.ordered_destination, true)

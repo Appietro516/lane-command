@@ -94,6 +94,9 @@ const CLAIM_DISCOVERY := &"claim_completed"
 
 signal return_to_setup_requested
 signal claim_completed(faction: MatchRegion.Owner, region: StringName, scout_id: int)
+enum GroundTarget { NONE, RALLY, MISSILE }
+
+const SELECTION_DRAG_THRESHOLD := 7.0
 const ROUTE_HEIGHT := 0.12
 const ROUTE_HALF_WIDTH := 0.045
 const ROUTE_TIP_RADIUS := 0.18
@@ -207,6 +210,14 @@ var _selected_region_id: StringName = &""
 var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _unit_materials: Dictionary[StringName, StandardMaterial3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
+var _selected_units: Dictionary[int, bool] = {}
+var _group_rings: Array[MeshInstance3D] = []
+var _selection_origin := Vector2.INF
+var _selection_dragged := false
+@onready var _selection_box := Panel.new()
+var _ground_target := GroundTarget.NONE
+var _ground_target_hint := ""
+var _rally_ring: MeshInstance3D
 var _pending_unit_order := MatchBattle.Order.AUTONOMOUS
 var _order_hint := ""
 var _route_mesh := ImmediateMesh.new()
@@ -310,6 +321,18 @@ func configure_match(settings: MatchSettings, layout: TerritoryLayout) -> void:
 
 func _ready() -> void:
 	_unit_route.mesh = _route_mesh
+	var selection_style := StyleBoxFlat.new()
+	selection_style.bg_color = Color(0.29, 0.76, 1.0, 0.15)
+	selection_style.border_color = Color(0.59, 0.85, 1.0, 0.95)
+	selection_style.set_border_width_all(1)
+	_selection_box.add_theme_stylebox_override("panel", selection_style)
+	_selection_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_selection_box.hide()
+	$HUD.add_child(_selection_box)
+	get_window().focus_exited.connect(_cancel_selection_drag)
+	get_window().mouse_exited.connect(_cancel_selection_drag)
+	%SetRally.pressed.connect(_begin_ground_target.bind(GroundTarget.RALLY))
+	%ClearRally.pressed.connect(_clear_rally)
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
 	_stat_sources.toggled.connect(func(open: bool) -> void:
@@ -332,6 +355,8 @@ func _ready() -> void:
 	_splash_ring = _create_radius_ring(Color("#ffa977"), 0.06)
 	add_child(_range_ring)
 	add_child(_splash_ring)
+	_rally_ring = _create_radius_ring(Color("#9de8ff"), 0.12)
+	add_child(_rally_ring)
 	add_child(_shot_effects)
 	add_child(_unit_attack_effects)
 	_unit_attack_effects.global_transform = _regions.global_transform
@@ -1151,6 +1176,8 @@ func _begin_placement(building_id: StringName) -> void:
 
 
 func _cancel_placement() -> void:
+	_cancel_selection_drag()
+	_clear_ground_target()
 	_clear_pending_unit_order()
 	if _preview != null:
 		remove_child(_preview)
@@ -1343,6 +1370,21 @@ func _map_position(world_position: Vector3) -> Vector2:
 
 
 func _input(event: InputEvent) -> void:
+	if _selection_origin.is_finite():
+		if event is InputEventMouseMotion:
+			_update_selection_drag(event.position)
+		elif event is InputEventMouseButton:
+			if event.button_index == MOUSE_BUTTON_MIDDLE and event.pressed:
+				_cancel_selection_drag()
+			elif event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
+				# If the HUD consumes the release, cancel rather than issue an order.
+				_cancel_selection_drag.call_deferred()
+	if _ground_target != GroundTarget.NONE and (event.is_action_pressed("ui_cancel")
+			or event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed):
+		_clear_ground_target()
+		_update_fortification_inspection()
+		get_viewport().set_input_as_handled()
+		return
 	if not _camera.is_dragging() and (_preview != null or _build_menu.visible):
 		if event.is_action_pressed("ui_cancel") or (event is InputEventMouseButton
 				and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed):
@@ -1367,6 +1409,24 @@ func _clear_wall_drag() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _camera.is_dragging():
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT \
+			and not _battle.is_finished() and _placement_id.is_empty():
+		if event.pressed:
+			_selection_origin = event.position
+			_selection_dragged = false
+		elif _selection_origin.is_finite():
+			_update_selection_drag(event.position)
+			if _selection_dragged:
+				_select_in_rectangle(Rect2(_selection_origin, event.position - _selection_origin).abs(),
+					event.shift_pressed, event.ctrl_pressed)
+			elif _selected_unit_can_receive_orders():
+				_clear_pending_unit_order()
+				_issue_unit_order_at(event.position, MatchBattle.Order.MOVE)
+			_cancel_selection_drag()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("ui_cancel") and _income_sources.visible:
 		_close_income_sources()
 		get_viewport().set_input_as_handled()
@@ -1376,7 +1436,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_update_unit_selection()
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("ui_cancel") and (selected_unit() != null
+	if event.is_action_pressed("ui_cancel") and (not _selected_units.is_empty()
 			or _selected_fortification != MatchBattle.NO_TARGET):
 		_clear_inspection()
 		get_viewport().set_input_as_handled()
@@ -1405,15 +1465,81 @@ func _unhandled_input(event: InputEvent) -> void:
 				# The camera may move before the next physics tick commits the placement.
 				var point: Variant = _ground_point(event.position)
 				_pending_pick = _map_position(point) if point != null else Vector2.INF
+			elif _ground_target != GroundTarget.NONE:
+				_commit_ground_target(event.position)
 			elif _pending_unit_order != MatchBattle.Order.AUTONOMOUS:
 				_issue_unit_order_at(event.position, _pending_unit_order)
 			else:
 				_pick_map(event.position)
 			get_viewport().set_input_as_handled()
-		elif event.button_index == MOUSE_BUTTON_RIGHT and _selected_unit_can_receive_orders():
-			_clear_pending_unit_order()
-			_issue_unit_order_at(event.position, MatchBattle.Order.MOVE)
-			get_viewport().set_input_as_handled()
+
+
+func _update_selection_drag(pointer: Vector2) -> void:
+	if pointer.distance_squared_to(_selection_origin) >= SELECTION_DRAG_THRESHOLD ** 2:
+		_selection_dragged = true
+	if _selection_dragged:
+		var rectangle := Rect2(_selection_origin, pointer - _selection_origin).abs()
+		_selection_box.position = rectangle.position
+		_selection_box.size = rectangle.size.max(Vector2.ONE)
+		_selection_box.show()
+
+
+func _cancel_selection_drag() -> void:
+	_selection_origin = Vector2.INF
+	_selection_dragged = false
+	_selection_box.hide()
+
+
+func _select_in_rectangle(rectangle: Rect2, extend: bool, subtract: bool) -> void:
+	if not extend and not subtract:
+		_selected_units.clear()
+	else:
+		# A single enemy may be inspected, but can never enter the command group.
+		var inspected := selected_unit()
+		if inspected != null and inspected.side != PLAYER:
+			_selected_units.clear()
+	for id in _unit_views:
+		var unit := _battle.get_unit(id)
+		if unit == null or unit.side != PLAYER or unit.hp <= 0.0:
+			continue
+		var point := _unit_views[id].global_position
+		if _camera.is_position_behind(point) or not rectangle.has_point(_camera.unproject_position(point)):
+			continue
+		if subtract:
+			_selected_units.erase(id)
+		else:
+			_selected_units[id] = true
+	_select_fortification(MatchBattle.NO_TARGET)
+	_select_region(&"")
+	_refresh_unit_selection()
+
+
+func _begin_ground_target(mode: GroundTarget) -> void:
+	_clear_pending_unit_order()
+	_ground_target = mode
+	_ground_target_hint = "Click ground to set rally point · Esc to cancel"
+	_update_fortification_inspection()
+
+
+func _clear_ground_target() -> void:
+	_ground_target = GroundTarget.NONE
+	_ground_target_hint = ""
+
+
+func _commit_ground_target(pointer: Vector2) -> void:
+	var ground: Variant = _ground_point(pointer)
+	if _ground_target == GroundTarget.RALLY:
+		if ground != null and _battle.set_producer_rally(PLAYER, _selected_fortification, _map_position(ground)):
+			_clear_ground_target()
+		else:
+			_ground_target_hint = "Choose reachable ground · Esc to cancel"
+	_update_fortification_inspection()
+
+
+func _clear_rally() -> void:
+	if _battle.set_producer_rally(PLAYER, _selected_fortification, Vector2.INF):
+		_clear_ground_target()
+		_update_fortification_inspection()
 
 
 func _physics_process(_delta: float) -> void:
@@ -1507,16 +1633,30 @@ func _pick_unit(pointer: Vector2) -> int:
 
 
 func _select_unit(id: int) -> void:
-	if id != _selected_unit_id:
-		_stat_sources.button_pressed = false
-		_clear_pending_unit_order()
-		_resume_stance_toggle.set_pressed_no_signal(false)
-	_selected_unit_id = id
+	if _selected_units.size() <= 1 and id == _selected_unit_id:
+		_update_unit_selection()
+		return
+	_selected_units.clear()
+	if id != MatchBattle.NO_TARGET:
+		_selected_units[id] = true
+	_refresh_unit_selection()
+
+
+func _refresh_unit_selection() -> void:
+	_stat_sources.button_pressed = false
+	_clear_pending_unit_order()
+	_selected_unit_id = _selected_units.keys()[0] if _selected_units.size() == 1 else MatchBattle.NO_TARGET
 	_update_unit_selection()
 	_update_context_visibility()
 
 
 func _update_unit_selection() -> void:
+	var group := _placement_id.is_empty() and _selected_units.size() > 1
+	if group:
+		_update_group_rings()
+		_update_group_inspection()
+		return
+	_hide_group_rings()
 	var unit := selected_unit() if _placement_id.is_empty() and _battle != null else null
 	_unit_selection.visible = unit != null
 	_unit_panel.visible = unit != null
@@ -1572,8 +1712,75 @@ func _update_unit_selection() -> void:
 		_draw_unit_route(unit)
 
 
+func _hide_group_rings() -> void:
+	for ring in _group_rings:
+		ring.hide()
+
+
+func _update_group_rings() -> void:
+	var index := 0
+	for id in _selected_units:
+		var unit := _battle.get_unit(id)
+		if unit == null or not _unit_views.has(id):
+			continue
+		if index == _group_rings.size():
+			var marker := _unit_selection.duplicate() as MeshInstance3D
+			add_child(marker)
+			_group_rings.append(marker)
+		var ring := _group_rings[index]
+		ring.global_position = _unit_views[id].global_position
+		ring.scale = Vector3.ONE * float(unit.definition.selection_scale)
+		ring.show()
+		index += 1
+	for remaining in range(index, _group_rings.size()):
+		_group_rings[remaining].hide()
+
+
+func _update_group_inspection() -> void:
+	_unit_selection.hide()
+	_unit_panel.show()
+	_stat_sources.hide()
+	_unit_stats.tooltip_text = ""
+	_route_mesh.clear_surfaces()
+	_recall_button.hide()
+	_unit_claim_progress.hide()
+	var counts := {}
+	var current_hp := 0.0
+	var maximum_hp := 0.0
+	var stance_id := -1
+	var mixed_stances := false
+	var military := false
+	for id in _selected_units:
+		var unit := _battle.get_unit(id)
+		if unit == null:
+			continue
+		counts[unit.type_id] = counts.get(unit.type_id, 0) + 1
+		current_hp += unit.hp
+		maximum_hp += _battle.stats.value(unit.side, FactionStats.UNIT_MAX_HP, unit.definition.hp)
+		if unit.type_id != UnitCatalog.SCOUT:
+			military = true
+			mixed_stances = mixed_stances or (stance_id >= 0 and stance_id != unit.stance)
+			stance_id = unit.stance
+	var types := PackedStringArray()
+	for type in UnitCatalog.DEFINITIONS:
+		if counts.has(type):
+			types.append("%s × %d" % [UnitCatalog.DEFINITIONS[type].label, counts[type]])
+	_unit_name.text = "Player selection · %d units" % _selected_units.size()
+	_unit_name.modulate = _faction_accent(PLAYER).albedo_color.lightened(0.25)
+	_unit_stats.text = "Combined HP  %s / %s" % [_stat_number(current_hp), _stat_number(maximum_hp)]
+	_unit_intent.text = " · ".join(types)
+	_stance_label.visible = military
+	_stance_label.text = "Mixed stances" if mixed_stances else "Stance"
+	_stance_picker.visible = military
+	_stance_picker.select(-1 if mixed_stances else _stance_picker.get_item_index(stance_id))
+	_tactical_orders.visible = military
+	_unit_order_hint.show()
+	_unit_order_hint.text = "Right-click ground to move" if _order_hint.is_empty() else _order_hint
+
+
 func _select_fortification(id: int) -> void:
 	if id != _selected_fortification:
+		_clear_ground_target()
 		_stat_sources.button_pressed = false
 	_selected_fortification = id
 	_update_fortification_inspection()
@@ -1581,17 +1788,22 @@ func _select_fortification(id: int) -> void:
 
 
 func _update_fortification_inspection() -> void:
+	%RallyControls.hide()
+	_rally_ring.hide()
 	var placed: PlacedFortification = _fortifications.get(_selected_fortification)
 	if placed == null or not _placement_id.is_empty():
 		_producer_stance.hide()
 		if _placement_id.is_empty():
 			_hide_ranges()
-		if selected_unit() == null or not _placement_id.is_empty():
+		if _selected_units.is_empty() or not _placement_id.is_empty():
 			_unit_panel.hide()
 		return
 	var fort := placed.defense
 	_producer_stance.visible = fort is MatchBattle.ProductionTimer
 	_unit_panel.show()
+	_tactical_orders.hide()
+	_stance_label.hide()
+	_stance_picker.hide()
 	_stat_sources.show()
 	_unit_name.text = "%s %s" % [_side_label(fort.side), fort.profile.label]
 	_unit_name.modulate = _faction_accent(fort.side).albedo_color.lightened(0.25)
@@ -1609,6 +1821,10 @@ func _update_fortification_inspection() -> void:
 		_unit_intent.text += "\nProduction  " + ("%.1fs remaining" % remaining
 			if remaining > MatchBattle.TIME_EPSILON else "Cycle complete")
 		var can_configure := fort.side == PLAYER and not _battle.is_finished()
+		%RallyControls.visible = can_configure
+		%ClearRally.disabled = not fort.rally_point.is_finite()
+		_show_radius_ring(_rally_ring, 0.42, Vector3(fort.rally_point.x, 0.17, fort.rally_point.y),
+			fort.rally_point.is_finite())
 		_producer_stance_picker.visible = can_configure
 		_producer_stance_label.text = "Default behavior" if can_configure \
 			else "Default behavior  " + _stance_name(fort.default_stance)
@@ -1623,7 +1839,8 @@ func _update_fortification_inspection() -> void:
 	_refresh_stat_sources(details)
 	if fort.profile.get("range", 0.0) > 0.0:
 		_unit_intent.text += "\n" + _range_text(fort.profile).replace(" · ", "\n")
-	_unit_order_hint.hide()
+	_unit_order_hint.visible = not _ground_target_hint.is_empty()
+	_unit_order_hint.text = _ground_target_hint
 	_show_ranges(fort.profile, fort.position, true)
 
 
@@ -1696,13 +1913,20 @@ func _hide_ranges() -> void:
 
 
 func _selected_unit_can_receive_orders() -> bool:
-	var unit := selected_unit()
-	return unit != null and unit.side == PLAYER and not unit.scout_committed and not _battle.is_finished()
+	for id in _selected_units:
+		if _battle._commandable_unit(PLAYER, id) != null:
+			return true
+	return false
 
 
 func _selected_combat_unit_can_receive_orders() -> bool:
-	return _selected_unit_can_receive_orders() and selected_unit().type_id != UnitCatalog.SCOUT \
-		and _placement_id.is_empty() and not _build_menu.visible
+	if not _placement_id.is_empty() or _build_menu.visible:
+		return false
+	for id in _selected_units:
+		var unit := _battle._commandable_unit(PLAYER, id)
+		if unit != null and unit.type_id != UnitCatalog.SCOUT:
+			return true
+	return false
 
 
 func _clear_pending_unit_order() -> void:
@@ -1711,10 +1935,12 @@ func _clear_pending_unit_order() -> void:
 
 
 func _apply_selected_stance(index: int) -> void:
-	if _selected_combat_unit_can_receive_orders() and _battle.set_unit_stance(
-			PLAYER, _selected_unit_id, _stance_picker.get_item_id(index), true):
-		_clear_pending_unit_order()
-		_update_unit_selection()
+	if not _selected_combat_unit_can_receive_orders():
+		return
+	for id in _selected_units:
+		_battle.set_unit_stance(PLAYER, id, _stance_picker.get_item_id(index), true)
+	_clear_pending_unit_order()
+	_update_unit_selection()
 
 
 func _apply_producer_stance(index: int) -> void:
@@ -1732,7 +1958,9 @@ func _begin_unit_order(order: MatchBattle.Order) -> void:
 
 
 func _hold_selected_unit() -> void:
-	if _selected_combat_unit_can_receive_orders() and _battle.order_hold(PLAYER, _selected_unit_id):
+	if _selected_combat_unit_can_receive_orders():
+		for id in _selected_units:
+			_battle.order_hold(PLAYER, id)
 		_clear_pending_unit_order()
 		_update_unit_selection()
 
@@ -1742,7 +1970,10 @@ func _issue_unit_order_at(pointer: Vector2, order: MatchBattle.Order) -> void:
 	var accepted := false
 	if point != null and _pick_unit(pointer) == MatchBattle.NO_TARGET:
 		var destination := _map_position(point)
-		if order == MatchBattle.Order.HOLD:
+		if _selected_units.size() > 1:
+			accepted = _battle.order_formation(PLAYER, _selected_units.keys(), destination,
+				order, _resume_stance_toggle.button_pressed) > 0
+		elif order == MatchBattle.Order.HOLD:
 			accepted = _battle.order_hold(PLAYER, _selected_unit_id, destination)
 		else:
 			accepted = _battle.issue_move(_selected_unit_id, destination,
@@ -1946,8 +2177,8 @@ func _remove_unit(unit_id: int) -> void:
 	_units.remove_child(view)
 	view.queue_free()
 	_unit_views.erase(unit_id)
-	if _selected_unit_id == unit_id:
-		_select_unit(MatchBattle.NO_TARGET)
+	if _selected_units.erase(unit_id):
+		_refresh_unit_selection()
 
 
 func _hide_base(side: MatchRegion.Owner) -> void:
@@ -2198,7 +2429,7 @@ func _refresh_hud() -> void:
 	_refresh_resource_readouts()
 	_refresh_build_options()
 	_build_button.disabled = _battle.is_finished()
-	if selected_unit() != null:
+	if not _selected_units.is_empty():
 		_update_unit_selection()
 	_update_fortification_inspection()
 	var upgraded := economy.has_upgrade(PLAYER)
