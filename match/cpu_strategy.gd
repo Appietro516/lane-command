@@ -129,6 +129,8 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 	for unit in units:
 		if unit.type_id == UnitCatalog.SCOUT:
 			continue
+		if unit.side == NEUTRAL:
+			continue
 		var counts := allies if unit.side == side else enemies
 		counts[unit.type_id] = counts.get(unit.type_id, 0) + 1
 		if unit.side == side:

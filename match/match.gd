@@ -224,6 +224,7 @@ var active_map_seed: int:
 		return _layout.active_seed if _layout != null else map_seed
 
 @export var fog_enabled := true
+@export var neutral_objectives_enabled := true
 @export_range(0.1, 1.0, 0.05) var fog_update_interval := BattleVisibility.UPDATE_INTERVAL
 
 var _battle: MatchBattle
@@ -806,6 +807,8 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 		"replacement_energy": scout_replacement_energy,
 		"replacement_delay": scout_replacement_delay,
 	})
+	if neutral_objectives_enabled:
+		_place_neutral_objectives()
 	_expeditions.expedition_completed.connect(_complete_claim)
 	_expeditions.expedition_failed.connect(_show_expedition_notice)
 	_expeditions.assignment_interrupted.connect(_on_assignment_interrupted)
@@ -814,6 +817,34 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	_reset_intelligence()
 	_refresh_hud()
 	set_process(true)
+
+
+func _place_neutral_objectives() -> void:
+	var candidates: Array[Vector2] = []
+	for region in _regions_by_id.values():
+		if _initial_owners[region.region_id] != MatchRegion.Owner.NEUTRAL:
+			continue
+		var anchor: Vector2 = region.interior_point()
+		var point: Vector2 = region.interior_point(func(candidate: Vector2) -> bool:
+			if candidate.distance_squared_to(anchor) < 2.0 ** 2:
+				return false
+			return _battle.navigation.is_passable(candidate))
+		if point.is_finite():
+			candidates.append(point)
+	if candidates.is_empty():
+		return
+	candidates.sort_custom(func(a: Vector2, b: Vector2) -> bool:
+		return a.length_squared() < b.length_squared())
+	_battle.objectives.add_camp(candidates.pop_front(), true)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = active_map_seed ^ 0x4A554E474C45
+	for index in mini(4, candidates.size()):
+		var chosen := rng.randi_range(index, candidates.size() - 1)
+		var point := candidates[chosen]
+		candidates[chosen] = candidates[index]
+		_battle.objectives.add_camp(point, false)
+	_battle.objectives.advance(_battle, economy, 0.0)
+
 
 
 func _process(delta: float) -> void:
@@ -927,6 +958,8 @@ func _building_site_block_reason(side: MatchRegion.Owner, building_id: StringNam
 		return "Choose a spot in your territory"
 	if not _battle.navigation.contains_footprint(polygon):
 		return "Keep the entire footprint on the map"
+	if _battle.objectives.reserves_footprint(polygon):
+		return "Keep the objective site clear"
 	for region_id in covered:
 		if get_region(region_id).ruined:
 			return "Permanently ruined terrain"
@@ -2573,6 +2606,8 @@ func _update_unit_view(unit: MatchBattle.Unit, view: MeshInstance3D) -> void:
 	view.global_position = _regions.to_global(Vector3(unit.position.x, 0.14, unit.position.y))
 	# Unit meshes face +Z before yaw.
 	view.rotation.y = atan2(unit.heading.x, unit.heading.y)
+	if unit.side == MatchRegion.Owner.NEUTRAL:
+		view.scale = Vector3.ONE * (1.65 if unit.type_id == UnitCatalog.STRONGHOLD_GUARD else 1.25)
 	view.visible = _battle.can_observe_unit(PLAYER, unit)
 
 
@@ -3113,6 +3148,19 @@ func _refresh_intelligence() -> void:
 		var contact := intel.structures[id]
 		if not _battle.can_see(PLAYER, contact.point):
 			desired[id] = {"point": contact.point, "label": contact.label + " · Last seen"}
+	for camp in _battle.objectives.camps:
+		if not camp.observed.has(PLAYER):
+			continue
+		var id := StringName("camp/%d" % camp.id)
+		var visible_now := _battle.can_see(PLAYER, camp.point)
+		var label := "Stronghold" if camp.major else "Jungle Camp"
+		if visible_now and camp.drop_until > _battle.elapsed_time():
+			label = "Collect siege boon" if camp.major else "Collect camp boon"
+		elif not visible_now:
+			label += " · Last seen"
+		elif camp.guard_id == MatchBattle.NO_TARGET:
+			label += " · Respawning"
+		desired[id] = {"point": camp.point, "label": label, "color": Color("#e7bb72")}
 	for contact in _battle.radar.contacts_for(PLAYER):
 		if _battle.can_see(PLAYER, contact.point):
 			continue

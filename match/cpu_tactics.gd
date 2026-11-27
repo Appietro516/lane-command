@@ -12,7 +12,7 @@ const RESERVE_TIME := 12.0
 const ROUTE_RETRY := 6.0
 const ORDER_ANGLES := [0.0, PI / 4.0, -PI / 4.0, PI / 2.0, -PI / 2.0]
 
-enum Role { RESERVE, DEFEND, ASSAULT, INTERCEPT }
+enum Role { RESERVE, DEFEND, ASSAULT, INTERCEPT, CAMP }
 
 
 class Threat:
@@ -105,6 +105,8 @@ func decide(scene: Node3D, side: MatchRegion.Owner, difficulty: Dictionary, owne
 		_staff_post(battle, side, available, post, rally, goal, reserve_size, false, now)
 
 	_intercept_launches(battle, side, available)
+	if danger.is_empty():
+		_contest_camps(battle, side, available, now)
 	_attack(scene, side, difficulty, available, enemies, objective, now)
 
 
@@ -127,7 +129,7 @@ func _staff_post(battle: MatchBattle, side: MatchRegion.Owner, available: Array[
 	candidates.sort_custom(func(a: MatchBattle.Unit, b: MatchBattle.Unit) -> bool:
 		return a.id < b.id if scores[a.id] == scores[b.id] else scores[a.id] < scores[b.id])
 	var stationed := 0
-	for unit in candidates:
+	for unit: MatchBattle.Unit in candidates:
 		if stationed >= count:
 			break
 		if scores[unit.id] != -INF:
@@ -194,7 +196,7 @@ func _intercept_launches(battle: MatchBattle, side: MatchRegion.Owner,
 		return
 	var assigned := 0
 	var candidates := available.duplicate()
-	for unit in candidates:
+	for unit: MatchBattle.Unit in candidates:
 		var previous: Assignment = _assignments.get(unit.id)
 		if previous != null and previous.role == Role.INTERCEPT and _order_progresses(battle, unit):
 			var target: MatchBattle.MissileSilo = battle._charging_silos.get(previous.objective)
@@ -236,6 +238,63 @@ func _intercept_launches(battle: MatchBattle, side: MatchRegion.Owner,
 				break
 			if _orders_left <= 0:
 				break
+
+
+func _contest_camps(battle: MatchBattle, side: MatchRegion.Owner, available: Array[MatchBattle.Unit],
+		now: float) -> void:
+	if available.is_empty() or battle.objectives.camps.is_empty() or _orders_left <= 0:
+		return
+	var fighters := available.filter(func(unit: MatchBattle.Unit) -> bool:
+		return unit.definition.damage > 0.0)
+	var target: NeutralObjectives.Camp
+	var best := INF
+	var anchor: Vector2 = battle._bases[side]
+	for camp in battle.objectives.camps:
+		var sight: Dictionary = camp.observed.get(side, {})
+		if sight.is_empty() or (sight.guard == MatchBattle.NO_TARGET and not sight.drop):
+			continue
+		var seen: bool = battle.can_see(side, camp.point)
+		if sight.drop and (not seen or now - sight.seen_at > 1.0):
+			continue
+		var minimum := 9 if camp.major else 4
+		if not sight.drop and fighters.size() < maxi(3, ceili(minimum * float(sight.hp_fraction))):
+			continue
+		var distance := anchor.distance_to(camp.point)
+		var score := distance - (16.0 if sight.drop else (7.0 if camp.major else 0.0))
+		if score < best:
+			best = score
+			target = camp
+	if target == null:
+		return
+	var intel: Dictionary = target.observed[side]
+	var collect: bool = intel.drop
+	var required := 1 if collect else (mini(12, fighters.size()) if target.major else mini(6, fighters.size()))
+	var candidates := available.duplicate() if collect else fighters
+	candidates.sort_custom(func(a: MatchBattle.Unit, b: MatchBattle.Unit) -> bool:
+		var first := a.position.distance_squared_to(target.point)
+		var second := b.position.distance_squared_to(target.point)
+		return a.id < b.id if first == second else first < second)
+	for unit: MatchBattle.Unit in candidates:
+		if required <= 0 or _orders_left <= 0:
+			break
+		var current: Assignment = _assignments.get(unit.id)
+		var same_order := current != null and current.role == Role.CAMP and current.objective == target.id \
+			and ((collect and unit.order == Order.MOVE) or (not collect and unit.order == Order.ATTACK))
+		if not same_order:
+			var ordered := false
+			if not collect and battle.can_see(side, target.point):
+				ordered = battle.order_attack(side, unit.id, intel.guard)
+			else:
+				ordered = battle.order_move(side, unit.id, target.point, true)
+			_orders_left -= 1
+			if not ordered:
+				continue
+			var assignment := Assignment.new(Role.CAMP, &"", target.point)
+			assignment.objective = target.id
+			_assignments[unit.id] = assignment
+		available.erase(unit)
+		required -= 1
+
 
 
 func _attack(scene: Node3D, side: MatchRegion.Owner, difficulty: Dictionary,

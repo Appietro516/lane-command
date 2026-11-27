@@ -247,6 +247,7 @@ var threat_weights := DEFAULT_THREAT_WEIGHTS
 var navigation: BattleNavigation
 var visibility: BattleVisibility
 var radar := BattleRadar.new()
+var objectives := NeutralObjectives.new()
 var _bases: Dictionary[MatchRegion.Owner, Vector2] = {}
 var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
 var _base_guns: Dictionary[MatchRegion.Owner, Fortification] = {}
@@ -641,9 +642,21 @@ func outpost_site_clear(position: Vector2) -> bool:
 func spawn_unit(side: MatchRegion.Owner, position: Vector2,
 		type_id := UnitCatalog.INFANTRY, economy: MatchEconomy = null,
 		stance := Stance.IDLE) -> Unit:
-	if type_id == UnitCatalog.SCOUT or not Stance.values().has(stance):
+	if type_id not in UnitCatalog.COMBAT_TYPES or not Stance.values().has(stance):
 		return null
 	return _spawn_unit(side, position, type_id, economy, stance)
+
+
+func spawn_neutral_guard(point: Vector2, major: bool) -> Unit:
+	if not navigation.is_passable(point):
+		return null
+	var type := UnitCatalog.STRONGHOLD_GUARD if major else UnitCatalog.CAMP_GUARD
+	var unit := Unit.new(_next_unit_id, MatchRegion.Owner.NEUTRAL, point, type)
+	_index_unit(unit)
+	_units[unit.id] = unit
+	_next_unit_id += 1
+	unit_produced.emit(unit)
+	return unit
 
 
 func _spawn_unit(side: MatchRegion.Owner, position: Vector2, type_id: StringName,
@@ -723,7 +736,7 @@ func order_move(side: MatchRegion.Owner, id: int, destination: Vector2,
 	return true
 
 
-## With no destination, establish a post at the unit's current position.
+## Focus a currently visible enemy. Loss of sight leaves only the last observed point.
 func order_attack(side: MatchRegion.Owner, id: int, target_id: int,
 		base_side := MatchRegion.Owner.NEUTRAL) -> bool:
 	var unit := _commandable_unit(side, id)
@@ -786,6 +799,7 @@ func _plan_attack_order(unit: Unit) -> bool:
 	return false
 
 
+## With no destination, establish a post at the unit's current position.
 func order_hold(side: MatchRegion.Owner, id: int, destination: Variant = null) -> bool:
 	var unit := _commandable_unit(side, id)
 	if unit == null or unit.type_id == UnitCatalog.SCOUT \
@@ -1164,7 +1178,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 
 	# A fallen faction immediately loses its army, outposts, and structures.
 	for unit in units:
-		if unit.hp <= 0.0 or not is_side_active(unit.side):
+		if unit.hp <= 0.0 or (unit.side != MatchRegion.Owner.NEUTRAL and not is_side_active(unit.side)):
 			_unit_grid.erase(unit.id, unit._cell, unit.side)
 			unit._grid = null
 			if unit._visibility != null:
@@ -1173,7 +1187,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 			_units.erase(unit.id)
 			_support_units.erase(unit.id)
 			_queued_orders.erase(unit.id)
-			if unit.type_id != UnitCatalog.SCOUT:
+			if _military_count.has(unit.side) and unit.type_id != UnitCatalog.SCOUT:
 				_military_count[unit.side] -= 1
 			unit_removed.emit(unit.id)
 
@@ -1215,6 +1229,8 @@ func _step_combat(economy: MatchEconomy) -> void:
 	if visibility != null:
 		visibility.advance(_elapsed_time)
 	radar.advance(self, units, _elapsed_time)
+	if not is_finished():
+		objectives.advance(self, economy, _elapsed_time)
 	navigation.update()
 	for side in eliminated:
 		base_destroyed.emit(side)
@@ -1232,6 +1248,8 @@ func _resolve_attack(unit: Unit, report_attack: bool) -> void:
 		var target := _units[unit.target]
 		if target.hp <= 0.0:
 			return
+		if unit.type_id == UnitCatalog.RANGED and objectives.has_boon(unit.side, NeutralObjectives.Reward.RANGED_DAMAGE, _elapsed_time):
+			damage *= 1.25
 		target.hp -= damage * UnitCatalog.damage_multiplier(unit.definition, target.definition)
 		impact = target.position
 		target_side = target.side
@@ -1269,6 +1287,8 @@ func structure_damage_multiplier(unit: Unit, target_id: int) -> float:
 		return factor
 	if unit.type_id != UnitCatalog.HEAVY:
 		factor *= HUB_ARMOR
+	if objectives.has_boon(unit.side, NeutralObjectives.Reward.SIEGE, _elapsed_time):
+		factor *= 1.65
 	return factor
 
 
@@ -1421,14 +1441,17 @@ func _fire_gun(fort: Fortification, units: Array[Unit]) -> void:
 	if target == null:
 		return
 
-	target.hp -= fort.profile.damage * UnitCatalog.damage_multiplier(fort.profile, target.definition)
+	var damage: float = fort.profile.damage
+	if objectives.has_boon(fort.side, NeutralObjectives.Reward.DEFENSE, _elapsed_time):
+		damage *= 1.25
+	target.hp -= damage * UnitCatalog.damage_multiplier(fort.profile, target.definition)
 	if fort.profile.splash > 0.0:
 		var radius_squared := float(fort.profile.splash) ** 2
 		for unit in nearby:
 			if unit != target and unit.side != fort.side and unit.hp > 0.0 \
 					and fort.position.distance_squared_to(unit.position) <= range_squared \
 					and target.position.distance_squared_to(unit.position) <= radius_squared:
-				unit.hp -= fort.profile.damage
+				unit.hp -= damage
 	fort.cooldown = fort.profile.interval
 	fortification_fired.emit(fort, target.position)
 

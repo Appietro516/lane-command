@@ -62,6 +62,8 @@ static func side_label(side: Owner, show_cpu_number: bool) -> String:
 
 static func accent_color(side: Owner) -> Color:
 	match side:
+		Owner.NEUTRAL:
+			return Color("#d4a464")
 		Owner.PLAYER:
 			return PLAYER_ACCENT.albedo_color
 		Owner.CPU:

@@ -7,10 +7,28 @@ const HEAVY := &"heavy"
 const SCOUT := &"scout"
 const MEDIC := &"medic"
 const RAIDER := &"raider"
+const CAMP_GUARD := &"camp_guard"
+const STRONGHOLD_GUARD := &"stronghold_guard"
 const OFFENSIVE_TYPES := [INFANTRY, RANGED, HEAVY, RAIDER]
 const COMBAT_TYPES := [INFANTRY, RANGED, HEAVY, MEDIC, RAIDER]
 
 const DEFINITIONS := {
+	CAMP_GUARD: {
+		"class": CAMP_GUARD, "label": "Camp Guardian",
+		"hp": 76.0, "damage": 6.0, "cooldown": 1.15, "range": 3.2, "speed": 0.0,
+		"clearance": 0.0, "food": 0, "structure_damage_multiplier": 0.0,
+		"attack_effect": {"style": &"pulse", "duration": 0.3},
+		"scene": preload("res://match/heavy_unit.tscn"), "tint": Color("#ceaa63"),
+		"tint_weight": 1.0, "selection_scale": 1.65,
+	},
+	STRONGHOLD_GUARD: {
+		"class": STRONGHOLD_GUARD, "label": "Stronghold Guardian",
+		"hp": 270.0, "damage": 12.0, "cooldown": 1.05, "range": 4.0, "speed": 0.0,
+		"clearance": 0.0, "food": 0, "structure_damage_multiplier": 0.0,
+		"attack_effect": {"style": &"pulse", "duration": 0.38},
+		"scene": preload("res://match/heavy_unit.tscn"), "tint": Color("#e7a64d"),
+		"tint_weight": 1.0, "selection_scale": 2.1,
+	},
 	SCOUT: {
 		"class": SCOUT,
 		"label": "Scout",

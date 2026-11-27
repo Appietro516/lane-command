@@ -34,3 +34,11 @@ Regional strategy milestone commit `6075ebf`.
 - Military movement is 12% slower. Production defaults to Idle with local self-defense, while explicit producer assignments and rallies continue to work. Right-clicking a visible enemy issues a focus order. A target lost in fog leaves its last observed point.
 - Starting bases have 240 HP and outposts have 40 HP before modifiers, and both fire through the fortification rules. Ordinary attacks take a 0.55 multiplier against armored hubs and defenses. Heavies have a 1.85 structure multiplier and increased Food cost. Class counters are catalog values.
 - Strategic combat tests passed. Next action is jungle objectives and CPU contesting.
+
+Combat milestone commit `a369d10`.
+
+## Neutral objectives
+
+- Seeded neutral sites host up to four minor camps and a central stronghold. Guardians are real combat units with local engagement range and no pathing footprint. Defeat leaves a contested pickup for 30 seconds. Minor and major guardians respawn after 82 and 175 seconds.
+- Pickups use nearest living unit and stable ID ties. Rewards are three-resource grants, 48-second ranged or defense boons, or a 75-second stronghold boon that increases fortified-target damage by 65%. Same-kind rewards refresh duration.
+- CPUs use their sighting records and current force to consider a fight or collect a drop. The jungle test and production smoke passed. Next action is scores, bounties, missile warnings and control groups.
