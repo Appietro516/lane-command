@@ -76,3 +76,48 @@ Bounded visibility and CPU integration milestone commit `c4ec7ea`.
 Two completed automated pilot games reached defeat at 166.02 seconds on seed 17 and 344.85 seconds on seed 31. The 15-minute target remains a balance goal. In response, passive Energy and Materials were reduced to 2.25/s and 1.45/s. Food remains 1/s. Starting-base HP rose to 420, its defensive attack to 6 damage per 0.9 seconds, and ordinary damage against the base receives a 0.40 armor multiplier. Outpost/other defended structures retain their 0.55 multiplier. Heavy siege and individual upgrades are unchanged. Follow-up simulations and release checks use the tuned values.
 
 The setup, camera and attack-event tests now exercise the requested default map, production cadence and targeting rules. A new five-faction integration test checks distinct intelligence, normal producer upgrades, rallies, victory and restart. Next action is to record the verification result and reconcile any remaining blockers before GitHub delivery.
+
+
+Pacing and presentation milestone commit `158451651be0b2e98faa850778eebbeaa16596bd`.
+
+## Automated balance results
+
+The simulation script drives both the player side and the opponents through the normal CPU planner at Standard difficulty. It resolves player narrative choices with the first affordable option. This was automated simulation and there was no human playtest. Reproduce the tuned pair with `godot --headless --path . --script tests/performance/strategic_simulation.gd -- 17 1 Rectangle 1200` and `-- 31 2 Circle 1200`. The 1200-second ceiling belongs to the test harness.
+
+| Build | Seed | Map | CPUs | First engagement | Duration | Outcome | Claims | Camp hits/kills | Stronghold pickups | Casualties | Bounties |
+| --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | ---: | ---: | ---: |
+| Pilot | 17 | Rectangle | 1 | 80.47s | 166.02s | Defeat | 5 | 302/4 | 1 | 155 | 0 |
+| Pilot | 31 | Circle | 2 | 22.27s | 344.85s | Defeat | 3 | 654/9 | 1 | 495 | 1 |
+| Tuned | 17 | Rectangle | 1 | 94.78s | 176.08s | Victory | 4 | 437/7 | 1 | 142 | 0 |
+| Tuned | 31 | Circle | 2 | 22.27s | 234.70s | Defeat | 3 | 358/5 | 1 | 230 | 0 |
+
+### Tuned trajectories
+
+Rows are sampled at approximately one-minute intervals and at match end. Factions appear in player, CPU 1, CPU 2 order where applicable.
+
+| Seed | Simulated seconds | Base HP | Faction scores | Claims | Camp kills | Stronghold pickups | Casualties |
+| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: |
+| 17 | 1.0 | 420.0/420.0 | 153/153 | 0 | 0 | 0 | 0 |
+| 17 | 61.0 | 420.0/420.0 | 243/429 | 1 | 1 | 0 | 9 |
+| 17 | 120.1 | 420.0/420.0 | 575/344 | 3 | 3 | 1 | 79 |
+| 17 | 176.1 | 420.0/0.0 | 931/0 | 4 | 7 | 1 | 142 |
+| 31 | 1.0 | 420.0/420.0/420.0 | 153/153/153 | 0 | 0 | 0 | 0 |
+| 31 | 61.0 | 420.0/420.0/420.0 | 249/231/248 | 0 | 0 | 0 | 27 |
+| 31 | 121.0 | 420.0/420.0/420.0 | 248/495/242 | 2 | 2 | 0 | 81 |
+| 31 | 180.0 | 420.0/420.0/406.6 | 240/542/214 | 2 | 3 | 0 | 161 |
+| 31 | 234.7 | 0.0/420.0/0.0 | 0/790/0 | 3 | 5 | 1 | 230 |
+
+
+The winning formation on tuned seed 17 finished with 12 Heavy, 5 Infantry and 22 Ranged units plus 2 Scouts. On tuned seed 31, CPU 1 finished with 8 Heavy, 4 Infantry, 4 Raiders and 11 Ranged units plus 1 Scout. The tuner changed which faction won seed 17 and shortened seed 31. The two tuned matches averaged 205.39 seconds, so they did not validate the 15-minute balance target. The four-opponent pilot hit its wall-clock timeout. Its last sample at 541 simulated seconds showed all five bases standing, two claims, one guardian defeat and 1,048 military casualties. It showed low territorial development and high attrition.
+
+The full headless benchmark matrix is recorded in [Strategic visibility benchmarks](../performance/strategic-visibility.md). Native Compatibility screenshots confirmed that the fog overlay and the hidden CPU-start marker are both visible at overview zoom. The screenshot is available at `/tmp/lane-strategic-markers-native/capture.png` for this worktree.
+
+## Validation and delivery status
+
+The clean baseline `73fdb261cf4c2349bb27a52aa838e419fc5a6d46` passed 26 of 27 original scripts. `match_multiple_cpu_test.gd` already failed the fixed-step p95 budget on both representative combats, at 19.54 ms for 1v1 and 39.09 ms for 1v4 in that run.
+
+The full overhaul run executed 36 scripts with Godot 4.6.3. It returned 16 passes, 19 failures and one timeout. All nine new feature scripts passed. Existing attack-effect, camera, native chunk navigation, destruction navigation, group orders, map shape and setup scripts also passed. The failing existing suites were buffs, building slots, claim discovery, claims, combat, CPU difficulty, CPU expansion, CPU tactics, economy, expansion, fortifications, landmarks, military production, multiple CPU opponents, narrative, outposts, provenance, startup and the unit roster. CPU strategy hit its time budget in the full run and failed assertions on an isolated retry. A number of assertions still prescribe older opening health, production timings, omniscient landmark inspection, or Seek Nearest production. These failures still block release verification.
+
+Godot headless import, direct `main.tscn` smoke, six CI build preflight checks, and native Compatibility capture passed. Native stress comparisons timed out at 160 seconds per mode, so the benchmark table reports headless CPU-side presentation and upload times only. The Windows and Web production exports are in `/tmp/lane-strategic-final-export` with tested ZIPs and SHA-256 checksums. The host has no Windows execution environment. Chromium initialized the single-threaded Godot WebAssembly engine and WebGL 2, then displayed the setup screen. Publication remains gated on the regression suites, performance and match pacing.
+
+Remote master was read directly as `73fdb261cf4c2349bb27a52aa838e419fc5a6d46` and its [Godot builds workflow](https://github.com/Appietro516/lane-command/actions/runs/45788539353) completed successfully. The implementation is on the isolated feature branch. The next checkpoint is to resolve the listed regression suites, repeat paired profiling on an idle host and tune with further reproducible matches before publication.
