@@ -1723,6 +1723,7 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner, refresh :
 	var region := get_region(region_id)
 	if region.ruined and side != MatchRegion.Owner.NEUTRAL:
 		return
+	var previous := region.region_owner
 	region.region_owner = side
 	faction_stats.set_source_owner(region_source_id(region_id), side)
 	var landmark := _landmarks.get(region_id) as LegendaryLandmark
@@ -1740,6 +1741,15 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner, refresh :
 		_refresh_structure_accent(placed)
 		if placed.defense.profile.has("income"):
 			_refresh_producer_income(placed.defense.side, placed.defense.kind)
+	if _battle.visibility == null:
+		region.display_ownership(side, region.ruined, true)
+	elif not _intelligence.is_empty():
+		for observer in _intelligence:
+			if observer == previous or region_live(observer, region):
+				_intelligence[observer].regions[region_id] = {"side": side, "ruined": region.ruined}
+		var memory: Dictionary = _intelligence[PLAYER].regions.get(region_id, {})
+		region.display_ownership(memory.get("side", MatchRegion.Owner.NEUTRAL),
+			memory.get("ruined", false), not memory.is_empty())
 	if refresh:
 		_refresh_hud()
 		if _preview != null:
@@ -3177,7 +3187,7 @@ func _refresh_claim_control() -> void:
 	if expedition != null:
 		_region_status.text = _expedition_text(expedition)
 	var outpost := _outposts_by_region.get(_selected_region_id) as MatchBattle.Outpost
-	if outpost != null:
+	if outpost != null and (outpost.side == PLAYER or _battle.can_see(PLAYER, outpost.position)):
 		_region_status.text = "Outpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(outpost.max_hp)]
 		_region_label.tooltip_text = _breakdown_text("Maximum HP", outpost.health_stat())
 	if not region.specialty_text().is_empty():

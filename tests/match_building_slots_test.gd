@@ -30,6 +30,7 @@ func _run() -> void:
 func _match(landmarks := 0, capacity := 5, player_starts := 1) -> Node:
 	var scene := MATCH.instantiate()
 	scene.region_count = 6
+	scene.neutral_objectives_enabled = false
 	scene.legendary_count = landmarks
 	scene.region_building_capacity = capacity
 	scene.player_start_count = player_starts
@@ -191,6 +192,9 @@ func _test_claim_and_inactive_structures() -> void:
 		scene._battle.advance(MatchBattle.STEP, scene.economy)
 	occupancy = scene.region_occupancy(target)
 	scene._select_region(target)
+	var point: Vector2 = scene._map_position(scene.get_region(target).global_position)
+	scene._battle.visibility.set_source(-800003, PLAYER, point, BattleVisibility.UNIT_RADIUS)
+	scene._refresh_intelligence()
 	scene._refresh_hud()
 	var slots := scene.get_node("%RegionSlots") as Label
 	_check(scene.owns_region(NEUTRAL, target) and occupancy.used == 4 and occupancy.free == 1

@@ -29,6 +29,7 @@ func _run() -> void:
 	scene.map_width = MapSettings.scaled_dimensions(MapSettings.Shape.CIRCLE, 24).x
 	scene.cpu_opponent_count = 2
 	scene.legendary_count = 0
+	scene.neutral_objectives_enabled = false
 	scene.narrative_catalog = null
 	root.add_child(scene)
 	scene.set_process(false)
@@ -98,10 +99,10 @@ func _test_anti_tank() -> void:
 		if fort == gun:
 			shots.append(point))
 	battle.advance(STEP, economy)
-	_check(heavy.hp == 12.0 and infantry.hp == 12.0 and shots.size() == 1 and shots[0] == heavy.position,
-		"The gun prefers Heavy, deals 14 damage, and emits a synchronized single-target cue.")
+	_check(is_equal_approx(heavy.hp, 26.0 - 17.0) and infantry.hp == 12.0 and shots.size() == 1 and shots[0] == heavy.position,
+		"The gun prefers Heavy, deals 17 damage, and emits a synchronized single-target cue.")
 	battle.advance(1.5, economy)
-	_check(heavy.hp == 12.0, "The slow gun respects its cooldown.")
+	_check(is_equal_approx(heavy.hp, 26.0 - 17.0), "The slow gun respects its cooldown.")
 	battle.advance(0.4, economy)
 	_check(battle.get_unit(heavy.id) == null and infantry.hp == 12.0, "The second armor hit has no splash.")
 	battle.advance(1.85, economy)
@@ -129,7 +130,7 @@ func _test_producers(scene: Node) -> void:
 		"Upgrading one producer keeps its progress and settings and leaves other producers at level one.")
 	var recruits: Array[MatchBattle.Unit] = []
 	battle.unit_produced.connect(func(unit: MatchBattle.Unit) -> void: recruits.append(unit))
-	battle.advance(4.6 + STEP, economy)
+	battle.advance(third.interval(economy) + STEP, economy)
 	_check(recruits.any(func(unit: MatchBattle.Unit) -> bool:
 		return unit.type_id == Catalog.MEDIC and unit.following_rally and unit.stance == IDLE)
 		and recruits.any(func(unit: MatchBattle.Unit) -> bool:
@@ -183,7 +184,8 @@ func _test_strike(scene: Node) -> void:
 	_check(silo.missile_state == MatchBattle.MissileState.CHARGING and scene.get_node("%MissileWarning").visible
 		and silo.missile_target.is_equal_approx(center) and not battle.prepare_missile(PLAYER, silo.id, center + Vector2.ONE),
 		"An off-center target starts a warned countdown and cannot be moved.")
-	battle.advance(Rules.MISSILE_CHARGE - STEP, economy)
+	battle._elapsed_time = silo.launches_at - STEP
+	battle._advance_missiles()
 	_check(battle._missile_flights.is_empty() and near.hp > 0.0, "Charging does not yet hit the target.")
 	battle.advance(STEP, economy)
 	_check(silo.missile_state == MatchBattle.MissileState.EXHAUSTED and battle._missile_flights.size() == 1
@@ -238,7 +240,7 @@ func _test_interception(scene: Node) -> void:
 	strategy._tactics._intercept_launches(battle, CPU, available)
 	_check(available.size() < two.size(), "The CPU assigns nearby troops to attack the announced silo.")
 	silo.hp = 0.0
-	battle.advance(Rules.MISSILE_CHARGE + Rules.MISSILE_FLIGHT + 1, scene.economy)
+	battle.advance(STEP, scene.economy)
 	_check(battle._charging_silos.is_empty() and battle._missile_flights.is_empty()
 		and battle.base_hp(CPU) > 0.0 and not scene.get_region(TerritoryLayout.CPU_START).ruined,
 		"Destroying a charging silo cancels the strike, and even its former target survives.")
@@ -258,12 +260,21 @@ func _test_cpu_arsenal(scene: Node) -> void:
 	sites.append(scene.get_region(site))
 	var production := preload("res://match/cpu_strategy.gd").Production.new(battle, economy, CPU_2)
 	production.active = 3
-	_check(strategy._try_strategic_strike(scene, sites, battle.active_units(), production, false, 150.0),
+	var region := _strike_region(scene, Vector2(scene.get_region(site).position.x, scene.get_region(site).position.z))
+	if not _check(region != null, "The CPU has an unprotected hostile target."):
+		return
+	var point := Vector2(region.position.x, region.position.z)
+	scene._complete_claim(PLAYER, region.region_id, -1, point)
+	var farm := _place(scene, PLAYER, &"farm", region.region_id)
+	if not _check(farm != null, "A hostile farm adds value to the strike target."):
+		return
+	battle.visibility.set_source(-900001, CPU_2, point, BattleVisibility.SCOUT_RADIUS)
+	_check(strategy._try_strategic_strike(scene, sites, battle.active_units(), production, false, 180.0),
 		"A well-funded CPU purchases a silo using the normal construction rules.")
 	var silos := battle._fortifications.values().filter(func(fort: MatchBattle.Fortification) -> bool:
 		return fort is MatchBattle.MissileSilo and fort.side == CPU_2)
 	if not _check(silos.size() == 1 and strategy._try_strategic_strike(
-			scene, sites, battle.active_units(), production, false, 152.0),
+			scene, sites, battle.active_units(), production, false, 182.0),
 			"The second CPU finds a worthy target and commits its purchased silo."):
 		return
 	var silo := silos[0] as MatchBattle.MissileSilo
@@ -273,14 +284,16 @@ func _test_cpu_arsenal(scene: Node) -> void:
 	scene._refresh_hud()
 	_check("CPU 2 missile preparing" in scene.get_node("%MissileWarning").text,
 		"A CPU strike warns the player before launch.")
-	var lost_bases := 0
-	for owner: MatchRegion.Owner in battle._base_obstacles:
-		if Rules.blast_hits(silo.missile_target, battle._bases[owner], MatchBattle.BASE_FOOTPRINT * 2.0):
-			lost_bases += 1
 	var active_before := battle._base_obstacles.size()
-	battle.advance(Rules.MISSILE_CHARGE + Rules.MISSILE_FLIGHT + STEP, economy)
-	_check(lost_bases > 0 and battle._base_obstacles.size() == active_before - lost_bases
-		and battle.is_side_active(CPU_2), "The CPU strike destroys its target base through the normal elimination rules.")
+	battle._elapsed_time = silo.launches_at
+	battle._advance_missiles()
+	if not _check(battle._missile_flights.size() == 1, "The CPU launches its prepared strike."):
+		return
+	battle._elapsed_time = battle._missile_flights[0].impact_at
+	battle.advance(STEP, economy)
+	_check(region.ruined and battle.get_fortification(farm.id) == null
+		and battle._base_obstacles.size() == active_before and battle.is_side_active(CPU_2),
+		"The CPU strike ruins the hostile hub while preserving protected starting bases.")
 
 
 func _claim_silo_site(scene: Node, side: MatchRegion.Owner) -> StringName:

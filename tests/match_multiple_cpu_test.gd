@@ -81,6 +81,7 @@ func _test_setup_and_starts() -> void:
 func _test_claims_and_elimination() -> void:
 	var scene := MATCH.instantiate()
 	scene.cpu_opponent_count = 4
+	scene.region_count = 24
 	scene.additional_cpu_difficulties.assign([1, 4, 5])
 	scene.legendary_count = 0
 	scene.claim_duration = 0.1
@@ -140,6 +141,8 @@ func _test_claims_and_elimination() -> void:
 		"CPU production leaves the human economy and building state independent.")
 
 	var eliminated := CPU_2
+	economy.grant_resource(eliminated, MatchEconomy.ENERGY,
+		scene._expeditions.claim_price(eliminated)[MatchEconomy.ENERGY])
 	var pending := _dispatch_from_frontier(scene, eliminated)
 	_check(not pending.is_empty(), "The test starts a claim before eliminating its owner.")
 	var remaining_id: StringName = scene._layout.starting_territories[3][0]
@@ -202,7 +205,9 @@ func _test_hostile_targeting() -> void:
 		Rect2(-30, -18, 60, 36), null, positions)
 	var shooter := battle.spawn_unit(CPU_2, Vector2(0, -9), CATALOG.RANGED)
 	var rival := battle.spawn_unit(CPU_3, Vector2(0, -8))
-	var ally := battle.spawn_unit(CPU_2, Vector2(0, -8.8))
+	var ally := battle.spawn_unit(CPU_2, Vector2(0, -9.4))
+	# Isolate unit-on-unit and unit-on-base hits from the base gun.
+	battle._base_guns[CPU_3].cooldown = 3.0
 	battle.order_hold(CPU_2, shooter.id)
 	battle.set_unit_stance(CPU_3, rival.id, MatchBattle.Stance.IDLE)
 	battle.set_unit_stance(CPU_2, ally.id, MatchBattle.Stance.IDLE)
@@ -210,10 +215,11 @@ func _test_hostile_targeting() -> void:
 	battle.attack_resolved.connect(func(hit: MatchBattle.AttackResolved) -> void: attacks.append(hit))
 	rival.hp = 1.0
 	battle.advance(MatchBattle.STEP, economy)
-	_check(attacks.size() == 1 and attacks[0].target_side == CPU_3 and attacks[0].target_id == rival.id
+	_check(attacks.size() == 1 and attacks[0].attacker_id == shooter.id
+		and attacks[0].target_side == CPU_3 and attacks[0].target_id == rival.id
 		and battle.get_unit(rival.id) == null and ally.hp == CATALOG.DEFINITIONS[CATALOG.INFANTRY].hp,
 		"CPU units can kill a different CPU's unit and ignore closer allies.")
-	battle._base_health[CPU_3].hp = 1.0
+	battle._base_health[CPU_3].hp = 0.25
 	shooter.cooldown = 0.0
 	battle.advance(MatchBattle.STEP, economy)
 	_check(attacks.size() == 2 and attacks[1].target_side == CPU_3

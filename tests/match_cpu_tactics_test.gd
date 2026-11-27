@@ -54,8 +54,8 @@ func _test_reserve_and_base_defense() -> void:
 	var base_region := _scene.get_region(TerritoryLayout.CPU_START) as MatchRegion
 	_scene._try_cpu_purchase()
 	var reserves := _with_order(army, Order.HOLD)
-	_check(reserves.size() == 2 and _with_order(army, Order.AUTONOMOUS).size() == 4,
-		"The CPU rallies a reserve in peacetime and sends the majority to attack.")
+	_check(reserves.size() == 2 and _with_order(army, Order.AUTONOMOUS).size() == 4 and army.all(func(unit: MatchBattle.Unit) -> bool: return unit.stance == Stance.IDLE),
+		"The CPU rallies a reserve in peacetime and holds the other troops until the assault opens.")
 	for unit in reserves:
 		_check(unit.stance == Stance.IDLE and unit.position != unit.ordered_destination
 			and Geometry2D.is_point_in_polygon(unit.ordered_destination, base_region.polygon),
@@ -76,8 +76,8 @@ func _test_reserve_and_base_defense() -> void:
 	var release_at: float = _scene._cpu_strategy._tactics._assignments[first.id].release_at
 	_scene._advance_simulation(release_at + MatchBattle.STEP)
 	_scene._try_cpu_purchase()
-	_check(first.order == Order.AUTONOMOUS and first.stance != Stance.IDLE,
-		"An expired reserve assignment releases the unit into Seek.")
+	_check(first.order == Order.AUTONOMOUS and first.stance == Stance.IDLE,
+		"An expired reserve assignment releases the unit into the pre-assault garrison.")
 
 	_prepare()
 	home = _battle._bases[CPU]
@@ -110,9 +110,10 @@ func _test_reserve_and_base_defense() -> void:
 		"Mixed paid production inherits the configured defaults.")
 	for unit in invaders:
 		unit.hp = 0.0
+	_scene._cpu_strategy._tactics._assault_until = _battle.elapsed_time() + 10.0
 	_scene._try_cpu_purchase()
 	_check(_battle._timers.any(func(timer: MatchBattle.ProductionTimer) -> bool:
-		return timer.default_stance != Stance.IDLE), "Ending pressure restores offensive production.")
+		return timer.default_stance != Stance.IDLE), "The active assault restores offensive production after pressure ends.")
 
 
 func _test_outposts() -> void:
@@ -120,9 +121,11 @@ func _test_outposts() -> void:
 	var home: Vector2 = _battle._bases[CPU]
 	var friendly := _make_outpost(CPU, home)
 	var target := _make_outpost(PLAYER, _battle._bases[PLAYER])
-	_battle._base_health[PLAYER].hp = 200.0
+	_battle._base_health[PLAYER].hp = 1.0
 	target.hp = 6.0
 	var army := _spawn_army(friendly.position + Vector2(1.5, 0.0), 8)
+	for unit in army:
+		unit.hp = 100.0
 	var attacker := _spawn(PLAYER, friendly.position + Vector2(0.0, -2.5), Catalog.INFANTRY, Stance.IDLE)
 	_scene._try_cpu_purchase()
 	var guards := _with_order(army, Order.HOLD)
@@ -134,6 +137,8 @@ func _test_outposts() -> void:
 		and strike.all(func(unit: MatchBattle.Unit) -> bool:
 			return unit.resume_stance_on_arrival and unit.ordered_destination.distance_to(target.position) <= 3.2),
 		"A bounded strike group moves to the vulnerable enemy outpost and resumes Seek on arrival.")
+	# Keep the assault window open when the defensive emergency ends.
+	_scene._cpu_strategy._tactics._assault_until = _battle.elapsed_time() + 30.0
 	attacker.hp = 0.0
 	friendly.hp = 0.0
 	_scene._advance_simulation(MatchBattle.STEP)
@@ -142,14 +147,16 @@ func _test_outposts() -> void:
 		func(unit: MatchBattle.Unit) -> bool: return unit.order != Order.HOLD \
 			or not Geometry2D.is_point_in_polygon(unit.ordered_destination, _scene.get_region(friendly.region_id).polygon)),
 		"Outpost destruction releases obsolete defense orders.")
-	_scene._advance_simulation(15.0)
+	_scene._advance_simulation(18.0)
 	_check(_battle.get_outpost(target.id) == null and _scene.owns_region(NEUTRAL, target.region_id),
 		"The attacking force can reach and destroy the enemy outpost.")
 	_scene._try_cpu_purchase()
 	_check(_scene._cpu_strategy._tactics._assignments.values().all(
 		func(assignment: Tactics.Assignment) -> bool: return assignment.objective != target.id),
 		"Destroyed assault objectives are discarded.")
-	_scene._process(30.0)
+	_scene._cpu_strategy._tactics._assault_until = _battle.elapsed_time() + 30.0
+	_scene._try_cpu_purchase()
+	_scene._process(20.0)
 	_check(_battle.outcome() == MatchBattle.Outcome.DEFEAT,
 		"The CPU can finish the match after taking an outpost.")
 
@@ -158,6 +165,8 @@ func _test_blocked_route() -> void:
 	_prepare()
 	var target := _make_outpost(PLAYER, _battle._bases[PLAYER])
 	var army := _spawn_army(_battle._bases[CPU] + Vector2(-2.5, 1.5), 2)
+	_battle.visibility.set_source(-800031, CPU, target.position, 1.0)
+	_scene._cpu_strategy._tactics._assault_until = 50.0
 	_scene._try_cpu_purchase()
 	_check(_with_order(army, Order.MOVE).size() == 2, "The route fixture starts with valid assault orders.")
 	var barrier_x := (target.position.x + army[0].position.x) * 0.5

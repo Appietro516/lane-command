@@ -40,6 +40,7 @@ func _match(count: int, regions: int, map_seed := 17, probability := 1.0,
 	scene.legendary_spawn_probability = probability
 	scene.legendary_neutral_only = neutral_only
 	scene.outpost_hp = 1
+	scene.neutral_objectives_enabled = false
 	if not catalog.is_empty():
 		scene.legendary_catalog = catalog
 	root.add_child(scene)
@@ -54,11 +55,11 @@ func _test_generation() -> void:
 		_check(scene._landmarks.size() == expected, "Spawn settings respect the cap and available neutral cells.")
 		for landmark: LegendaryLandmark in scene._landmarks.values():
 			var region: MatchRegion = scene.get_region(landmark.region_id)
-			_check(landmark.visible and landmark.get_parent() == region
+			_check(landmark.get_parent() == region
 				and scene.region_at_world_position(landmark.global_position) == region.region_id
 				and region.region_owner == NEUTRAL
 				and not scene._battle.navigation.is_passable(landmark.footprint.get_center()),
-				"A landmark has a visible node and solid footprint in its neutral region.")
+				"A landmark has a node and solid footprint in its neutral region.")
 			for corner in BattleNavigation.corners_of(landmark.footprint):
 				_check(Geometry2D.is_point_in_polygon(corner, region.polygon),
 					"The entire structure footprint fits inside the generated polygon.")
@@ -107,6 +108,10 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	var economy: MatchEconomy = scene.economy
 	var details := scene.get_node("%LandmarkDetails") as Label
 	var region_title := scene.get_node("%SelectedRegion") as Label
+	var point := landmark.footprint.get_center()
+	battle.visibility.set_source(-900001, PLAYER, point, BattleVisibility.SCOUT_RADIUS)
+	scene._record_sightings(battle.elapsed_time())
+	scene._refresh_intelligence()
 	var camera := root.get_camera_3d()
 	var mesh := landmark.get_node("Crystal/Upper") as MeshInstance3D
 	var pointer := camera.unproject_position(mesh.global_position)
@@ -148,10 +153,15 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	if stat == DPS:
 		var player_unit := _spawn(battle, economy, PLAYER)
 		var base_center: Vector2 = battle._bases[CPU]
+		player_unit.stance = MatchBattle.Stance.SEEK_NEAREST
 		player_unit.position = _attack_position(battle, base_center, battle._base_obstacles[CPU],
 			MatchBattle.BASE_ATTACK_RANGE)
+		_check(battle.order_attack(PLAYER, player_unit.id, MatchBattle.BASE_TARGET, CPU),
+			"The landmark attacker can target the visible base.")
 		battle.advance(MatchBattle.STEP, economy)
-		_check(battle.base_hp(CPU) == MatchBattle.BASE_HP - MatchBattle.ATTACK_DAMAGE - amount,
+		var damage := (MatchBattle.ATTACK_DAMAGE + amount) * battle.structure_damage_multiplier(
+			player_unit, MatchBattle.BASE_TARGET)
+		_check(is_equal_approx(battle.base_hp(CPU), MatchBattle.BASE_HP - damage),
 			"A normal attack uses the landmark damage bonus.")
 		player_unit.hp = 0
 		battle.advance(MatchBattle.STEP, economy)
@@ -172,10 +182,13 @@ func _test_claim_lifecycle(stat: StringName) -> void:
 	var barracks := scene.get_node("Buildings/Player").get_child(0)
 	battle.set_barracks_active(battle._timers.back(), false)
 	var enemy := _spawn(battle, economy, CPU)
+	enemy.stance = MatchBattle.Stance.SEEK_NEAREST
+	enemy.hp = 100.0
 	enemy.position = _attack_position(battle, outpost.position, outpost.obstacle, MatchBattle.OUTPOST_ATTACK_RANGE)
 	_check(battle.unit_attack_stat(enemy).total == MatchBattle.ATTACK_DAMAGE,
 		"The opposing unit does not inherit the player's damage bonus.")
-	battle.advance(9.0, economy)
+	_check(battle.order_attack(CPU, enemy.id, outpost.id), "The attacker can target the visible outpost.")
+	battle.advance(10.0, economy)
 	_check(battle.get_outpost(outpost.id) == null and scene.owns_region(NEUTRAL, region_id)
 		and scene._landmarks[region_id] == landmark and landmark.is_visible_in_tree()
 		and barracks.is_inside_tree(), "Destroying the outpost preserves both the landmark and the barracks.")
@@ -208,17 +221,17 @@ func _test_stacking() -> void:
 				claimed.append(id)
 				break
 	var inspected: Dictionary = scene.economy.income_stat(PLAYER, ENERGY)
-	_check(claimed.size() == 3 and inspected.total == 6.0 and inspected.breakdown.size() == 4,
+	_check(claimed.size() == 3 and inspected.total == 5.25 and inspected.breakdown.size() == 4,
 		"Three separately claimed sources with the same stat stack additively.")
 	var first_outpost := scene._outposts_by_region.get(first) as MatchBattle.Outpost
 	if first_outpost != null:
 		first_outpost.hp = 0.0
 		scene._battle.advance(MatchBattle.STEP, scene.economy)
-	_check(scene.economy.income_rate(PLAYER, ENERGY) == 5.0,
+	_check(scene.economy.income_rate(PLAYER, ENERGY) == 4.25,
 		"Neutralizing one source leaves both other contributions active.")
 	scene._set_region_owner(first, CPU)
-	_check(scene.economy.income_rate(PLAYER, ENERGY) == 5.0
-		and scene.economy.income_rate(CPU, ENERGY) == 4.0,
+	_check(scene.economy.income_rate(PLAYER, ENERGY) == 4.25
+		and scene.economy.income_rate(CPU, ENERGY) == 3.25,
 		"A direct owner change moves only the affected source.")
 	scene.free()
 

@@ -84,7 +84,7 @@ func _test_difficulty_and_reset() -> void:
 
 func _check_starting_rules(scene: Node) -> void:
 	var battle: MatchBattle = scene._battle
-	_check(battle.elapsed_time() == 0.0 and battle.active_units().size() == 4
+	_check(battle.elapsed_time() == 0.0 and battle.active_units().filter(func(unit: MatchBattle.Unit) -> bool: return unit.type_id == Catalog.SCOUT).size() == 4
 		and battle.base_hp(PLAYER) == MatchBattle.BASE_HP and battle.base_hp(CPU) == MatchBattle.BASE_HP,
 		"The two bases and four scouts start with shared stats.")
 	for side in [PLAYER, CPU]:
@@ -141,7 +141,8 @@ func _test_decisions() -> void:
 		var site := player_base.interior_point(func(point: Vector2) -> bool:
 			return scene._placement_block_reason(PLAYER, &"training_range", scene._world_position(point)).is_empty())
 		_check(site.is_finite() and scene.try_place_building(PLAYER, &"training_range", scene._world_position(site)),
-			"The player has a visible Training Range before any units deploy.")
+			"The player can buy a Training Range before any units deploy.")
+		scene._battle.visibility.set_source(-800101, CPU, site, 1.0)
 		scene._try_cpu_purchase()
 		var timers: Array = scene._battle._timers
 		predicted_openings.append(timers[1].kind if timers.size() > 1 else &"")
@@ -153,7 +154,7 @@ func _test_decisions() -> void:
 		weak_raid_responses.append(_has_building(scene, Rules.NEST))
 
 		_prepare_expansion(scene)
-		scene.cpu_investment_horizon = 35.0
+		scene.cpu_investment_horizon = 42.0
 		scene.economy.try_spend(CPU, {ENERGY: int(scene.economy.energy(CPU)) - 75})
 		scene._try_cpu_purchase()
 		generator_investments.append(_has_building(scene, &"generator"))
@@ -163,7 +164,7 @@ func _test_decisions() -> void:
 		# Leave just enough space for a claim in one of the two frontier regions.
 		var occupied: Array[StringName] = [closest]
 		for i in scene.region_building_capacity - 1:
-			scene._register_region_structure(StringName("fixture/%d" % i), scene.LEGENDARY_KIND, occupied)
+			scene._register_region_structure(StringName("fixture/%d" % i), &"farm", occupied)
 		var before: float = scene.economy.energy(CPU)
 		scene._try_cpu_purchase()
 		var targets: Array = scene._expeditions.assignments.keys()
@@ -193,7 +194,7 @@ func _test_decisions() -> void:
 	_prepare_expansion(scene)
 	var base_regions: Array[StringName] = [TerritoryLayout.CPU_START]
 	for slot in 2:
-		scene._register_region_structure(StringName("fixture/base/%d" % slot), scene.LEGENDARY_KIND, base_regions)
+		scene._register_region_structure(StringName("fixture/base/%d" % slot), &"farm", base_regions)
 	scene.economy.try_spend(CPU, {ENERGY: int(scene.economy.energy(CPU)) - 75})
 	scene._try_cpu_purchase()
 	_check(not _has_building(scene, &"generator") and scene.region_occupancy(base_regions[0]).free == 1,
@@ -229,7 +230,8 @@ func _prepare_expansion(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	scene.cpu_production_limit = 1
-	scene.economy.advance(60.0)
+	scene.economy.advance(80.0)
+	ScoutFixture.reveal_frontier(scene, CPU)
 	scene.economy.set_income_source(CPU, FOOD, &"fixture", "Fixture supply", 5.0)
 	var region: MatchRegion = scene.get_region(TerritoryLayout.CPU_START)
 	var point := region.interior_point(func(site: Vector2) -> bool:

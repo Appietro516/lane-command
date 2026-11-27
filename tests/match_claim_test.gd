@@ -90,7 +90,7 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	var camera := root.get_camera_3d()
 	_check(claim.disabled and claim.text == "Claim · 50 Energy", "Claim displays the configured price.")
 	_click(camera.unproject_position(scene.get_region(FRONTIER).global_position))
-	_check(claim.disabled and selection.text.contains("Not adjacent"), "Distant neutral regions remain ineligible.")
+	_check(claim.disabled and selection.text.contains("Scout this region"), "Distant uncharted regions hide claim information.")
 	_click(camera.unproject_position(scene.get_region(FIRST).global_position))
 	_check(not claim.disabled and scene.selected_unit() == null,
 		"Selecting an eligible region enables Claim without a selected unit.")
@@ -106,7 +106,7 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	_check(scene.dispatch_scout(PLAYER, OTHER) == "Need more energy"
 		and scene._expeditions.available(PLAYER).size() == 1,
 		"Insufficient funds leave the free scout unreserved.")
-	scene.economy.advance(17.0)
+	scene.economy.advance(68.0 / 3.0)
 	_check(not battle.issue_move(first.unit_id, Vector2.ZERO),
 		"A committed Scout cannot take a move order.")
 	var infantry := battle.spawn_unit(PLAYER, Vector2.ZERO)
@@ -128,6 +128,8 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 	# Give the fixture a third adjacent target to exercise the unavailable state.
 	var frontier: MatchRegion = scene.get_region(FRONTIER)
 	frontier.neighbor_ids.append(TerritoryLayout.PLAYER_START)
+	battle.visibility.set_source(-800002, PLAYER, scene._map_position(frontier.global_position), 0.5)
+	scene._refresh_intelligence()
 	_click(camera.unproject_position(frontier.global_position))
 	await process_frame
 	_click(claim.get_global_rect().get_center())
@@ -136,6 +138,7 @@ func _test_concurrent_claims(scene: Node, events: Array[Array]) -> void:
 		and scene._expeditions.assignments.size() == 2 and scene.economy.energy(PLAYER) == 1.0,
 		"A third attempt has a clear explanation and does not reserve or charge.")
 	frontier.neighbor_ids.erase(TerritoryLayout.PLAYER_START)
+	battle.visibility.remove_source(-800002)
 	battle.get_unit(infantry.id).hp = 0.0
 	scene._select_unit(second.unit_id)
 	_click(camera.unproject_position(scene.get_region(OTHER).global_position))
@@ -185,7 +188,7 @@ func _test_contest_and_recall(scene: Node, events: Array[Array]) -> void:
 		return
 	_check(ScoutFixture.finish_claim(scene, CPU, CPU_FIRST)
 		and events.count([CPU, CPU_FIRST, cpu.unit_id, true, true]) == 1, "The CPU uses the same completion lifecycle.")
-	scene.economy.advance(34.0)
+	scene.economy.advance(40.0)
 	var cpu_energy: float = scene.economy.energy(CPU)
 	_check(scene.dispatch_scout(PLAYER, FRONTIER).is_empty()
 		and scene.dispatch_scout(CPU, FRONTIER) == "Expedition assigned"
@@ -215,8 +218,9 @@ func _test_lost_adjacency(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	_check(ScoutFixture.claim(scene, PLAYER, FIRST), "The first outpost anchors a new frontier.")
-	scene.economy.advance(17.0)
-	_check(ScoutFixture.dispatch(scene, PLAYER, FRONTIER), "A Scout can dispatch from the new frontier.")
+	scene.economy.advance(68.0 / 3.0)
+	scene.economy.grant_resource(PLAYER, ENERGY, 10)
+	_check(ScoutFixture.dispatch(scene, PLAYER, FRONTIER), "A Scout can dispatch from the new frontier at the scaled price.")
 	var hub: MatchBattle.Outpost = scene._outposts_by_region.get(FIRST)
 	if hub == null:
 		return
@@ -231,7 +235,7 @@ func _test_completion_and_casualty_on_same_step(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	var battle: MatchBattle = scene._battle
-	scene.economy.advance(17.0)
+	scene.economy.advance(68.0 / 3.0)
 	_check(scene.dispatch_scout(PLAYER, FIRST).is_empty(), "The first Scout can dispatch.")
 	var first := scene._expeditions.assignments.get(FIRST) as Expeditions.Scout
 	if first == null:
@@ -272,7 +276,7 @@ func _test_collision_and_death(scene: Node, events: Array[Array]) -> void:
 		and scene.owns_region(NEUTRAL, FIRST), "Losing a route cancels the claim and preserves the charge.")
 	battle.navigation.remove_obstacle(wall)
 	battle.navigation.remove_obstacle(approach_wall)
-	scene.economy.advance(30.0)
+	scene.economy.advance(40.0)
 	_check(scene.dispatch_scout(PLAYER, FIRST).is_empty(), "A cleared route allows a fresh expedition.")
 	scout = scene._expeditions.assignments.get(FIRST) as Expeditions.Scout
 	if scout == null:

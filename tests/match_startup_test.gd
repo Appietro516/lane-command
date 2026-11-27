@@ -183,7 +183,11 @@ func _test_scene() -> void:
 		_check(scene.region_at_world_position(region.global_position) == region.region_id,
 			"World lookup resolves each generated region at its site.")
 		var material := region.geometry.material_override as StandardMaterial3D
-		_check(region.geometry.mesh != null and material.albedo_color == MatchRegion.OWNER_COLORS[owner],
+		var memory: Dictionary = scene._intelligence[MatchBattle.PLAYER].regions.get(region.region_id, {})
+		var expected: Color = MatchRegion.OWNER_COLORS[memory.get("side", MatchRegion.Owner.NEUTRAL)]
+		if region.specialty_marker != null and not memory.is_empty():
+			expected = expected.lerp(RegionSpecialty.TRAITS[region.specialty].color, 0.15)
+		_check(region.geometry.mesh != null and material.albedo_color == expected,
 			"Generated geometry uses the correct owner color.")
 		for node in region.find_children("*", "MeshInstance3D", true, false):
 			var mesh := node as MeshInstance3D
@@ -198,7 +202,7 @@ func _test_scene() -> void:
 				_check(scene._layout.region_at(corner) == region.region_id,
 					"Each base footprint is inside its starting region.")
 		elif not scene._landmarks.has(region.region_id):
-			_check(region.get_child_count() == 2, "Only base regions contain a starting structure.")
+			_check(region.get_child_count() == 2 + int(region.specialty_marker != null), "Only base regions contain a starting structure.")
 
 	var claim_id: StringName = &""
 	for owned_id in scene._layout.player_start_ids:
@@ -238,6 +242,7 @@ func _test_expanded_gameplay() -> void:
 	root.size = Vector2i(1280, 800)
 	var scene := MATCH_SCENE.instantiate()
 	scene.narrative_catalog = null
+	scene.region_count = 24
 	root.add_child(scene)
 	scene.set_process(false)
 	var layout: TerritoryLayout = scene._layout
@@ -278,7 +283,7 @@ func _test_expanded_gameplay() -> void:
 	_check(scene._selected_region_id == target.region_id, "A screen click selects the generated region.")
 	_check(ScoutFixture.claim(scene, PLAYER, target.region_id) and scene.owns_region(PLAYER, target.region_id),
 		"The generated adjacency permits a claim beyond the old bounds.")
-	scene.economy.advance(14.0)
+	scene.economy.advance(18.0)
 	var site := target.interior_point(func(point: Vector2) -> bool:
 		return scene._placement_block_reason(PLAYER, &"barracks", scene._world_position(point)).is_empty())
 	_check(site.is_finite() and scene.try_place_building(PLAYER, &"barracks", scene._world_position(site)),
@@ -291,7 +296,9 @@ func _test_expanded_gameplay() -> void:
 	var battle: MatchBattle = scene._battle
 	for timer in battle._timers:
 		battle.set_barracks_active(timer, false)
-	scene._advance_simulation(24.0)
+	for unit in units:
+		battle.set_unit_stance(unit.side, unit.id, MatchBattle.Stance.SEEK_NEAREST, true)
+	scene._advance_simulation(32.0)
 	_check(units.any(func(unit: MatchBattle.Unit) -> bool: return unit.hp < MatchBattle.UNIT_HP),
 		"Units from opposite ends engage in combat on the expanded map.")
 
@@ -323,7 +330,9 @@ func _test_expanded_wall_approach() -> void:
 	# A friendly wall forces a detour without becoming a combat target.
 	var wall_regions: Array[StringName] = []
 	scene._add_fortification(PLAYER, &"wall", wall_center, forward.orthogonal().angle(), wall_regions)
-	var unit := battle.spawn_unit(PLAYER, start)
+	var unit := battle.spawn_unit(PLAYER, start, &"infantry", null, MatchBattle.Stance.SEEK_NEAREST)
+	if unit != null:
+		unit.hp = 100.0
 	_check(unit != null and not battle.navigation.line_clear(start, enemy_base),
 		"The seeded cross-map approach starts on clear ground with a wall across the direct line.")
 	if unit == null:
@@ -331,11 +340,11 @@ func _test_expanded_wall_approach() -> void:
 		return
 
 	scene._advance_simulation(MatchBattle.STEP)
-	_check(unit.target == MatchBattle.BASE_TARGET and unit.waypoints.size() > 1,
+	_check(unit.strategic_target == MatchBattle.BASE_TARGET and unit.waypoints.size() > 1,
 		"Autonomous infantry plots a waypoint detour toward the enemy base.")
 	var stayed_on_clear_ground := true
-	var earliest_contact := (start.distance_to(enemy_base) - MatchBattle.BASE_ATTACK_RANGE) / 1.8
-	var last_step := ceili((earliest_contact + 2.0) / MatchBattle.STEP)
+	var earliest_contact := (start.distance_to(enemy_base) - MatchBattle.BASE_ATTACK_RANGE) / MatchBattle.MOVEMENT_SPEED
+	var last_step := ceili((earliest_contact + 4.0) / MatchBattle.STEP)
 	for step in range(1, last_step):
 		if battle.base_hp(CPU) < MatchBattle.BASE_HP:
 			break
@@ -343,7 +352,7 @@ func _test_expanded_wall_approach() -> void:
 		stayed_on_clear_ground = stayed_on_clear_ground and battle.navigation.is_passable(unit.position)
 
 	_check(stayed_on_clear_ground and unit.position.distance_to(enemy_base) <= MatchBattle.BASE_ATTACK_RANGE + EPSILON
-		and battle.base_hp(CPU) == MatchBattle.BASE_HP - MatchBattle.ATTACK_DAMAGE
+		and is_equal_approx(battle.base_hp(CPU), MatchBattle.BASE_HP - MatchBattle.ATTACK_DAMAGE * battle.structure_damage_multiplier(unit, MatchBattle.BASE_TARGET))
 		and battle.elapsed_time() >= earliest_contact - MatchBattle.STEP,
 		"Infantry travels around the wall and first hits the enemy base in range at the slower pace.")
 	print("Seed 17 wall approach: %.2f s to first base hit." % battle.elapsed_time())

@@ -118,10 +118,10 @@ func _test_wall_navigation() -> void:
 	var unit := _unit(battle, 1, PLAYER, a)
 	_check(battle.navigation.path(a, b).is_empty() and battle.issue_move(unit.id, b),
 		"An order behind an impassable hostile wall is accepted when the unit can breach it.")
-	battle.advance(0.5, economy)
-	_check(wall.hp == wall.max_hp - MatchBattle.ATTACK_DAMAGE and unit.target == wall.id,
+	battle.advance(0.75, economy)
+	_check(is_equal_approx(wall.hp, wall.max_hp - MatchBattle.ATTACK_DAMAGE * battle.structure_damage_multiplier(unit, wall.id)) and unit.target == wall.id,
 		"A blocked unit approaches and damages the hostile wall segment.")
-	battle.advance(8.0, economy)
+	battle.advance(14.0, economy)
 	_check(battle.get_fortification(wall.id) == null and battle.navigation.line_clear(a, b)
 		and unit.position == b, "Destroying a wall opens the route and the original move order resumes.")
 
@@ -249,7 +249,7 @@ func _test_claim_and_restart(scene: Node) -> void:
 	_check(not scene.try_place_wall(PLAYER, Vector3(-9, 0, -2), Vector3(9, 0, -2))
 		and _stock(scene.economy) == before, "Friendly endpoints cannot authorize a crossing through neutral territory.")
 	scene._set_region_owner(TerritoryLayout.CPU_START, CPU)
-	scene.outpost_hp = MatchBattle.ATTACK_DAMAGE
+	scene.outpost_hp = 1
 	_check(ScoutFixture.claim(scene, PLAYER, contested), "The player can claim the test region.")
 	scene.economy.advance(40.0)
 	_check(scene.try_place_building(PLAYER, Rules.NEST, point)
@@ -264,6 +264,7 @@ func _test_claim_and_restart(scene: Node) -> void:
 
 	var hub: MatchBattle.Outpost = scene._outposts_by_region[contested]
 	var raider := _unit(battle, 102, CPU, hub.position + Vector2(1.20, 0))
+	raider.hp = 100.0
 	scene._spawn_unit(raider)
 	battle.advance(STEP, scene.economy)
 	_check(scene.owns_region(MatchRegion.Owner.NEUTRAL, contested)
@@ -282,13 +283,19 @@ func _test_claim_and_restart(scene: Node) -> void:
 	raider.ordered_destination = raider.position
 	_check(ScoutFixture.claim(scene, PLAYER, contested) and nest.active and defenses[1].active and defenses[2].active,
 		"The original owner's reclaim reactivates retained defenses.")
+	var shots := PackedVector2Array()
+	battle.fortification_fired.connect(func(fort: MatchBattle.Fortification, point: Vector2) -> void:
+		if fort == nest:
+			shots.append(point))
+	nest.cooldown = 0.0
 	raider.position = attack_position
 	raider.ordered_destination = attack_position
 	scene._process(STEP)
-	_check(raider.hp == raider_hp - nest.profile.damage and scene._shot_effects.get_child_count() == 1,
+	_check(raider.hp <= raider_hp - nest.profile.damage and shots.size() == 1
+		and shots[0] == attack_position and scene._shot_effects.get_child_count() >= 1,
 		"The reclaimed gun resumes firing with a single shot.")
 	var view: Node3D = scene._fortifications[nest.id].view
-	nest.hp = MatchBattle.ATTACK_DAMAGE
+	nest.hp = 1.0
 	raider.cooldown = 0.0
 	battle.advance(STEP, scene.economy)
 	_check(not view.is_inside_tree() and battle.get_fortification(nest.id) == null
@@ -333,6 +340,7 @@ func _test_match_gunfire(scene: Node) -> void:
 			nest.position + Vector2.RIGHT * float(nest.profile.range)),
 		"The selected nest's outer range edge matches combat after the camera pans and zooms.")
 	var nester := _scene_unit(scene, 101, CPU, nest.position + Vector2(0, -4.6))
+	battle._base_guns[PLAYER].cooldown = 30.0
 	scene._select_fortification(MatchBattle.NO_TARGET)
 	# Exercise only the nest against the infantry until the mortar assertions.
 	battle.set_fortification_active(mortar, false)
@@ -340,7 +348,7 @@ func _test_match_gunfire(scene: Node) -> void:
 	_check(nester.hp == MatchBattle.UNIT_HP, "The nest holds fire outside its displayed range.")
 	nester.order = MatchBattle.Order.MOVE
 	nester.ordered_destination = nest.position + Vector2(0, -4.4)
-	scene._process(7 * STEP)
+	scene._process(8 * STEP)
 	var nest_hit_hp := MatchBattle.UNIT_HP - float(nest.profile.damage)
 	_check(nester.hp == nest_hit_hp and scene._selected_fortification == MatchBattle.NO_TARGET,
 		"Moving CPU infantry loses HP upon entering the unselected nest's displayed range.")
@@ -380,7 +388,7 @@ func _test_match_gunfire(scene: Node) -> void:
 	var outside := _scene_unit(scene, 105, CPU, mortar.position + Vector2(7.2, 0))
 	var friendly := _scene_unit(scene, 106, PLAYER, mortar.position + Vector2(5.7, 0))
 	# Move the earlier nest target clear of mortar range.
-	replacement.position = Vector2(0, -4)
+	replacement.position = Vector2(12, -6)
 	replacement.ordered_destination = replacement.position
 	scene._process(STEP)
 	var mortar_hit_hp := MatchBattle.UNIT_HP - float(mortar.profile.damage)

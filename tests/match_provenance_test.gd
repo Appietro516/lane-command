@@ -64,14 +64,17 @@ func _run() -> void:
 	_check(income_text.is_visible_in_tree() and not stat_text.is_visible_in_tree(),
 		"Clicking a resource gives the income details priority over inspection.")
 	var income := economy.income_stat(PLAYER, ENERGY)
+	var expected_energy := 2.25 + 2.0 + landmark.magnitude + 2.0 * RegionSpecialty.income_factor(
+		state.frontier.specialty, &"generator")
 	_check(income.breakdown.size() == 4 and _matches(income, economy.income_rate(PLAYER, ENERGY))
 		and income_text.text.count("Generator #") == 2 and income_text.text.contains(landmark.display_name)
-		and income_text.text.contains("Total  +8/s"),
+		and _matches(income, expected_energy)
+		and income_text.text.contains("Total  +%s/s" % scene._stat_number(expected_energy)),
 		"The open HUD explains passive trickle, both producers, and the real landmark.")
 	_check(_matches(battle.unit_dps_stat(unit), 5.5) and _matches(battle.unit_health_stat(unit), 19.0)
 		and unit.hp == 19.0 and stat_text.text.count("Frontier Academy") == 3
 		and stat_text.text.count("Veteran Training") == 3
-		and stat_text.text.contains("Movement speed\nBase  1.8 units/s\nTotal  1.8 units/s"),
+		and stat_text.text.contains("Movement speed\nBase  1.584 units/s\nTotal  1.584 units/s"),
 		"The inspector lists both applied DPS and HP sources and the unmodified speed.")
 
 	var start := unit.position
@@ -80,9 +83,9 @@ func _run() -> void:
 		&"upgrade", "Marching Drills")
 	battle._move(unit)
 	scene._refresh_hud()
-	_check(is_equal_approx(start.distance_to(unit.position), 2.4 * MatchBattle.STEP)
-		and stat_text.text.contains("Movement speed\nBase  1.8 units/s\nMarching Drills  +0.6 units/s\nTotal  2.4 units/s")
-		and scene.get_node("%UnitStats").text.contains("Speed  2.4 units/s"),
+	_check(is_equal_approx(start.distance_to(unit.position), 2.184 * MatchBattle.STEP)
+		and stat_text.text.contains("Movement speed\nBase  1.584 units/s\nMarching Drills  +0.6 units/s\nTotal  2.184 units/s")
+		and scene.get_node("%UnitStats").text.contains("Speed  2.184 units/s"),
 		"Movement and inspection use the same modified speed.")
 
 	var stock := economy.energy(PLAYER)
@@ -93,18 +96,21 @@ func _run() -> void:
 		"Recurring income accrues the inspected rate and one-time spending leaves it intact.")
 	economy.set_income_source(PLAYER, ENERGY, &"upkeep", "Grid upkeep", -0.5, &"upkeep")
 	scene._refresh_hud()
-	_check(income_text.text.contains("Grid upkeep  -0.5/s") and income_text.text.contains("Total  +7.5/s"),
+	_check(income_text.text.contains("Grid upkeep  -0.5/s") and income_text.text.contains("Total  +%s/s" % scene._stat_number(expected_energy - 0.5)),
 		"Negative recurring flow appears with its sign in the open panel.")
 	economy.set_income_source(PLAYER, ENERGY, &"upkeep", "", 0.0)
 
 	var outpost: MatchBattle.Outpost = scene._outposts_by_region[region_id]
+	battle.visibility.set_source(-900001, PLAYER, landmark.footprint.get_center(), BattleVisibility.SCOUT_RADIUS)
+	scene._record_sightings(battle.elapsed_time())
+	scene._refresh_intelligence()
 	outpost.hp = 0.0
 	battle.advance(MatchBattle.STEP, economy)
 	_check(not producer.active and unit.hp == 15.0 and _matches(battle.unit_health_stat(unit), 15.0)
 		and _matches(battle.unit_dps_stat(unit), 4.5)
 		and not stat_text.text.contains("Frontier Academy") and stat_text.text.contains("Veteran Training"),
-		"Losing the outpost revokes only its modifier and immediately clamps current unit HP.")
-	_check(_matches(economy.income_stat(PLAYER, ENERGY), 5.0)
+		"Losing the outpost revokes only its modifier and immediately clamps current unit HP. HP: %s. Stats: %s." % [unit.hp, stat_text.text])
+	_check(_matches(economy.income_stat(PLAYER, ENERGY), 4.25)
 		and not income_text.text.contains(landmark.display_name)
 		and income_text.text.contains("+0/s · %s · Inactive" % str(region_id).capitalize()),
 		"The already-open income panel removes the landmark and zeros the inactive producer.")
@@ -118,7 +124,7 @@ func _run() -> void:
 	_click(energy.get_global_rect().get_center())
 	var landmark_text: String = scene.get_node("%LandmarkDetails").text
 	_check(landmark_text.contains("Inactive")
-		and landmark_text.contains("On claim · +1/s Energy"),
+		and landmark_text.contains("On claim · +%s/s Energy" % scene._stat_number(landmark.magnitude)),
 		"Landmark inspection distinguishes current and potential contributions.")
 
 	_check(ScoutFixture.claim(scene, PLAYER, region_id) and producer.active
@@ -131,12 +137,13 @@ func _run() -> void:
 	scene._use_scout_slot(0)
 	scene._pick_map(camera.unproject_position(roof.global_position))
 	_check(scene.get_node("%UnitName").text == "Player Barracks" and sources.visible
-		and stat_text.text.contains("Base  0.285714 units/s"), "Clicking the barracks after a Scout exposes baseline capacity.")
+		and stat_text.text.contains("Base  0.235294 units/s"), "Clicking the barracks after a Scout exposes baseline capacity.")
+	economy.advance(15.0)
 	_check(scene.try_upgrade(PLAYER, timer.id), "The real production upgrade is affordable.")
 	var production := timer.production_stat(economy)
 	_check(_matches(production, 1.0 / timer.interval(economy))
-		and stat_text.text.contains("Production upgrade  +0.114286 units/s")
-		and stat_text.text.contains("Total  0.4 units/s")
+		and stat_text.text.contains("Production upgrade  +0.072398 units/s")
+		and stat_text.text.contains("Total  0.307692 units/s")
 		and economy.income_stat(PLAYER, ENERGY) == income,
 		"The purchased upgrade explains the new production rate without altering income.")
 	if timer != null:

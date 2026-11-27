@@ -82,13 +82,16 @@ func _test_combat_and_health(attacker: MatchRegion.Owner, defender: MatchRegion.
 	var attack := battle.unit_attack_stat(first)
 	_check(attack.total == 4.0 and _sum(attack) == attack.total and attack.breakdown[1].magnitude == 0.5
 		and battle.unit_dps_stat(first).total == 8.0, "DPS bonuses scale by attack interval.")
-	_check(battle.base_hp(defender) == 80.0 and battle.base_health_stat(defender).total == 84.5
+	_check(battle.base_hp(defender) == MatchBattle.BASE_HP and battle.base_health_stat(defender).total == MatchBattle.BASE_HP + 4.5
 		and outpost.hp == 16.5 and outpost.health_stat().total == 16.5,
 		"Existing bases keep current HP and new outposts start at their effective cap.")
 
 	first.position = Vector2(0, 0)
+	first.stance = MatchBattle.Stance.SEEK_NEAREST
+	first.hp = 100.0
+	var mitigation := battle.structure_damage_multiplier(first, outpost.id)
 	battle.advance(MatchBattle.STEP, economy)
-	_check(outpost.hp == 12.5 and first.cooldown == 0.5,
+	_check(is_equal_approx(outpost.hp, 16.5 - 4.0 * mitigation) and first.cooldown == 0.5,
 		"Existing units deal the inspected per-hit damage at their attack interval.")
 	stats.remove_source(&"armor")
 	stats.set_modifier(&"armor", defender, BUILDING_HP, 4.5)
@@ -96,10 +99,10 @@ func _test_combat_and_health(attacker: MatchRegion.Owner, defender: MatchRegion.
 		"Removing a cap clamps HP and restoring the cap does not heal.")
 	stats.remove_source(&"alpha")
 	battle.advance(0.5, economy)
-	_check(outpost.hp == 8.5, "The next hit uses the remaining source without rounding.")
-	battle.advance(1.5, economy)
+	_check(is_equal_approx(outpost.hp, 12.0 - 3.5 * mitigation), "The next hit uses the remaining source without rounding.")
+	battle.advance(4.0, economy)
 	_check(outpost.hp == 0.0 and battle.get_outpost(outpost.id) == null
-		and economy.income_rate(defender, ENERGY) == 3.0, "Destroyed structures revoke their contributions.")
+		and economy.income_rate(defender, ENERGY) == 2.25, "Destroyed structures revoke their contributions.")
 	battle.advance(2.0, economy)
 	var second := battle.get_unit(2)
 	_check(second != null and battle.unit_dps_stat(second).total == 4.0,
@@ -122,13 +125,13 @@ func _test_match_lifecycle() -> void:
 	stats.set_modifier(timer.source_id, PLAYER, FOOD, 1.0, &"building", "Barracks")
 	scene._refresh_hud()
 	var energy_readout := scene.get_node("%Resources/energy") as Control
-	_check(energy_readout.get_node("Rate").text == "+5/s"
-		and energy_readout.tooltip_text == "Energy income\nPassive trickle  +3/s\nReactor  +1/s · Region 1\nTrade  +1/s\nTotal  +5/s",
+	_check(energy_readout.get_node("Rate").text == "+4.25/s"
+		and energy_readout.tooltip_text == "Energy income\nPassive trickle  +2.25/s\nReactor  +1/s · Region 1\nTrade  +1/s\nTotal  +4.25/s",
 		"HUD and stockpile updates use the same attributed income.")
 	economy.advance(2.0)
-	_check(economy.energy(PLAYER) == 10.0 and economy.energy(CPU) == 56.0
+	_check(economy.energy(PLAYER) == 8.5 and economy.energy(CPU) == 54.5
 		and economy.try_spend(PLAYER, {ENERGY: 8, FOOD: 24})
-		and economy.energy(PLAYER) == 2.0 and economy.stockpile(PLAYER, FOOD) == 0.0,
+		and economy.energy(PLAYER) == 0.5 and economy.stockpile(PLAYER, FOOD) == 0.0,
 		"Buffed flow changes affordability and normal purchases debit stockpiles.")
 	battle.set_barracks_active(timer, false)
 	_check(economy.income_rate(PLAYER, FOOD) == 1.0
@@ -139,14 +142,14 @@ func _test_match_lifecycle() -> void:
 	_check(economy.income_rate(PLAYER, FOOD) == 2.0, "Repeated activation never duplicates income.")
 
 	scene._set_region_owner(region, NEUTRAL)
-	_check(economy.income_rate(PLAYER, ENERGY) == 4.0 and economy.income_rate(PLAYER, MATERIALS) == 2.0
+	_check(economy.income_rate(PLAYER, ENERGY) == 3.25 and economy.income_rate(PLAYER, MATERIALS) == 1.45
 		and _ids(economy.income_stat(PLAYER, ENERGY)) == [&"base", &"trade"],
 		"Neutral regions lose their effects and disappear from faction provenance.")
 	scene._set_region_owner(region, CPU)
-	_check(economy.income_rate(CPU, ENERGY) == 4.0 and economy.income_rate(CPU, MATERIALS) == 3.0
-		and economy.income_rate(PLAYER, ENERGY) == 4.0, "The new owner receives all region effects.")
+	_check(economy.income_rate(CPU, ENERGY) == 3.25 and economy.income_rate(CPU, MATERIALS) == 2.45
+		and economy.income_rate(PLAYER, ENERGY) == 3.25, "The new owner receives all region effects.")
 	stats.remove_source(scene.region_source_id(region))
-	_check(economy.income_rate(CPU, ENERGY) == 3.0 and economy.income_rate(CPU, MATERIALS) == 2.0,
+	_check(economy.income_rate(CPU, ENERGY) == 2.25 and economy.income_rate(CPU, MATERIALS) == 1.45,
 		"Removing a whole source clears every contribution.")
 	stats.set_modifier(&"trade", CPU, BUILDING_HP, 5.0, &"upgrade", "Armor")
 	stats.set_modifier(&"training", PLAYER, DPS, 1.5, &"upgrade", "Training")
@@ -156,13 +159,15 @@ func _test_match_lifecycle() -> void:
 	scene._refresh_hud()
 	var unit_stats := scene.get_node("%UnitStats") as Label
 	var cpu_health := scene.get_node("%CPUHP") as Label
+	battle.visibility.set_source(-800021, PLAYER, battle._bases[CPU], 1.0)
+	scene._refresh_hud()
 	_check(unit_stats.text.contains("Attack  4.5")
 		and unit_stats.tooltip_text.contains("Damage per second\nBase  3\nTraining  +1.5\nTotal  4.5")
-		and cpu_health.tooltip_text == "Maximum HP\nBase  80\nArmor  +5\nTotal  85",
+		and cpu_health.tooltip_text == "Maximum HP\nBase  420\nArmor  +5\nTotal  425",
 		"Unit and base inspectors report the same attributed stats used by combat.")
 	scene.restart_match()
 	scene.set_process(false)
-	_check(scene.faction_stats != stats and scene.economy.income_rate(PLAYER, ENERGY) == 3.0
+	_check(scene.faction_stats != stats and scene.economy.income_rate(PLAYER, ENERGY) == 2.25
 		and scene.economy.income_rate(PLAYER, FOOD) == 1.0
 		and scene._battle.base_health_stat(CPU).total == MatchBattle.BASE_HP,
 		"Restart clears effects and provenance from the previous match.")

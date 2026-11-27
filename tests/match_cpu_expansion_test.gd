@@ -125,7 +125,7 @@ func _test_claim_preferences(scene: Node) -> void:
 	# Consume every slot except the mandatory outpost slot in the original favorite.
 	var covered: Array[StringName] = [baseline]
 	for i in scene.region_building_capacity - 1:
-		scene._register_region_structure(StringName("test/%d" % i), scene.LEGENDARY_KIND, covered)
+		scene._register_region_structure(StringName("test/%d" % i), &"farm", covered)
 	var candidate := _dispatch_target(scene)
 	_check(not baseline.is_empty() and not candidate.is_empty() and candidate != baseline
 		and scene.region_occupancy(baseline).free == 1,
@@ -157,7 +157,7 @@ func _test_economy_and_defense(scene: Node) -> void:
 	_check(scene._expeditions.assignments.is_empty() and scene._cpu_strategy._claim_retry_at.is_empty()
 		and scene.economy.energy(CPU) == scene.claim_energy,
 		"An affordable claim waits when it would consume the defense reserve.")
-	scene.economy.advance(10.0)
+	scene.economy.advance(26.0)
 	_check(not _dispatch_target(scene).is_empty(), "Scout expansion resumes after replenishing the reserve.")
 
 	_prepare(scene)
@@ -194,14 +194,19 @@ func _test_replacement(scene: Node) -> void:
 	_check(scout.state == Expeditions.State.DEAD and scene.economy.energy(CPU) == paid
 		and scene.owns_region(NEUTRAL, target) and not expeditions.assignments.has(target),
 		"Scout death releases a paid claim and imposes the shared replacement delay.")
-	battle.advance(scene.cpu_scout_dispatch_interval, scene.economy)
+	battle.advance(scene.cpu_scout_dispatch_interval * scene._cpu_strategy.difficulty.scout_delay, scene.economy)
+	# The reduced passive income can put an income purchase ahead of the next claim.
 	var alternate := _dispatch_target(scene)
+	for _decision in 2:
+		if not alternate.is_empty():
+			break
+		alternate = _dispatch_target(scene)
 	_check(not alternate.is_empty() and alternate != target,
 		"The surviving scout pursues an alternative during the interruption backoff.")
 	battle.advance(scene.scout_replacement_delay, scene.economy)
 	scene._try_cpu_purchase()
 	_check(scout.state == Expeditions.State.DEAD, "The replacement preserves the same Energy reserve.")
-	scene.economy.advance(10.0)
+	scene.economy.advance(14.0)
 	paid = scene.economy.energy(CPU)
 	scene._try_cpu_purchase()
 	_check(scout.state == Expeditions.State.AVAILABLE and scout.unit_id != old_id
@@ -244,7 +249,7 @@ func _test_competition(scene: Node) -> void:
 	# A full region is ineligible even where it has a clear physical route.
 	var covered: Array[StringName] = [target]
 	for i in scene.region_building_capacity:
-		scene._register_region_structure(StringName("full/%d" % i), scene.LEGENDARY_KIND, covered)
+		scene._register_region_structure(StringName("full/%d" % i), &"farm", covered)
 	var energy: float = scene.economy.energy(CPU)
 	scene._try_cpu_purchase()
 	_check(scene._expeditions.assignments.is_empty() and scene.economy.energy(CPU) == energy
@@ -290,7 +295,8 @@ func _prepare(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	scene.cpu_production_limit = 1
-	scene.economy.advance(60.0)
+	scene.economy.advance(80.0)
+	Scouts.reveal_frontier(scene, CPU)
 	scene.economy.set_income_source(CPU, FOOD, &"test_supply", "Test supply", 5.0)
 	var base: MatchRegion = scene.get_region(TerritoryLayout.CPU_START)
 	var point := base.interior_point(func(site: Vector2) -> bool:

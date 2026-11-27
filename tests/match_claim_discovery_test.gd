@@ -112,6 +112,26 @@ func _test_production_claim() -> void:
 	var events: NarrativeEvents = scene.narrative_events
 	var dialogue := scene.get_node("NarrativeOverlay/EventDialogue") as Control
 	var region := _frontier(scene, PLAYER)
+	var battle: MatchBattle = scene._battle
+	# Use a frontier whose expedition is outside the guards' immediate reach.
+	var start_region: MatchRegion = scene.get_region(scene._layout.player_start_ids[0])
+	for candidate in start_region.neighbor_ids:
+		var plan: Expeditions.ClaimRoute = scene._expeditions.preview_claim(PLAYER, candidate)
+		if plan == null:
+			continue
+		var safe := true
+		var unit := battle.get_unit(plan.unit_id)
+		var previous := unit.position
+		for point in plan.waypoints:
+			for camp in battle.objectives.camps:
+				var guard := battle.get_unit(camp.guard_id)
+				var closest := Geometry2D.get_closest_point_to_segment(camp.point, previous, point)
+				if guard != null and closest.distance_to(camp.point) <= guard.definition.range + 0.1:
+					safe = false
+			previous = point
+		if safe:
+			region = candidate
+			break
 	var id := _id(PLAYER, region)
 	var start: StringName = scene._layout.player_start_ids[0]
 	scene._select_region(region)
@@ -127,7 +147,6 @@ func _test_production_claim() -> void:
 		scene.free()
 		return
 	_check(events.instance(id).is_empty() and not paused, "Dispatch itself does not trigger a discovery.")
-	var battle: MatchBattle = scene._battle
 	while events.pending_player_id().is_empty() and battle.elapsed_time() < 45.0:
 		scene._advance_simulation(0.5)
 	if not _check(paused and dialogue.visible and established == [true] and events.pending_player_id() == id,

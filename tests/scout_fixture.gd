@@ -27,6 +27,23 @@ static func claim(scene: Node, side: MatchRegion.Owner, region_id: StringName) -
 	return dispatch(scene, side, region_id) and finish_claim(scene, side, region_id)
 
 
+## Give focused planner fixtures an observed frontier while retaining exact fog checks.
+static func reveal_frontier(scene: Node, side: MatchRegion.Owner) -> void:
+	var field: BattleVisibility = scene._battle.visibility
+	var sites := {}
+	for region: MatchRegion in scene._regions_by_id.values():
+		if region.region_owner != side:
+			continue
+		for id in region.neighbor_ids:
+			var neighbor: MatchRegion = scene.get_region(id)
+			if neighbor.region_owner == MatchRegion.Owner.NEUTRAL:
+				sites[id] = Vector2(neighbor.position.x, neighbor.position.z)
+	var key := -800000 - side * 100
+	for point: Vector2 in sites.values():
+		field.set_source(key, side, point, BattleVisibility.UNIT_RADIUS)
+		key -= 1
+
+
 static func combat_units(battle: MatchBattle) -> Array[MatchBattle.Unit]:
 	return battle.active_units().filter(func(unit: MatchBattle.Unit) -> bool:
 		return unit.type_id in Catalog.COMBAT_TYPES)

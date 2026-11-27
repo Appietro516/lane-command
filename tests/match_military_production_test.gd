@@ -74,28 +74,28 @@ func _test_concurrent_production(scene: Node) -> void:
 	if duplicate == null:
 		return
 	for timer in battle._timers:
-		_check(timer.default_stance == Stance.SEEK_NEAREST, "Every producer starts in Seek Nearest.")
+		_check(timer.default_stance == Stance.IDLE, "Every producer starts in Idle.")
 		if timer != duplicate:
 			_check(battle.set_producer_stance(timer.side, timer.id, defaults[timer.side][timer.kind]),
 				"Both sides configure each producer type through the same API.")
 	_check(not battle.set_producer_stance(CPU, duplicate.id, Stance.IDLE)
 		and not battle.set_producer_stance(PLAYER, duplicate.id, -1 as Stance)
-		and duplicate.default_stance == Stance.SEEK_NEAREST, "Foreign and invalid settings are rejected.")
+		and duplicate.default_stance == Stance.IDLE, "Foreign and invalid settings are rejected.")
 	_check(scene.try_upgrade(PLAYER, ScoutFixture.barracks(scene._battle, PLAYER).id) and scene.try_upgrade(CPU, ScoutFixture.barracks(scene._battle, CPU).id), "Both factions can fund the Barracks upgrade.")
 	var barracks_option: Button = scene._build_options[&"barracks"]
 	var heavy_option: Button = scene._build_options[&"heavy_factory"]
-	_check(barracks_option.text.contains("Infantry every 3.5s · 4 Food")
-		and heavy_option.text.contains("55 Energy + 35 Materials\nHeavy every 6s · 8 Food"),
+	_check(barracks_option.text.contains("Infantry every 4.25s · 4 Food")
+		and heavy_option.text.contains("55 Energy + 35 Materials\nHeavy every 6.5s · 9 Food"),
 		"The menu displays the new buildings’ baseline cadence, build price, unit and Food cost.")
 	var food_before := {PLAYER: economy.stockpile(PLAYER, FOOD), CPU: economy.stockpile(CPU, FOOD)}
-	battle.advance(1.5 - STEP, economy)
+	battle.advance(2.25 - STEP, economy)
 	_check(deployments.is_empty(), "Production waits for the first completed cycle.")
-	battle.advance(1.0 + STEP, economy)
+	battle.advance(STEP, economy)
 	_check(_types(deployments, PLAYER) == [Catalog.INFANTRY]
 		and _types(deployments, CPU) == [Catalog.INFANTRY], "The upgraded Barracks deploy on the same tick.")
-	battle.advance(1.0, economy)
+	battle.advance(1.75, economy)
 	_check(_types(deployments, PLAYER).back() == Catalog.RANGED
-		and _types(deployments, CPU).back() == Catalog.RANGED, "Ranges deploy at their unchanged 4.5s cadence.")
+		and _types(deployments, CPU).back() == Catalog.RANGED, "Ranges deploy at their 5-second cadence.")
 	var original_range_unit: MatchBattle.Unit
 	var original_range_id: int
 	for entry in deployments:
@@ -115,16 +115,16 @@ func _test_concurrent_production(scene: Node) -> void:
 				"Each behavior has a tooltip in the inspector.")
 		_choose_stance(picker, Stance.IDLE)
 		_check(original_range_unit.stance == Stance.SEEK_STRONGEST
-			and duplicate.default_stance == Stance.SEEK_NEAREST,
+			and duplicate.default_stance == Stance.IDLE,
 			"Editing one Range preserves the first unit's snapshot and the other Range's default.")
 	battle.advance(1.0, economy)
-	_check(_types(deployments, PLAYER) == [Catalog.INFANTRY, Catalog.RANGED, Catalog.INFANTRY, Catalog.RANGED]
-		and _types(deployments, CPU) == [Catalog.INFANTRY, Catalog.RANGED, Catalog.INFANTRY],
+	_check(_types(deployments, PLAYER) == [Catalog.INFANTRY, Catalog.RANGED, Catalog.RANGED]
+		and _types(deployments, CPU) == [Catalog.INFANTRY, Catalog.RANGED],
 		"A later Range in the same region has an independent cycle.")
 	battle.advance(0.5, economy)
 	_check(_types(deployments, PLAYER).back() == Catalog.HEAVY
-		and _types(deployments, CPU).back() == Catalog.HEAVY, "Factories deploy at their unchanged 6s cadence.")
-	battle.advance(6.0, economy)
+		and _types(deployments, CPU).back() == Catalog.HEAVY, "Factories deploy at their 6.5-second cadence.")
+	battle.advance(6.5, economy)
 	for side: MatchRegion.Owner in [PLAYER, CPU]:
 		var spent := 0
 		var types := _types(deployments, side)
@@ -141,7 +141,7 @@ func _test_concurrent_production(scene: Node) -> void:
 	for entry in deployments:
 		var expected: Stance = defaults[entry.side][entry.kind]
 		if entry.producer_id == duplicate.id:
-			expected = Stance.SEEK_NEAREST
+			expected = Stance.IDLE
 		elif original_range_unit != null and entry.producer_id == original_range_id \
 				and entry.id != original_range_unit.id:
 			expected = Stance.IDLE
@@ -170,6 +170,9 @@ func _test_concurrent_production(scene: Node) -> void:
 	for entry in deployments:
 		if entry.side != CPU or entry.type != Catalog.HEAVY:
 			continue
+		var producer := battle.get_fortification(entry.producer_id)
+		battle.visibility.set_source(-800001, PLAYER, producer.position, 1.0)
+		scene._refresh_intelligence()
 		scene._select_fortification(entry.producer_id)
 		_check(not picker.is_visible_in_tree()
 			and scene.get_node("%ProducerStanceLabel").text.contains("Idle"),
@@ -189,7 +192,7 @@ func _test_concurrent_production(scene: Node) -> void:
 	var marking := view.get_node("Marking") as Node3D
 	scene._pick_map(root.get_camera_3d().unproject_position(marking.global_position))
 	_check(scene.get_node("%UnitName").text == "Player Training Range"
-		and scene.get_node("%UnitIntent").text.contains("Ranged · 5 Food per unit\nCapacity  0.222222 units/s"),
+		and scene.get_node("%UnitIntent").text.contains("Ranged · 5 Food per unit\nCapacity  0.2 units/s"),
 		"Picking a Range opens the existing inspector with its unit and rate.")
 
 
@@ -224,9 +227,9 @@ func _test_lifecycle(scene: Node) -> void:
 	battle.advance(16.0, economy)
 	_check(is_equal_approx(factory.elapsed, factory.interval(economy)) and deployments.is_empty(),
 		"A starved factory holds one completed cycle without producing or banking more.")
-	economy.advance(7.0)
+	economy.advance(8.0)
 	battle.advance(0.0, economy)
-	_check(deployments.is_empty() and economy.stockpile(PLAYER, FOOD) == 7.0, "Partial Food never gets charged.")
+	_check(deployments.is_empty() and economy.stockpile(PLAYER, FOOD) == 8.0, "Partial Food never gets charged.")
 	economy.advance(1.0)
 	battle.advance(0.0, economy)
 	battle.advance(0.0, economy)
@@ -259,12 +262,12 @@ func _test_lifecycle(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	var fresh := _place(scene, PLAYER, &"barracks", Vector2(-13.0, -1.3))
-	if not _check(fresh != null and fresh.id == barracks.id and fresh.default_stance == Stance.SEEK_NEAREST,
+	if not _check(fresh != null and fresh.id == barracks.id and fresh.default_stance == Stance.IDLE,
 			"A reused producer ID after restart begins with the original default."):
 		return
 	fresh.hp = 1.0
 	var attacker: MatchBattle.Unit = scene._battle.spawn_unit(CPU,
-		fresh.position + Vector2.UP * 1.25, Catalog.RANGED)
+		fresh.position + Vector2.UP * 1.25, Catalog.RANGED, null, Stance.SEEK_NEAREST)
 	_check(attacker != null, "A ranged attacker starts outside the Barracks footprint.")
 	scene._battle.advance(STEP, scene.economy)
 	_check(scene.economy.barracks_count(PLAYER) == 0 and not scene._battle._timers.has(fresh),

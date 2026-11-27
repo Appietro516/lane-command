@@ -87,7 +87,7 @@ func _test_attack_range_and_cooldown(type_id: StringName) -> void:
 	var profile: Dictionary = Catalog.DEFINITIONS[type_id]
 	var economy := MatchEconomy.new()
 	var outside := MatchBattle.new(PLAYER_BASE, CPU_BASE)
-	var unit := outside.spawn_unit(PLAYER, Vector2.ZERO, type_id)
+	var unit := outside.spawn_unit(PLAYER, Vector2.ZERO, type_id, null, MatchBattle.Stance.SEEK_NEAREST)
 	var enemy := outside.spawn_unit(CPU, Vector2(profile.range + 0.02, 0.0), type_id)
 	outside.advance(STEP, economy)
 	_check(unit.hp == profile.hp and enemy.hp == profile.hp and unit.position.x > 0.0,
@@ -121,24 +121,28 @@ func _test_attack_range_and_cooldown(type_id: StringName) -> void:
 func _test_structures(type_id: StringName) -> void:
 	var profile: Dictionary = Catalog.DEFINITIONS[type_id]
 	var damage: float = profile.damage * profile.structure_damage_multiplier
+	var hub_factor := 1.0 if type_id == Catalog.HEAVY else MatchBattle.HUB_ARMOR
+	var base_factor := 1.0 if type_id == Catalog.HEAVY else MatchBattle.BASE_ARMOR
 	var economy := MatchEconomy.new()
 	var battle := MatchBattle.new(PLAYER_BASE, CPU_BASE)
 	var outpost := battle.add_outpost(&"middle", CPU, Vector2.ZERO, 24)
-	var attacker := battle.spawn_unit(PLAYER, Vector2(-4.0, 0.0), type_id)
+	var attacker := battle.spawn_unit(PLAYER, Vector2(-4.0, 0.0), type_id, null, MatchBattle.Stance.SEEK_NEAREST)
+	attacker.hp = 100.0
 	for step in range(180):
 		if outpost.hp < outpost.max_hp:
 			break
 		battle.advance(STEP, economy)
-	_check(is_equal_approx(outpost.hp, outpost.max_hp - damage) and attacker.target == outpost.id,
+	_check(is_equal_approx(outpost.hp, outpost.max_hp - damage * hub_factor) and attacker.target == outpost.id,
 		"%s approaches the opposing outpost and applies its catalog damage." % type_id)
 
 	battle = MatchBattle.new(PLAYER_BASE, CPU_BASE)
 	for side: MatchRegion.Owner in [PLAYER, CPU]:
 		var direction := 1.0 if side == PLAYER else -1.0
-		battle.spawn_unit(side, Vector2(7.0 * direction, 0.0), type_id)
+		var siege := battle.spawn_unit(side, Vector2(7.0 * direction, 0.0), type_id, null, MatchBattle.Stance.SEEK_NEAREST)
+		siege.hp = 100.0
 	battle.advance(3.0, economy)
 	_check(battle.base_hp(PLAYER) == battle.base_hp(CPU)
-		and battle.base_hp(CPU) <= MatchBattle.BASE_HP - damage,
+		and battle.base_hp(CPU) <= MatchBattle.BASE_HP - damage * base_factor + 0.0001,
 		"%s attacks bases from either faction under the same rules." % type_id)
 
 
@@ -233,7 +237,7 @@ func _test_selection_and_restart() -> void:
 	await process_frame
 	var camera := root.get_camera_3d()
 	var battle: MatchBattle = scene._battle
-	var x := -4.0
+	var x := -4.5
 	for type_id: StringName in Catalog.COMBAT_TYPES:
 		var profile: Dictionary = Catalog.DEFINITIONS[type_id]
 		var unit := battle.spawn_unit(PLAYER, Vector2(x, -1.0), type_id)

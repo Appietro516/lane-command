@@ -67,6 +67,7 @@ var _retry_at := {}
 var _next_defense := 0.0
 var _next_claim := 0.0
 var _next_replacement := 0.0
+var _recon_retry_at: Dictionary[StringName, float] = {}
 var _claim_retry_at: Dictionary[StringName, float] = {}
 var _tactics := CpuTactics.new()
 
@@ -237,7 +238,7 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 				return
 	if can_expand_production:
 		_build_military(scene, options, food_producer, sites, now)
-	if allow_claim and frontiers.is_empty() and not under_pressure:
+	if allow_claim and not under_pressure:
 		_reconnoiter(scene, owned, now)
 
 
@@ -247,26 +248,36 @@ func _reconnoiter(scene: Node3D, owned: Array[MatchRegion], now: float) -> void:
 	var battle: MatchBattle = scene._battle
 	if battle.visibility == null:
 		return
-	var intel: FactionIntelligence = scene._intelligence[side]
-	for scout: ScoutExpeditions.Scout in scene._expeditions.available(side):
+	var unseen: Dictionary[StringName, Vector2] = {}
+	for region in owned:
+		for id in region.neighbor_ids:
+			var neighbor: MatchRegion = scene.get_region(id)
+			if now >= _recon_retry_at.get(id, 0.0) and not scene.region_live(side, neighbor):
+				unseen[id] = _site(neighbor)
+	if unseen.is_empty():
+		return
+	var scouts: Array[ScoutExpeditions.Scout] = scene._expeditions.available(side)
+	var closest := INF
+	var observer: MatchBattle.Unit
+	var frontier: StringName
+	for scout: ScoutExpeditions.Scout in scouts:
 		var unit := battle.get_unit(scout.unit_id)
-		if unit == null or not unit.waypoints.is_empty():
-			continue
-		var best := Vector2.INF
-		var distance := INF
-		for region in owned:
-			for id in region.neighbor_ids:
-				if intel.regions.has(id):
-					continue
-				var candidate := _site(scene.get_region(id))
-				var length := unit.position.distance_squared_to(candidate)
-				if length < distance:
-					best = candidate
-					distance = length
-		if best.is_finite() and battle.order_move(side, unit.id, best, true):
-			_next_claim = now + 3.0
-			return
-
+		for id in unseen:
+			var distance := unit.position.distance_squared_to(unseen[id])
+			if distance < closest:
+				closest = distance
+				observer = unit
+				frontier = id
+	if observer == null:
+		return
+	# Observe a frontier from inside scout sight. The center may be obstructed
+	# by a landmark or fall within a guardian's attack radius.
+	var target := unseen[frontier]
+	var vantage := target.move_toward(observer.position, BattleVisibility.SCOUT_RADIUS * 0.75)
+	if battle.order_move(side, observer.id, vantage, true):
+		_next_claim = now + 3.0
+	else:
+		_recon_retry_at[frontier] = now + scene.cpu_placement_retry
 
 func _try_strategic_strike(scene: Node3D, sites: Array[MatchRegion], units: Array[MatchBattle.Unit],
 		production: Production, under_pressure: bool, now: float) -> bool:

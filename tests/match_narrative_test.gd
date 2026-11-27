@@ -112,7 +112,7 @@ func _test_effects_and_cpu() -> void:
 	_check(state.status == NarrativeEvents.Status.RESOLVED and state.selected_option == Fixture.INVEST
 		and state.side == PLAYER and state.origin == TRIGGER and state.region == REGION
 		and source.size() == 1 and source[0].owner == PLAYER and source[0].region_id == REGION
-		and source[0].source_name == "Field relay" and economy.income_rate(PLAYER, ENERGY) == 5.0,
+		and source[0].source_name == "Field relay" and economy.income_rate(PLAYER, ENERGY) == 4.25,
 		"Resolution records the selection and registers a named, owned, region-attributed modifier.")
 	_check(events.submit(&"first", TRIGGER, PLAYER, REGION)
 		and events.pending_player_id() == &"second"
@@ -123,9 +123,9 @@ func _test_effects_and_cpu() -> void:
 	_check(events.resolve_player(&"second", Fixture.TAKE) and not events.resolve_player(&"second", Fixture.TAKE)
 		and economy.stockpile(PLAYER, MATERIALS) == 42.0, "A stock grant applies exactly once.")
 	events.advance_time(1.99)
-	_check(economy.income_rate(PLAYER, ENERGY) == 5.0, "The modifier survives until its simulation deadline.")
+	_check(economy.income_rate(PLAYER, ENERGY) == 4.25, "The modifier survives until its simulation deadline.")
 	events.advance_time(2.0)
-	_check(economy.income_rate(PLAYER, ENERGY) == 3.0, "The timed modifier expires through FactionStats.")
+	_check(economy.income_rate(PLAYER, ENERGY) == 2.25, "The timed modifier expires through FactionStats.")
 
 	var until_end := Fixture.catalog()
 	until_end.events[0].options[1].effects[2].duration = 0.0

@@ -80,11 +80,11 @@ func _test_lifecycle(scene: Node) -> void:
 	var view := scene._outpost_views.get(CONTESTED) as Node3D
 	_check(battle._outposts.size() == 1 and region.get_children().count(view) == 1
 		and scene.region_at_world_position(view.global_position) == CONTESTED
-		and hub.region_id == CONTESTED and hub.side == PLAYER and hub.hp == scene.outpost_hp,
+		and hub.region_id == CONTESTED and hub.side == PLAYER and hub.hp == hub.max_hp,
 		"The claim creates one visible, configurable outpost in the claimed region.")
 	_check(economy.energy(PLAYER) == 0.0 and scene.owns_region(PLAYER, CONTESTED)
-		and tile.albedo_color == MatchRegion.OWNER_COLORS[PLAYER]
-		and claim_button.disabled and region_status.text.contains("Outpost · 6/6 HP"),
+		and tile.albedo_color == _tile_color(region, PLAYER)
+		and claim_button.disabled and region_status.text.contains("%s/%s HP" % [scene._stat_number(hub.hp), scene._stat_number(hub.max_hp)]),
 		"The claim spends the configured cost and immediately updates ownership, color and selection.")
 
 	economy.advance(50.0)
@@ -115,15 +115,18 @@ func _test_lifecycle(scene: Node) -> void:
 		if hub.hp < hub.max_hp:
 			break
 		battle.advance(MatchBattle.STEP, economy)
+	scene._refresh_intelligence()
 	scene._refresh_hud()
-	_check(hub.hp == MatchBattle.ATTACK_DAMAGE and region_status.text.contains("Outpost · 3/6 HP")
-		and scene._target_label(cpu_unit).contains("Player outpost · 3/6 HP"),
-		"A normal CPU attack deals damage and both inspection surfaces show the remaining HP.")
-	battle.advance(1.0, economy)
+	var expected_hp := hub.max_hp - MatchBattle.ATTACK_DAMAGE * battle.structure_damage_multiplier(cpu_unit, hub.id)
+	var readout: String = "%s/%s HP" % [scene._stat_number(expected_hp), scene._stat_number(hub.max_hp)]
+	_check(is_equal_approx(hub.hp, expected_hp) and region_status.text.contains(readout)
+		and scene._target_label(cpu_unit) == "—",
+		"A CPU attack updates the outpost HP readout while its target stays private.")
+	battle.advance(5.0, economy)
 	_check(hub.hp == 0 and battle.get_outpost(hub.id) == null and view.get_parent() == null
 		and cpu_unit.target != hub.id and battle.navigation.is_passable(hub.position),
 		"Combat removes the destroyed hub, its footprint, and the unit's discarded target.")
-	_check(scene.owns_region(NEUTRAL, CONTESTED) and tile.albedo_color == MatchRegion.OWNER_COLORS[NEUTRAL]
+	_check(scene.owns_region(NEUTRAL, CONTESTED) and tile.albedo_color == _tile_color(region, NEUTRAL)
 		and selection.text.contains("Neutral") and not region_status.text.contains("Outpost")
 		and not claim_button.disabled, "Loss immediately updates the selected tile and claim control.")
 	_check(scene._expeditions.eligibility(PLAYER, BEYOND) == "Not adjacent"
@@ -137,11 +140,14 @@ func _test_lifecycle(scene: Node) -> void:
 		"The original barracks remains visible in place with production suspended.")
 	var paused_progress := timer.elapsed
 	cpu_unit.hp = 0
+	for unit in ScoutFixture.combat_units(battle):
+		unit.hp = 0.0
 	_check(scene.try_upgrade(PLAYER, timer.id), "The faction can upgrade while its barracks is inactive.")
 	battle.advance(timer.interval(economy) + MatchBattle.STEP, economy)
 	_check(is_equal_approx(timer.elapsed, paused_progress) and ScoutFixture.combat_units(battle).is_empty(),
 		"A lost-region barracks does not progress or deploy units.")
 
+	economy.grant_resource(CPU, MatchEconomy.ENERGY, 20)
 	_check(ScoutFixture.claim(scene, CPU, BEYOND), "The CPU can establish valid adjacency by paying for a claim.")
 	economy.advance(40.0)
 	_check(ScoutFixture.claim(scene, CPU, CONTESTED) and not timer.active and building.get_parent() == player_buildings,
@@ -154,7 +160,7 @@ func _test_lifecycle(scene: Node) -> void:
 	if player_unit == null:
 		_check(false, "A player combat unit was produced.")
 		return
-	battle.advance(1.05, economy)
+	battle.advance(5.0, economy)
 	_check(cpu_hub.hp == 0 and scene.owns_region(NEUTRAL, CONTESTED) and not timer.active,
 		"The same attacks destroy a CPU outpost and leave the region neutral.")
 
@@ -172,7 +178,7 @@ func _test_lifecycle(scene: Node) -> void:
 	scene.restart_match()
 	scene.set_process(false)
 	_check(scene._battle._outposts.is_empty() and scene._outpost_views.is_empty()
-		and region.get_child_count() == 2 and backup.get_child_count() == 2
+		and not region.has_node("Outpost") and not backup.has_node("Outpost")
 		and scene.owns_region(NEUTRAL, CONTESTED) and scene.owns_region(NEUTRAL, BACKUP)
 		and scene.owns_region(NEUTRAL, BEYOND)
 		and scene.owns_region(PLAYER, TerritoryLayout.PLAYER_START)
@@ -217,6 +223,11 @@ func _test_obstructed_site() -> void:
 			"The alternate site is inside the same region.")
 		economy.advance(9.0)
 		enemy_timer.elapsed = economy.production_interval(CPU)
+		battle.advance(0.0, economy)
+		var attackers := ScoutFixture.combat_units(battle)
+		if not attackers.is_empty():
+			var attacker := attackers.front() as MatchBattle.Unit
+			battle.order_attack(CPU, attacker.id, hub.id)
 		battle.advance(9.0, scene.economy)
 		_check(hub.hp < hub.max_hp, "The nearby barracks cannot shield the alternate site from attacks.")
 	scene.free()
@@ -232,8 +243,17 @@ func _deploy_attacker(battle: MatchBattle, economy: MatchEconomy, side: MatchReg
 	for unit in ScoutFixture.combat_units(battle):
 		if unit.side == side:
 			unit.position = position
+			unit.hp = 100.0
+			unit.stance = MatchBattle.Stance.SEEK_NEAREST
 			return unit
 	return null
+
+
+func _tile_color(region: MatchRegion, owner: MatchRegion.Owner) -> Color:
+	var color: Color = MatchRegion.OWNER_COLORS[owner]
+	if region.specialty_marker != null and region.specialty_marker.visible:
+		color = color.lerp(RegionSpecialty.TRAITS[region.specialty].color, 0.15)
+	return color
 
 
 func _check(condition: bool, message: String) -> void:

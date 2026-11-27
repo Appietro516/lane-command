@@ -1,6 +1,6 @@
 extends "res://match/match.gd"
 ## Retains the original coordinates for focused gameplay cases with authored click
-## positions, structures, and claim chains. Polygon generation is shared.
+## positions, structures, and claim chains. Production map tests cover generated camps.
 
 const SIZE := Vector2(30.0, 18.0)
 
