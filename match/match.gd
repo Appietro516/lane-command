@@ -14,13 +14,13 @@ const BUILDINGS := {
 		"label": "Training Range", "cost": {MatchEconomy.ENERGY: 45, MatchEconomy.MATERIALS: 25},
 		"scene": preload("res://match/training_range.tscn"),
 		"hp": 28, "size": Vector2(2.6, 1.8),
-		"unit_type": UnitCatalog.RANGED, "interval": 4.5,
+		"unit_type": UnitCatalog.RANGED, "interval": 5.0,
 	},
 	&"heavy_factory": {
 		"label": "Heavy Factory", "cost": {MatchEconomy.ENERGY: 55, MatchEconomy.MATERIALS: 35},
 		"scene": preload("res://match/heavy_factory.tscn"),
 		"hp": 40, "size": Vector2(2.9, 2.1),
-		"unit_type": UnitCatalog.HEAVY, "interval": 6.0,
+		"unit_type": UnitCatalog.HEAVY, "interval": 6.5,
 	},
 	&"aid_station": {
 		"label": "Aid Station", "cost": {MatchEconomy.ENERGY: 52, MatchEconomy.MATERIALS: 28},
@@ -32,7 +32,7 @@ const BUILDINGS := {
 		"label": "Raider Camp", "cost": {MatchEconomy.ENERGY: 48, MatchEconomy.MATERIALS: 25},
 		"scene": preload("res://match/producers/raider_camp.tscn"),
 		"hp": 29, "size": Vector2(2.65, 1.8),
-		"unit_type": UnitCatalog.RAIDER, "interval": 4.6,
+		"unit_type": UnitCatalog.RAIDER, "interval": 5.2,
 	},
 	&"generator": {
 		"label": "Generator", "cost": {MatchEconomy.MATERIALS: 26},
@@ -2339,6 +2339,10 @@ func _hold_selected_unit() -> void:
 
 
 func _issue_unit_order_at(pointer: Vector2, order: MatchBattle.Order) -> void:
+	if order == MatchBattle.Order.MOVE and _attack_at(pointer):
+		_clear_pending_unit_order()
+		_update_unit_selection()
+		return
 	var point: Variant = _ground_point(pointer)
 	var accepted := false
 	if point != null and _pick_unit(pointer) == MatchBattle.NO_TARGET:
@@ -2360,6 +2364,30 @@ func _issue_unit_order_at(pointer: Vector2, order: MatchBattle.Order) -> void:
 	_update_unit_selection()
 
 
+func _attack_at(pointer: Vector2) -> bool:
+	var id := _pick_unit(pointer)
+	var base_side := MatchRegion.Owner.NEUTRAL
+	if id == MatchBattle.NO_TARGET:
+		var view := _pick_building(pointer)
+		if view == null:
+			return false
+		id = _fortification_ids.get(view, MatchBattle.NO_TARGET)
+		if id == MatchBattle.NO_TARGET:
+			for side in _bases:
+				if _bases[side] == view:
+					id = MatchBattle.BASE_TARGET
+					base_side = side
+			for region_id in _outpost_views:
+				if _outpost_views[region_id] == view:
+					id = _outposts_by_region[region_id].id
+	var accepted := false
+	if id != MatchBattle.NO_TARGET:
+		for unit_id in _selected_units:
+			if _battle.order_attack(PLAYER, unit_id, id, base_side):
+				accepted = true
+	return accepted
+
+
 static func _stance_name(stance: MatchBattle.Stance) -> String:
 	return MatchBattle.Stance.keys()[stance].capitalize()
 
@@ -2371,7 +2399,7 @@ static func _stance_tooltip(stance: MatchBattle.Stance) -> String:
 		MatchBattle.Stance.SEEK_STRONGEST:
 			return "Pursue the most threatening reachable enemy in detection range, or advance on enemy structures."
 		MatchBattle.Stance.IDLE:
-			return "Stay in reserve without moving or attacking automatically."
+			return "Hold position and fire at enemies in weapon range."
 	return ""
 
 

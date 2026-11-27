@@ -29,7 +29,7 @@ const PROFILES := {
 		"cost": {MatchEconomy.ENERGY: 54, MatchEconomy.MATERIALS: 34},
 		"hp": 32, "size": Vector2(1.6, 1.6),
 		"range": 6.0, "interval": 1.85, "damage": 4.0, "splash": 0.0,
-		"damage_against": {MatchEconomy.UnitCatalog.HEAVY: 3.5, MatchEconomy.UnitCatalog.INFANTRY: 0.45},
+		"damage_against": {MatchEconomy.UnitCatalog.HEAVY: 4.25, MatchEconomy.UnitCatalog.INFANTRY: 0.45},
 		"prefer_damage_class": true,
 	},
 	SILO: {

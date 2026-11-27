@@ -26,3 +26,11 @@ Reconnaissance milestone commit `c8c3531`.
 - Fertile, mineral-rich and energy-rich regions multiply their matching producer by 1.35. Defensible regions multiply outpost and defensive structure base HP by 1.20 before faction bonuses. Active producers have full yield for the first two per type, then efficiency is `max(0.55, 1 / (1 + 0.10 × (index - 2)))`.
 - Claim prices use `round(base × min(3, 1.20^extra))` with each faction's current non-ruined holdings and original territory count. Payment remains at dispatch. CPUs scout frontier sites before evaluating their current state.
 - Import, focused regional and visibility tests passed. Next action is combat pacing and neutral objectives.
+
+Regional strategy milestone commit `6075ebf`.
+
+## Combat and siege
+
+- Military movement is 12% slower. Production defaults to Idle with local self-defense, while explicit producer assignments and rallies continue to work. Right-clicking a visible enemy issues a focus order. A target lost in fog leaves its last observed point.
+- Starting bases have 240 HP and outposts have 40 HP before modifiers, and both fire through the fortification rules. Ordinary attacks take a 0.55 multiplier against armored hubs and defenses. Heavies have a 1.85 structure multiplier and increased Food cost. Class counters are catalog values.
+- Strategic combat tests passed. Next action is jungle objectives and CPU contesting.
