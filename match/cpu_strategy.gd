@@ -40,7 +40,7 @@ class Production:
 			if timer.hp <= 0.0:
 				continue
 			if timer.side != side:
-				if timer.active:
+				if timer.active and battle.can_see(side, timer.position):
 					opposition[timer.unit_type] = opposition.get(timer.unit_type, 0) + 1
 				continue
 			total += 1
@@ -87,8 +87,7 @@ func decide(scene: Node3D) -> void:
 	for region: MatchRegion in scene._regions_by_id.values():
 		if region.region_owner == side:
 			owned.append(region)
-	# Filter hostile observations here when the match introduces fog of war.
-	var units := battle.active_units()
+	var units := battle.visible_units(side)
 	var threats := _threats(scene, owned, units)
 	_plan_economy(scene, owned, units, threats, now)
 	_tactics.decide(scene, side, difficulty, owned, units, threats, now)
@@ -502,7 +501,7 @@ func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle
 			continue
 		var nearest_distance := INF
 		for unit in battle.nearby_units(units, hub.hub, radius):
-			if unit.type_id == UnitCatalog.SCOUT or unit.hp <= 0.0:
+			if unit.type_id == UnitCatalog.SCOUT or unit.hp <= 0.0 or not battle.can_observe_unit(side, unit):
 				continue
 			var distance := hub.hub.distance_squared_to(unit.position)
 			if distance > radius_squared:
@@ -692,7 +691,8 @@ func _dispatch_best_claim(scene: Node3D, targets: Array[MatchRegion],
 			hazards.append(unit.position)
 	for placed in scene._fortifications.values():
 		var defense: MatchBattle.Fortification = placed.defense
-		if defense.side != side and defense.active and defense.profile.has("range"):
+		if defense.side != side and defense.active and defense.profile.has("range") \
+				and battle.can_see(side, defense.position):
 			hazards.append(defense.position)
 
 	var choices: Array[Dictionary] = []
@@ -763,7 +763,7 @@ func _claim_region_value(scene: Node3D, region: MatchRegion) -> float:
 	var development := (capacity + float(free > 0)) * 0.5
 	var landmark: LegendaryLandmark = scene._landmarks.get(region.region_id)
 	var bonus := 0.0
-	if landmark != null:
+	if landmark != null and scene.landmark_known(side, landmark):
 		# Shorter production intervals are beneficial. Other bonuses add to their stat.
 		var magnitude := -landmark.magnitude if landmark.stat == FactionStats.BARRACKS_INTERVAL \
 			else landmark.magnitude

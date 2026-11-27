@@ -72,6 +72,9 @@ class Unit:
 				_set_cell(value)
 				_grid.insert(id, _cell, side)
 			position = value
+			if _visibility != null:
+				_visibility.move_source(id, value)
+	var _visibility: BattleVisibility
 	var _grid: BattleSpatialGrid
 	var _cell: Vector2i
 	var _cell_bounds: Rect2
@@ -233,6 +236,7 @@ var target_priority := TargetPriority.NEAREST
 ## Threat score = effective DPS * weight.x + current HP * weight.y.
 var threat_weights := DEFAULT_THREAT_WEIGHTS
 var navigation: BattleNavigation
+var visibility: BattleVisibility
 var _bases: Dictionary[MatchRegion.Owner, Vector2] = {}
 var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
 var _base_health: Dictionary[MatchRegion.Owner, BuildingHealth] = {}
@@ -282,6 +286,56 @@ func _init(player_base: Vector2, cpu_base: Vector2, detection_radius := DEFAULT_
 	stats.stat_changed.connect(_on_stat_changed)
 
 
+func enable_visibility(bounds: Rect2, interval := BattleVisibility.UPDATE_INTERVAL) -> void:
+	visibility = BattleVisibility.new(bounds)
+	visibility.interval = interval
+	for side in _base_obstacles:
+		visibility.set_source(_base_vision_id(side), side, _bases[side], BattleVisibility.BASE_RADIUS)
+	for unit in _units.values():
+		_register_unit_vision(unit)
+	for outpost in _outposts.values():
+		visibility.set_source(outpost.id, outpost.side, outpost.position, BattleVisibility.OUTPOST_RADIUS)
+	for structure in _fortifications.values():
+		if structure.active:
+			_register_structure_vision(structure)
+	visibility.advance(_elapsed_time)
+
+
+static func _base_vision_id(side: MatchRegion.Owner) -> int:
+	return -1000000000 - side
+
+
+func can_see(side: MatchRegion.Owner, point: Vector2) -> bool:
+	return visibility == null or side == MatchRegion.Owner.NEUTRAL or visibility.can_see(side, point)
+
+
+func can_observe_unit(side: MatchRegion.Owner, unit: Unit) -> bool:
+	return unit.side == side or can_see(side, unit.position)
+
+
+func visible_units(side: MatchRegion.Owner) -> Array[Unit]:
+	var observed: Array[Unit] = []
+	for unit in _units.values():
+		if unit.hp > 0.0 and can_observe_unit(side, unit):
+			observed.append(unit)
+	return observed
+
+
+func _register_unit_vision(unit: Unit) -> void:
+	if visibility == null or unit.side == MatchRegion.Owner.NEUTRAL:
+		return
+	unit._visibility = visibility
+	var radius := BattleVisibility.SCOUT_RADIUS if unit.type_id == UnitCatalog.SCOUT else BattleVisibility.UNIT_RADIUS
+	visibility.set_source(unit.id, unit.side, unit.position, radius)
+
+
+func _register_structure_vision(fort: Fortification) -> void:
+	if visibility != null:
+		var radius: float = fort.profile.get("vision", maxf(BattleVisibility.STRUCTURE_RADIUS,
+			float(fort.profile.get("range", 0.0))))
+		visibility.set_source(fort.id, fort.side, fort.position, radius)
+
+
 func add_barracks(side: MatchRegion.Owner, position: Vector2) -> ProductionTimer:
 	return add_producer(&"barracks", BARRACKS_PROFILE, side, position)
 
@@ -326,6 +380,8 @@ func add_outpost(region_id: StringName, side: MatchRegion.Owner, position: Vecto
 	_outposts[outpost.id] = outpost
 	_strategic_sites_revision += 1
 	_structure_grid.insert(outpost.id, BattleSpatialGrid.cell_at(position), 0)
+	if visibility != null:
+		visibility.set_source(outpost.id, side, position, BattleVisibility.OUTPOST_RADIUS)
 	return outpost
 
 
@@ -474,8 +530,11 @@ func set_fortification_active(fort: Fortification, active: bool) -> void:
 		return
 	fort.active = active
 	if active:
+		_register_structure_vision(fort)
 		fort.obstacle = navigation.add_obstacle(_footprint(fort.position, fort.profile.size * 0.5), fort.angle)
 	else:
+		if visibility != null:
+			visibility.remove_source(fort.id)
 		navigation.remove_obstacle(fort.obstacle)
 		fort.obstacle = -1
 	stats.set_source_active(fort.source_id, active)
@@ -596,6 +655,7 @@ func _spawn_unit(side: MatchRegion.Owner, position: Vector2, type_id: StringName
 
 func _index_unit(unit: Unit) -> void:
 	unit.step_distance = stats.value(unit.side, FactionStats.UNIT_SPEED, unit.definition.speed) * STEP
+	_register_unit_vision(unit)
 	unit._grid = _unit_grid
 	unit._set_cell(unit.position)
 	_unit_grid.insert(unit.id, unit._cell, unit.side)
@@ -982,7 +1042,9 @@ func _step_combat(economy: MatchEconomy) -> void:
 	for unit in units:
 		if unit.hp <= 0.0:
 			continue
-		if unit.target > NO_TARGET and _units[unit.target].hp <= 0.0:
+		if unit.target > NO_TARGET and (_units[unit.target].hp <= 0.0 or (
+				unit.position.distance_squared_to(_units[unit.target].position) > BattleVisibility.UNIT_RADIUS ** 2
+				and not can_observe_unit(unit.side, _units[unit.target]))):
 			continue
 		# A placement callback can run between planning and movement.
 		if unit.route_revision != navigation.revision \
@@ -1002,6 +1064,8 @@ func _step_combat(economy: MatchEconomy) -> void:
 			continue
 		navigation.remove_obstacle(_base_obstacles[side])
 		_base_obstacles.erase(side)
+		if visibility != null:
+			visibility.remove_source(_base_vision_id(side))
 		_strategic_sites_revision += 1
 		economy.eliminate(side)
 		stats.remove_source(base_source_id(side))
@@ -1016,6 +1080,9 @@ func _step_combat(economy: MatchEconomy) -> void:
 		if unit.hp <= 0.0 or not is_side_active(unit.side):
 			_unit_grid.erase(unit.id, unit._cell, unit.side)
 			unit._grid = null
+			if unit._visibility != null:
+				visibility.remove_source(unit.id)
+				unit._visibility = null
 			_units.erase(unit.id)
 			_support_units.erase(unit.id)
 			_queued_orders.erase(unit.id)
@@ -1028,6 +1095,8 @@ func _step_combat(economy: MatchEconomy) -> void:
 		if outpost.hp == 0 or not is_side_active(outpost.side):
 			_structure_grid.erase(outpost.id, BattleSpatialGrid.cell_at(outpost.position), 0)
 			_outposts.erase(outpost.id)
+			if visibility != null:
+				visibility.remove_source(outpost.id)
 			_strategic_sites_revision += 1
 			navigation.remove_obstacle(outpost.obstacle)
 			stats.remove_source(outpost.source_id)
@@ -1055,6 +1124,8 @@ func _step_combat(economy: MatchEconomy) -> void:
 	for outpost in destroyed_outposts:
 		outpost_destroyed.emit(outpost)
 
+	if visibility != null:
+		visibility.advance(_elapsed_time)
 	navigation.update()
 	for side in eliminated:
 		base_destroyed.emit(side)
@@ -1315,8 +1386,9 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 
 
 func _plan_strategic_turn(unit: Unit) -> bool:
+	var known_outpost := get_outpost(unit.strategic_target)
 	var target_exists := is_side_active(unit.strategic_base) if unit.strategic_target == BASE_TARGET \
-		else _outposts.has(unit.strategic_target)
+		else known_outpost != null and can_see(unit.side, known_outpost.position)
 	if unit.strategic_revision < 0 or not target_exists or (
 			unit.strategic_sites_revision != _strategic_sites_revision
 			and (unit.waypoints.is_empty() or (unit.id + _combat_step) % 8 == 0)):
@@ -1329,8 +1401,9 @@ func _plan_strategic_turn(unit: Unit) -> bool:
 		else:
 			unit.strategic_revision = navigation.revision
 	if not unit.waypoints.is_empty():
-		unit.target = unit.strategic_target
-		unit.target_base = unit.strategic_base
+		if unit.strategic_target != BASE_TARGET or can_see(unit.side, _bases[unit.strategic_base]):
+			unit.target = unit.strategic_target
+			unit.target_base = unit.strategic_base
 		return false
 	return _plan_breach(unit, _bases[unit.strategic_base], false)
 
@@ -1388,7 +1461,8 @@ func _find_wall_approach(unit: Unit, destination := Vector2.INF) -> Dictionary:
 	var result := {}
 	var nearest := INF
 	for fort: Fortification in _fortifications.values():
-		if fort.side == unit.side or fort.kind != Fortifications.WALL or not fort.active:
+		if fort.side == unit.side or fort.kind != Fortifications.WALL or not fort.active \
+				or not can_see(unit.side, fort.position):
 			continue
 		var distance := unit.position.distance_squared_to(fort.position)
 		if distance >= nearest:
@@ -1425,7 +1499,8 @@ func _plan_local_engagement(unit: Unit, units: Array[Unit], radius: float, holdi
 					or (not unreachable.is_empty() and unreachable.has(opponent.id)):
 				continue
 			var distance := unit.position.distance_squared_to(opponent.position)
-			if distance > radius_squared:
+			if distance > radius_squared or (distance > BattleVisibility.UNIT_RADIUS ** 2
+					and not can_observe_unit(unit.side, opponent)):
 				continue
 			var priority := 0.0
 			if prioritize_health:
@@ -1475,7 +1550,7 @@ func _plan_strategic_approach(unit: Unit) -> void:
 	var nearest := INF
 	for outpost in _outposts.values():
 		var distance := unit.position.distance_squared_to(outpost.position)
-		if outpost.side == unit.side or distance >= nearest:
+		if outpost.side == unit.side or distance >= nearest or not can_see(unit.side, outpost.position):
 			continue
 		var destination := _find_structure_approach(unit, outpost.position,
 			outpost.obstacle, weapon_range + OUTPOST_ATTACK_RANGE - UNIT_ATTACK_RANGE)

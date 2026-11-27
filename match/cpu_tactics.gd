@@ -316,7 +316,7 @@ func _attack_objective(scene: Node3D, side: MatchRegion.Owner, base: Vector2,
 static func _is_attack_objective(scene: Node3D, side: MatchRegion.Owner,
 		target: MatchBattle.Outpost) -> bool:
 	return target != null and target.side != side and target.hp > 0.0 \
-		and scene._battle.is_side_active(target.side) and scene.owns_region(target.side, target.region_id)
+		and scene._battle.is_side_active(target.side) and scene._battle.can_see(side, target.position)
 
 
 func _rally_region(scene: Node3D, owned: Array[MatchRegion], side: MatchRegion.Owner, goal: Vector2) -> MatchRegion:

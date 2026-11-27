@@ -94,6 +94,10 @@ func _ready() -> void:
 
 
 
+func display_ownership(owner: Owner, is_ruined: bool) -> void:
+	_fill_material.albedo_color = RUIN_COLOR if is_ruined else OWNER_COLORS[owner]
+
+
 func set_selected(selected: bool) -> void:
 	_border_material.albedo_color = SELECTED_BORDER_COLOR if selected else BORDER_COLOR
 

@@ -77,6 +77,10 @@ var _requests: Dictionary[Vector4, PackedVector2Array] = {}
 var _changes: Array[Change] = []
 
 
+static func chunk_dimensions(bounds: Rect2) -> Vector2i:
+	return Vector2i((bounds.size / CHUNK_SIZE).ceil())
+
+
 func _init(bounds: Rect2, boundary := PackedVector2Array(), boundary_clearance := 0.0) -> void:
 	_bounds = bounds
 	_boundary = boundary
@@ -378,8 +382,9 @@ func _ensure_map() -> void:
 			var inward := Vector2(-tangent.y, tangent.x).normalized()
 			_walkable.append(point + inward * ((_boundary_clearance + MESH_MARGIN)
 				/ inward.dot(Vector2(-after.y, after.x))))
-	var columns := ceili(_bounds.size.x / CHUNK_SIZE)
-	var rows := ceili(_bounds.size.y / CHUNK_SIZE)
+	var dimensions := chunk_dimensions(_bounds)
+	var columns := dimensions.x
+	var rows := dimensions.y
 	var size := _bounds.size / Vector2(columns, rows)
 	for y in rows:
 		for x in columns:

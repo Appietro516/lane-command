@@ -88,6 +88,7 @@ const HUD_DOCK_WIDTH := 408.0
 
 const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
 const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
+const FogOverlay := preload("res://match/fog_overlay.gd")
 const UnitAttackEffects := preload("res://match/unit_attack_effects.gd")
 const UnitCatalog := preload("res://match/unit_catalog.gd")
 const DEFAULT_REGION_BUILDING_CAPACITY := 5
@@ -204,7 +205,15 @@ var active_map_seed: int:
 	get:
 		return _layout.active_seed if _layout != null else map_seed
 
+@export var fog_enabled := true
+@export_range(0.1, 1.0, 0.05) var fog_update_interval := BattleVisibility.UPDATE_INTERVAL
+
 var _battle: MatchBattle
+var _intelligence: Dictionary[MatchRegion.Owner, FactionIntelligence] = {}
+var _intel_revision := -1
+var _intel_markers: Dictionary[StringName, Label3D] = {}
+@onready var _fog_overlay := FogOverlay.new()
+@onready var _intel_root := Node3D.new()
 var _expeditions: ScoutExpeditions
 var _claim_markers: Dictionary[StringName, PanelContainer] = {}
 var _scout_buttons: Array[Button] = []
@@ -348,6 +357,8 @@ func configure_match(settings: MatchSettings, layout: TerritoryLayout) -> void:
 
 
 func _ready() -> void:
+	add_child(_fog_overlay)
+	add_child(_intel_root)
 	_unit_route.mesh = _route_mesh
 	var selection_style := StyleBoxFlat.new()
 	selection_style.bg_color = Color(0.29, 0.76, 1.0, 0.15)
@@ -651,8 +662,8 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 		_battle.step_finished.disconnect(_advance_narrative_time)
 		_battle.unit_produced.disconnect(_spawn_unit)
 		_battle.unit_removed.disconnect(_remove_unit)
-		_battle.attack_resolved.disconnect(_unit_attack_effects.record)
-		_battle.healing_resolved.disconnect(_unit_attack_effects.record)
+		_battle.attack_resolved.disconnect(_show_unit_effect)
+		_battle.healing_resolved.disconnect(_show_unit_effect)
 		_battle.base_destroyed.disconnect(_hide_base)
 		_battle.outpost_destroyed.disconnect(_lose_region)
 		_battle.fortification_destroyed.disconnect(_remove_fortification)
@@ -731,12 +742,14 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	for landmark in _landmarks.values():
 		landmark.show()
 		_battle.add_landmark_footprint(landmark.footprint)
+	if fog_enabled:
+		_battle.enable_visibility(_layout.bounds, fog_update_interval)
 	_battle.target_priority = unit_target_priority
 	_battle.threat_weights = unit_threat_weights
 	_battle.unit_produced.connect(_spawn_unit)
 	_battle.unit_removed.connect(_remove_unit)
-	_battle.attack_resolved.connect(_unit_attack_effects.record)
-	_battle.healing_resolved.connect(_unit_attack_effects.record)
+	_battle.attack_resolved.connect(_show_unit_effect)
+	_battle.healing_resolved.connect(_show_unit_effect)
 	_battle.base_destroyed.connect(_hide_base)
 	_battle.outpost_destroyed.connect(_lose_region)
 	_battle.fortification_destroyed.connect(_remove_fortification)
@@ -757,6 +770,7 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	_expeditions.assignment_interrupted.connect(_on_assignment_interrupted)
 	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_cost)
 	_scout_notice.hide()
+	_reset_intelligence()
 	_refresh_hud()
 	set_process(true)
 
@@ -791,6 +805,7 @@ func _process(delta: float) -> void:
 		_select_fortification(MatchBattle.NO_TARGET)
 		set_process(false)
 
+	_refresh_intelligence()
 	_unit_attack_effects.render_at(_battle.elapsed_time())
 	_update_missile_models()
 	for unit in _battle.active_units():
@@ -1068,7 +1083,14 @@ func _remove_fortification(defense: MatchBattle.Fortification) -> void:
 		_select_fortification(MatchBattle.NO_TARGET)
 
 
+func _show_unit_effect(attack: MatchBattle.AttackResolved) -> void:
+	if _battle.can_see(PLAYER, attack.attack_position) and _battle.can_see(PLAYER, attack.impact_position):
+		_unit_attack_effects.record(attack)
+
+
 func _show_fortification_shot(fort: MatchBattle.Fortification, impact: Vector2) -> void:
+	if not _battle.can_see(PLAYER, fort.position) or not _battle.can_see(PLAYER, impact):
+		return
 	if fort.kind == Fortifications.ANTI_TANK:
 		var placed := _fortifications.get(fort.id) as PlacedFortification
 		if placed != null:
@@ -1110,7 +1132,7 @@ func _show_fortification_shot(fort: MatchBattle.Fortification, impact: Vector2) 
 
 
 func _refresh_structure_accent(placed: PlacedFortification) -> void:
-	var fort := placed.defense
+	var fort: MatchBattle.Fortification = placed.defense
 	var silo := fort as MatchBattle.MissileSilo
 	var exhausted := silo != null and silo.missile_state == MatchBattle.MissileState.EXHAUSTED
 	_structure_accent(placed.view, fort.kind).material_override = _faction_accent(fort.side) \
@@ -1855,6 +1877,8 @@ func _pick_unit(pointer: Vector2) -> int:
 	var nearest := MatchBattle.NO_TARGET
 	var depth := INF
 	for id in _unit_views:
+		if not _battle.can_observe_unit(PLAYER, _battle.get_unit(id)):
+			continue
 		var view := _unit_views[id]
 		var outline := view.get_node("Outline") as MeshInstance3D
 		var hit: Variant = outline.get_aabb().grow(0.08).intersects_segment(
@@ -1868,6 +1892,9 @@ func _pick_unit(pointer: Vector2) -> int:
 
 
 func _select_unit(id: int) -> void:
+	var unit := _battle.get_unit(id) if _battle != null else null
+	if unit != null and not _battle.can_observe_unit(PLAYER, unit):
+		id = MatchBattle.NO_TARGET
 	if _selected_units.size() <= 1 and id == _selected_unit_id:
 		_update_unit_selection()
 		return
@@ -1948,7 +1975,8 @@ func _update_unit_selection() -> void:
 		_target_label(unit), MatchBattle.Order.keys()[unit.order].capitalize(), _unit_state_label(unit),
 	]
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
-	if not unit.waypoints.is_empty():
+	if not unit.waypoints.is_empty() and (unit.side == PLAYER or _battle.visibility == null) \
+			and (unit.target == MatchBattle.NO_TARGET or _target_label(unit) != "None"):
 		_draw_unit_route(unit)
 
 
@@ -2042,7 +2070,10 @@ func _update_fortification_inspection() -> void:
 		if _selected_units.is_empty() or not _placement_id.is_empty():
 			_unit_panel.hide()
 		return
-	var fort := placed.defense
+	var fort: MatchBattle.Fortification = placed.defense
+	if fort.side != PLAYER and not _battle.can_see(PLAYER, fort.position):
+		_select_fortification(MatchBattle.NO_TARGET)
+		return
 	var military := fort is MatchBattle.ProductionTimer
 	var silo := fort as MatchBattle.MissileSilo
 	%TargetMissile.visible = silo != null and silo.side == PLAYER and silo.hp > 0.0 \
@@ -2260,16 +2291,18 @@ static func _stance_tooltip(stance: MatchBattle.Stance) -> String:
 
 
 func _target_label(unit: MatchBattle.Unit) -> String:
+	if unit.side != PLAYER and _battle.visibility != null:
+		return "—"
 	if unit.target == MatchBattle.BASE_TARGET:
-		return "%s base" % _side_label(unit.target_base)
+		return "%s base" % _side_label(unit.target_base) if _battle.can_see(PLAYER, _battle._bases[unit.target_base]) else "None"
 	var target := _battle.get_unit(unit.target)
-	if target != null:
+	if target != null and _battle.can_observe_unit(PLAYER, target):
 		return "%s %s #%d" % [_side_label(target.side), target.definition.label, target.id]
 	var outpost := _battle.get_outpost(unit.target)
-	if outpost != null:
+	if outpost != null and _battle.can_see(PLAYER, outpost.position):
 		return "%s outpost · %d/%d HP" % [_side_label(outpost.side), outpost.hp, outpost.max_hp]
 	var fort := _battle.get_fortification(unit.target)
-	if fort != null:
+	if fort != null and _battle.can_see(PLAYER, fort.position):
 		return "%s · %s" % [fort.profile.label, _health_text(fort)]
 	return "None"
 
@@ -2427,6 +2460,7 @@ func _update_unit_view(unit: MatchBattle.Unit, view: MeshInstance3D) -> void:
 	view.global_position = _regions.to_global(Vector3(unit.position.x, 0.14, unit.position.y))
 	# Unit meshes face +Z before yaw.
 	view.rotation.y = atan2(unit.heading.x, unit.heading.y)
+	view.visible = _battle.can_observe_unit(PLAYER, unit)
 
 
 func _remove_unit(unit_id: int) -> void:
@@ -2682,6 +2716,10 @@ func _refresh_hud() -> void:
 		if cpu_opponent_count > 1 and not _battle.is_side_active(side):
 			status = "Eliminated"
 		label.text = "%s base · %s" % [_side_label(side), status]
+		if _battle.is_side_active(side) and not _battle.can_see(PLAYER, _battle._bases[side]):
+			label.text = "%s base · Known start" % _side_label(side)
+			label.tooltip_text = ""
+			continue
 		var details := _breakdown_text("Maximum HP", _battle.base_health_stat(side))
 		if cpu_opponent_count > 1:
 			details = "%s\n%s" % [DifficultyProfile.display_name(_cpu_level(side - CPU)), details]
@@ -2708,8 +2746,29 @@ func _refresh_claim_control() -> void:
 		_update_context_visibility()
 		return
 
+	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_cost)
+	if not region_live(PLAYER, region):
+		_claim_button.hide()
+		_region_claim_progress.hide()
+		var memory: Dictionary = _intelligence[PLAYER].regions.get(region.region_id, {})
+		_region_label.text = str(region.region_id).capitalize() + (" · Last seen" if not memory.is_empty() else " · Uncharted")
+		_region_label.tooltip_text = ""
+		_region_slots.text = ""
+		_region_slots.tooltip_text = ""
+		_region_status.text = "Scout this region to inspect it"
+		_region_status.show()
+		var remembered := _landmarks.get(region.region_id) as LegendaryLandmark
+		_landmark_details.visible = remembered != null and landmark_known(PLAYER, remembered)
+		_landmark_details.tooltip_text = ""
+		if _landmark_details.visible:
+			_landmark_details.text = remembered.display_name + " · " + _legendary_effect(remembered.stat, remembered.magnitude)
+		_update_context_visibility()
+		return
+
 	var reason := _expeditions.block_reason(PLAYER, _selected_region_id)
 	var expedition := _expeditions.assignments.get(_selected_region_id) as ScoutExpeditions.Scout
+	if expedition != null and expedition.side != PLAYER and not _battle.can_see(PLAYER, expedition.site):
+		expedition = null
 	_claim_button.visible = region.region_owner == MatchRegion.Owner.NEUTRAL and expedition == null \
 		and not region.ruined and not _battle.is_finished()
 	_claim_button.disabled = not reason.is_empty()
@@ -2829,7 +2888,8 @@ func _update_scout_inspection(unit: MatchBattle.Unit, scout: ScoutExpeditions.Sc
 	_unit_order_hint.visible = _selected_unit_can_receive_orders()
 	_unit_order_hint.text = "Right-click ground to move"
 	_update_claim_progress(_unit_claim_progress, null if region_has_progress else scout)
-	if not unit.waypoints.is_empty():
+	if not unit.waypoints.is_empty() and (unit.side == PLAYER or _battle.visibility == null) \
+			and (unit.target == MatchBattle.NO_TARGET or _target_label(unit) != "None"):
 		_draw_unit_route(unit)
 
 
@@ -2869,12 +2929,119 @@ func _refresh_claim_markers() -> void:
 		_update_claim_progress(marker.get_node("Readouts/Progress"), scout)
 		var point := _world_position(scout.site) + Vector3.UP * 0.35
 		var view := _unit_views.get(scout.unit_id) as MeshInstance3D
-		marker.visible = view != null and not _camera.is_position_behind(point)
+		marker.visible = view != null and not _camera.is_position_behind(point) \
+			and (scout.side == PLAYER or (_battle.can_see(PLAYER, scout.site) \
+				and _battle.can_observe_unit(PLAYER, _battle.get_unit(scout.unit_id))))
 		if marker.visible:
 			marker.position = _camera.unproject_position(point) - Vector2(marker.size.x * 0.5, marker.size.y)
 			var scout_screen := _camera.unproject_position(view.global_position)
 			if marker.get_rect().grow(16.0).has_point(scout_screen):
 				marker.position.y = scout_screen.y + 16.0
+
+
+func region_live(side: MatchRegion.Owner, region: MatchRegion) -> bool:
+	return region.region_owner == side or _battle.can_see(side, Vector2(region.position.x, region.position.z))
+
+
+func landmark_known(side: MatchRegion.Owner, landmark: LegendaryLandmark) -> bool:
+	return _battle.visibility == null or _battle.can_see(side, landmark.footprint.get_center()) \
+		or (_intelligence.has(side) and _intelligence[side].landmarks.has(landmark.region_id))
+
+
+func _reset_intelligence() -> void:
+	_intelligence.clear()
+	_intel_revision = -1
+	for child in _intel_root.get_children():
+		_intel_root.remove_child(child)
+		child.queue_free()
+	_intel_markers.clear()
+	_fog_overlay.configure(_battle.visibility, PLAYER)
+	for side in _bases:
+		var intel := FactionIntelligence.new()
+		intel.starts.assign(_battle._bases)
+		_intelligence[side] = intel
+	_refresh_intelligence()
+
+
+func _refresh_intelligence() -> void:
+	if _battle.visibility == null:
+		return
+	var field := _battle.visibility
+	_fog_overlay.refresh()
+	if _intel_revision != field.revision:
+		_intel_revision = field.revision
+		_record_sightings()
+	var intel := _intelligence[PLAYER]
+	var desired: Dictionary[StringName, Dictionary] = {}
+	for side in _bases:
+		if _battle.is_side_active(side) and side != PLAYER and not _battle.can_see(PLAYER, _battle._bases[side]):
+			desired[_base_structure_id(side)] = {"point": intel.starts[side], "label": _side_label(side) + " start"}
+		_bases[side].visible = _battle.is_side_active(side) and (side == PLAYER or _battle.can_see(PLAYER, _battle._bases[side]))
+	for placed in _fortifications.values():
+		var fort: MatchBattle.Fortification = placed.defense
+		placed.view.visible = fort.side == PLAYER or _battle.can_see(PLAYER, fort.position)
+	for id in _outposts_by_region:
+		var outpost := _outposts_by_region[id]
+		_outpost_views[id].visible = outpost.side == PLAYER or _battle.can_see(PLAYER, outpost.position)
+	for id in _landmarks:
+		var landmark := _landmarks[id]
+		landmark.visible = _battle._landmark_footprints.has(landmark.footprint) and landmark_known(PLAYER, landmark)
+	for ruin: Node3D in _ruins.get_children():
+		ruin.visible = _battle.can_see(PLAYER, _map_position(ruin.global_position))
+	for region in _regions_by_id.values():
+		var memory: Dictionary = intel.regions.get(region.region_id, {})
+		region.display_ownership(memory.get("side", MatchRegion.Owner.NEUTRAL), memory.get("ruined", false))
+	for id in intel.structures:
+		var contact := intel.structures[id]
+		if not _battle.can_see(PLAYER, contact.point):
+			desired[id] = {"point": contact.point, "label": contact.label + " · Last seen"}
+	var inspected := selected_unit()
+	if inspected != null and not _battle.can_observe_unit(PLAYER, inspected):
+		_select_unit(MatchBattle.NO_TARGET)
+	_refresh_intel_markers(desired)
+
+
+func _record_sightings() -> void:
+	var now := _battle.elapsed_time()
+	for side in _intelligence:
+		var intel := _intelligence[side]
+		for id in intel.structures.keys():
+			if _battle.can_see(side, intel.structures[id].point):
+				intel.structures.erase(id)
+		for placed in _fortifications.values():
+			var fort: MatchBattle.Fortification = placed.defense
+			if fort.side != side and _battle.can_see(side, fort.position):
+				intel.remember_structure(fort.source_id, fort.side, fort.position, fort.profile.label, now)
+		for outpost in _outposts_by_region.values():
+			if outpost.side != side and _battle.can_see(side, outpost.position):
+				intel.remember_structure(outpost.source_id, outpost.side, outpost.position, "Outpost", now)
+		for region in _regions_by_id.values():
+			if region_live(side, region):
+				intel.regions[region.region_id] = {"side": region.region_owner, "ruined": region.ruined}
+		for landmark in _landmarks.values():
+			if _battle.can_see(side, landmark.footprint.get_center()):
+				intel.landmarks[landmark.region_id] = true
+
+
+func _refresh_intel_markers(desired: Dictionary[StringName, Dictionary]) -> void:
+	for id in _intel_markers.keys():
+		if not desired.has(id):
+			_intel_markers[id].queue_free()
+			_intel_markers.erase(id)
+	for id in desired:
+		var marker := _intel_markers.get(id) as Label3D
+		if marker == null:
+			marker = Label3D.new()
+			marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			marker.no_depth_test = true
+			marker.font_size = 22
+			marker.pixel_size = 0.016
+			marker.modulate = Color("#b3c6d3")
+			_intel_root.add_child(marker)
+			_intel_markers[id] = marker
+		marker.text = desired[id].label
+		marker.global_position = _world_position(desired[id].point) + Vector3.UP * 0.6
+
 
 
 func _create_claim_marker() -> PanelContainer:
