@@ -20,7 +20,7 @@ const WALL_BYPASS := Vector2(0.45, 0.18)
 const MIN_MORTAR_TARGETS := 2
 const MIN_WALL_TARGETS := 2
 const CLAIM_INTERRUPTION_RETRY := 24.0
-const SILO_MIN_TIME := 100.0
+const SILO_MIN_TIME := 180.0
 const SILO_MIN_VALUE := 12.0
 const SILO_SITE_BUDGET := 18
 
@@ -426,7 +426,10 @@ func _military_options(scene: Node3D, production: Production, allies: Dictionary
 		var construction_cost: float = 0.0
 		for resource: StringName in profile.cost:
 			construction_cost += float(profile.cost[resource]) / MatchEconomy.RESOURCES[resource].starting_stock
-		var score := _utility([scores[kind], -(installed_share + present_share * 0.5),
+		var siege_priority := 0.0
+		if profile.unit_type == UnitCatalog.HEAVY and now >= 90.0 and not production.counts.has(kind):
+			siege_priority = 0.45 if army >= 7 else 0.18
+		var score := _utility([scores[kind] + siege_priority, -(installed_share + present_share * 0.5),
 			-wait / investment_horizon, -construction_cost, -maxf(0.0, food_demand - food_rate)],
 			[scene.cpu_counter_weight * difficulty.counter, scene.cpu_diversity_weight * difficulty.diversity,
 				2.0, 0.35, 0.25])
@@ -557,7 +560,8 @@ func _threats(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle
 			continue
 		var nearest_distance := INF
 		for unit in battle.nearby_units(units, hub.hub, radius):
-			if unit.type_id == UnitCatalog.SCOUT or unit.hp <= 0.0 or not battle.can_observe_unit(side, unit):
+			if unit.side == NEUTRAL or unit.type_id == UnitCatalog.SCOUT or unit.hp <= 0.0 \
+					or not battle.can_observe_unit(side, unit):
 				continue
 			var distance := hub.hub.distance_squared_to(unit.position)
 			if distance > radius_squared:
@@ -743,7 +747,7 @@ func _dispatch_best_claim(scene: Node3D, targets: Array[MatchRegion],
 		return false
 	var hazards := PackedVector2Array()
 	for unit in units:
-		if unit.side != side and unit.type_id != UnitCatalog.SCOUT:
+		if unit.side != side and unit.side != NEUTRAL and unit.type_id != UnitCatalog.SCOUT:
 			hazards.append(unit.position)
 	for placed in scene._fortifications.values():
 		var defense: MatchBattle.Fortification = placed.defense
@@ -812,7 +816,7 @@ func _claim_region_value(scene: Node3D, region: MatchRegion) -> float:
 			openings += 1
 	var borders := maxi(1, region.neighbor_ids.size())
 	var connections := float(friendly + openings * 0.5) / borders
-	var occupancy: Dictionary = scene.region_occupancy(region.region_id)
+	var occupancy: Dictionary = scene.region_occupancy(region.region_id, side)
 	var free: int = occupancy.free - scene._building_slot_cost(scene.OUTPOST_KIND)
 	var capacity: float = float(free) / occupancy.capacity
 	# One free slot enables production. Extra slots leave room for its economy and defense.
@@ -836,7 +840,7 @@ func _claim_route_value(scene: Node3D, travel: float, danger: float) -> float:
 
 
 func _room_for_production(scene: Node3D, region: MatchRegion, outpost_site: Vector2) -> bool:
-	var occupancy: Dictionary = scene.region_occupancy(region.region_id)
+	var occupancy: Dictionary = scene.region_occupancy(region.region_id, side)
 	if occupancy.free <= scene._building_slot_cost(scene.OUTPOST_KIND):
 		return false
 	var profile: Dictionary = scene.BUILDINGS[BARRACKS]

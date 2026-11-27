@@ -107,6 +107,7 @@ const HUD_DOCK_WIDTH := 408.0
 const VALID_PREVIEW := Color(0.37, 1.0, 0.70, 0.55)
 const INVALID_PREVIEW := Color(1.0, 0.37, 0.40, 0.55)
 const FogOverlay := preload("res://match/fog_overlay.gd")
+const RadarContactsView := preload("res://match/radar_contacts_view.gd")
 const UnitAttackEffects := preload("res://match/unit_attack_effects.gd")
 const UnitCatalog := preload("res://match/unit_catalog.gd")
 const DEFAULT_REGION_BUILDING_CAPACITY := 5
@@ -231,7 +232,7 @@ var active_map_seed: int:
 
 var _battle: MatchBattle
 var _intelligence: Dictionary[MatchRegion.Owner, FactionIntelligence] = {}
-var _intel_revision := -1
+var _next_intel_observation := 0.0
 var _strength: FactionStrength
 var _displayed_score_revision := -1
 @onready var _score_panel := PanelContainer.new()
@@ -241,6 +242,8 @@ var _displayed_score_revision := -1
 var _intel_markers: Dictionary[StringName, Label3D] = {}
 @onready var _fog_overlay := FogOverlay.new()
 @onready var _intel_root := Node3D.new()
+@onready var _radar_contacts_view := RadarContactsView.new()
+var _inspected_radar: BattleRadar.Contact
 var _expeditions: ScoutExpeditions
 var _claim_markers: Dictionary[StringName, PanelContainer] = {}
 var _scout_buttons: Array[Button] = []
@@ -392,6 +395,7 @@ func configure_match(settings: MatchSettings, layout: TerritoryLayout) -> void:
 func _ready() -> void:
 	add_child(_fog_overlay)
 	add_child(_intel_root)
+	add_child(_radar_contacts_view)
 	_decoy_button.text = "Deploy radar decoy"
 	_decoy_button.pressed.connect(_begin_ground_target.bind(GroundTarget.DECOY))
 	%TargetMissile.get_parent().add_child(_decoy_button)
@@ -852,7 +856,7 @@ func _place_neutral_objectives() -> void:
 			continue
 		var anchor: Vector2 = region.interior_point()
 		var point: Vector2 = region.interior_point(func(candidate: Vector2) -> bool:
-			if candidate.distance_squared_to(anchor) < 2.0 ** 2:
+			if candidate.distance_squared_to(anchor) < 5.4 ** 2:
 				return false
 			return _battle.navigation.is_passable(candidate))
 		if point.is_finite():
@@ -1058,15 +1062,24 @@ func _unregister_region_structure(id: StringName) -> void:
 		structures.erase(id)
 
 
-func region_occupancy(region_id: StringName) -> Dictionary:
+func region_occupancy(region_id: StringName, observer := MatchRegion.Owner.NEUTRAL) -> Dictionary:
 	var used := 0
 	var by_kind := {}
 	var inactive := {}
 	for entry in _region_structures.get(region_id, {}).values():
 		var kind: StringName = entry.kind
+		var fort := entry.fort as MatchBattle.Fortification
+		if observer != MatchRegion.Owner.NEUTRAL and _battle.visibility != null:
+			if fort != null and fort.side != observer and not _battle.can_see(observer, fort.position):
+				continue
+			if kind == LEGENDARY_KIND and not landmark_known(observer, _landmarks[region_id]):
+				continue
+			if kind == OUTPOST_KIND:
+				var outpost := _outposts_by_region.get(region_id) as MatchBattle.Outpost
+				if outpost == null or (outpost.side != observer and not _battle.can_see(observer, outpost.position)):
+					continue
 		used += _building_slot_cost(kind)
 		by_kind[kind] = by_kind.get(kind, 0) + 1
-		var fort := entry.fort as MatchBattle.Fortification
 		if (fort != null and not fort.active) or (kind == LEGENDARY_KIND
 				and owns_region(MatchRegion.Owner.NEUTRAL, region_id)):
 			inactive[kind] = inactive.get(kind, 0) + 1
@@ -2002,11 +2015,13 @@ func _pick_map(pointer: Vector2) -> void:
 		var region_id := region_at_world_position(point) if point != null else &""
 		var scout := _expeditions.scout_for(_selected_unit_id)
 		var fort_id: int = _fortification_ids.get(building, MatchBattle.NO_TARGET)
+		var contact := _radar_contacts_view.contact_at(_camera, pointer, _battle, PLAYER)
 		if scout == null or scout.side != PLAYER or fort_id != MatchBattle.NO_TARGET \
 				or not owns_region(MatchRegion.Owner.NEUTRAL, region_id):
 			_select_unit(MatchBattle.NO_TARGET)
 		_select_fortification(fort_id)
 		_select_region(region_id)
+		_inspected_radar = contact
 	_refresh_claim_control()
 
 
@@ -2568,6 +2583,7 @@ func _map_plane() -> Plane:
 
 
 func _select_region(region_id: StringName) -> void:
+	_inspected_radar = null
 	if _regions_by_id.has(_selected_region_id):
 		_regions_by_id[_selected_region_id].set_selected(false)
 	_selected_region_id = region_id
@@ -2581,6 +2597,7 @@ func _advance_simulation(delta: float) -> float:
 	_advancing_battle = true
 	var used := _battle.advance(delta, economy, true, _has_narrative_decision)
 	_advancing_battle = false
+	_observe_intelligence()
 	if _has_narrative_decision():
 		_sync_narrative_dialogue()
 	return used
@@ -3116,6 +3133,13 @@ func _refresh_claim_control() -> void:
 		_region_slots.text = ""
 		_region_slots.tooltip_text = ""
 		_region_status.text = "Scout this region to inspect it" if memory.is_empty() else region.specialty_text()
+		if _inspected_radar != null and _battle.radar.contacts_for(PLAYER).has(_inspected_radar) \
+				and not _battle.can_see(PLAYER, _inspected_radar.point):
+			var names := PackedStringArray()
+			for type in _inspected_radar.composition:
+				names.append("%d %s" % [_inspected_radar.composition[type], UnitCatalog.DEFINITIONS[type].label])
+			_region_status.text += "\nRadar · %s · %.0fs old" % [" / ".join(names),
+				_battle.elapsed_time() - _inspected_radar.recorded_at]
 		_region_status.show()
 		var remembered := _landmarks.get(region.region_id) as LegendaryLandmark
 		_landmark_details.visible = remembered != null and landmark_known(PLAYER, remembered)
@@ -3129,13 +3153,15 @@ func _refresh_claim_control() -> void:
 	var expedition := _expeditions.assignments.get(_selected_region_id) as ScoutExpeditions.Scout
 	if expedition != null and expedition.side != PLAYER and not _battle.can_see(PLAYER, expedition.site):
 		expedition = null
+		if reason == "Expedition assigned":
+			reason = "Site temporarily unavailable"
 	_claim_button.visible = region.region_owner == MatchRegion.Owner.NEUTRAL and expedition == null \
 		and not region.ruined and not _battle.is_finished()
 	_claim_button.disabled = not reason.is_empty()
 	_claim_button.tooltip_text = reason
 	_update_claim_progress(_region_claim_progress, expedition)
 
-	var occupancy := region_occupancy(_selected_region_id)
+	var occupancy := region_occupancy(_selected_region_id, PLAYER)
 	_region_slots.text = "Slots %d/%d%s" % [occupancy.used, occupancy.capacity,
 		" · Full" if occupancy.free == 0 else ""]
 	_region_slots.tooltip_text = _slot_breakdown(occupancy)
@@ -3312,12 +3338,13 @@ func landmark_known(side: MatchRegion.Owner, landmark: LegendaryLandmark) -> boo
 
 func _reset_intelligence() -> void:
 	_intelligence.clear()
-	_intel_revision = -1
+	_next_intel_observation = 0.0
 	for child in _intel_root.get_children():
 		_intel_root.remove_child(child)
 		child.queue_free()
 	_intel_markers.clear()
-	_fog_overlay.configure(_battle.visibility, PLAYER)
+	_radar_contacts_view.clear()
+	_fog_overlay.configure(_battle.visibility, PLAYER, _layout.boundary)
 	for side in _bases:
 		var intel := FactionIntelligence.new()
 		intel.starts.assign(_battle._bases)
@@ -3328,11 +3355,8 @@ func _reset_intelligence() -> void:
 func _refresh_intelligence() -> void:
 	if _battle.visibility == null:
 		return
-	var field := _battle.visibility
 	_fog_overlay.refresh()
-	if _intel_revision != field.revision:
-		_intel_revision = field.revision
-		_record_sightings()
+	_observe_intelligence()
 	var intel := _intelligence[PLAYER]
 	var desired: Dictionary[StringName, Dictionary] = {}
 	for side in _bases:
@@ -3361,10 +3385,11 @@ func _refresh_intelligence() -> void:
 		var contact := intel.structures[id]
 		if not _battle.can_see(PLAYER, contact.point):
 			desired[id] = {"point": contact.point, "label": contact.label + " · Last seen"}
-	for id in _battle.public_missile_launches():
-		var launch: MatchBattle.MissileSilo = _battle._charging_silos[id]
-		var remaining := launch.launches_at - _battle.elapsed_time()
-		desired[StringName("launch/%d" % id)] = {"point": launch.position,
+	var launches := _battle.public_missile_launches()
+	for id in launches:
+		var launch := launches[id]
+		var remaining: float = launch.launches_at - _battle.elapsed_time()
+		desired[StringName("launch/%d" % id)] = {"point": launch.point,
 			"label": "MISSILE · %.0fs" % ceilf(remaining),
 			"color": Color("#ff715b") if fmod(_battle.elapsed_time(), 0.7) < 0.45 else Color("#ffd4a5")}
 	for camp in _battle.objectives.camps:
@@ -3380,24 +3405,24 @@ func _refresh_intelligence() -> void:
 		elif camp.guard_id == MatchBattle.NO_TARGET:
 			label += " · Respawning"
 		desired[id] = {"point": camp.point, "label": label, "color": Color("#e7bb72")}
-	for contact in _battle.radar.contacts_for(PLAYER):
-		if _battle.can_see(PLAYER, contact.point):
-			continue
-		var age: float = _battle.elapsed_time() - contact.recorded_at
-		var names := PackedStringArray()
-		for type in contact.composition:
-			names.append("%d %s" % [contact.composition[type], UnitCatalog.DEFINITIONS[type].label])
-		var id := StringName("radar/%s" % contact.key)
-		desired[id] = {"point": contact.point, "label": "%s · %.0fs old" % [" / ".join(names), age],
-			"color": Color(0.52, 0.87, 1.0, lerpf(0.95, 0.35, age / BattleRadar.CONTACT_LIFETIME))}
+	_radar_contacts_view.refresh(_battle, PLAYER)
 	var inspected := selected_unit()
 	if inspected != null and not _battle.can_observe_unit(PLAYER, inspected):
 		_select_unit(MatchBattle.NO_TARGET)
 	_refresh_intel_markers(desired)
 
 
-func _record_sightings() -> void:
+func _observe_intelligence() -> void:
+	if _battle.visibility == null or _intelligence.is_empty():
+		return
 	var now := _battle.elapsed_time()
+	if now + MatchBattle.TIME_EPSILON < _next_intel_observation:
+		return
+	_next_intel_observation = now + fog_update_interval
+	_record_sightings(now)
+
+
+func _record_sightings(now: float) -> void:
 	for side in _intelligence:
 		var intel := _intelligence[side]
 		for id in intel.structures.keys():

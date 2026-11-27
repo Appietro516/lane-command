@@ -7,7 +7,9 @@ const Stance := MatchBattle.Stance
 const ORDER_BUDGET := 16
 const DEFENSE_HUBS := 3
 const MAX_RESERVES := 4
-const ASSAULT_SIZE := 4
+const ASSAULT_SIZE := 6
+const ASSAULT_OPENING := 95.0
+const ASSAULT_WINDOW := 55.0
 const RESERVE_TIME := 12.0
 const ROUTE_RETRY := 6.0
 const ORDER_ANGLES := [0.0, PI / 4.0, -PI / 4.0, PI / 2.0, -PI / 2.0]
@@ -44,6 +46,8 @@ class Assignment:
 var _assignments: Dictionary[int, Assignment] = {}
 var _retry_at: Dictionary[int, float] = {}
 var _orders_left: int
+var _assault_until := 0.0
+var _next_assault := ASSAULT_OPENING
 
 
 func decide(scene: Node3D, side: MatchRegion.Owner, difficulty: Dictionary, owned: Array[MatchRegion],
@@ -86,7 +90,7 @@ func decide(scene: Node3D, side: MatchRegion.Owner, difficulty: Dictionary, owne
 	if reserve_size > 0:
 		goal = objective.position if objective != null else battle._bases[battle.nearest_hostile_base(side, base)]
 		rally = _rally_region(scene, owned, side, goal)
-	_set_producer_stances(scene, side, danger, rally, difficulty)
+	_set_producer_stances(scene, side, danger, rally, difficulty, now < _assault_until)
 
 	_orders_left = ORDER_BUDGET
 	var guard_budget := mini(available.size() - 1, ceili(available.size() * 0.6))
@@ -107,7 +111,20 @@ func decide(scene: Node3D, side: MatchRegion.Owner, difficulty: Dictionary, owne
 	_intercept_launches(battle, side, available)
 	if danger.is_empty():
 		_contest_camps(battle, side, available, now)
-	_attack(scene, side, difficulty, available, enemies, objective, now)
+	var fighters := 0
+	for unit in available:
+		fighters += int(unit.definition.damage > 0.0)
+	var retaliating := battle.retaliation_target(side, base) != MatchRegion.Owner.NEUTRAL
+	var siege_ready := battle.objectives.has_boon(side, NeutralObjectives.Reward.SIEGE, now)
+	if fighters >= (5 if retaliating or siege_ready else 8) and (now >= _next_assault or retaliating or siege_ready):
+		_assault_until = now + ASSAULT_WINDOW
+		_next_assault = _assault_until + 12.0
+	if now < _assault_until or not danger.is_empty():
+		_attack(scene, side, difficulty, available, enemies, objective, now)
+	else:
+		for unit in available:
+			_assignments.erase(unit.id)
+			_apply_stance(battle, side, unit, Stance.IDLE)
 
 
 func _staff_post(battle: MatchBattle, side: MatchRegion.Owner, available: Array[MatchBattle.Unit],
@@ -398,7 +415,7 @@ func _rally_region(scene: Node3D, owned: Array[MatchRegion], side: MatchRegion.O
 
 
 func _set_producer_stances(scene: Node3D, side: MatchRegion.Owner, danger: Array[Threat],
-		rally: MatchRegion, difficulty: Dictionary) -> void:
+		rally: MatchRegion, difficulty: Dictionary, assaulting: bool) -> void:
 	var battle: MatchBattle = scene._battle
 	var reserve_producer: MatchBattle.ProductionTimer
 	var closest := INF
@@ -413,7 +430,7 @@ func _set_producer_stances(scene: Node3D, side: MatchRegion.Owner, danger: Array
 	for timer in battle._timers:
 		if timer.side != side or not timer.active or timer.hp <= 0.0:
 			continue
-		var stance := _attack_stance(timer.unit_type, difficulty)
+		var stance := _attack_stance(timer.unit_type, difficulty) if assaulting else Stance.IDLE
 		var placed: RefCounted = scene._fortifications.get(timer.id)
 		var local_pressure := danger.any(func(threat: Threat) -> bool:
 			return (placed != null and threat.region.region_id in placed.regions) \

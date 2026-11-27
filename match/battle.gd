@@ -341,7 +341,7 @@ func _register_unit_vision(unit: Unit) -> void:
 		return
 	unit._visibility = visibility
 	var radius := BattleVisibility.SCOUT_RADIUS if unit.type_id == UnitCatalog.SCOUT else BattleVisibility.UNIT_RADIUS
-	visibility.set_source(unit.id, unit.side, unit.position, radius)
+	visibility.set_source(unit.id, unit.side, unit.position, radius, false)
 
 
 func _register_structure_vision(fort: Fortification) -> void:
@@ -1143,8 +1143,9 @@ func _step_combat(economy: MatchEconomy) -> void:
 			continue
 		# In large battles, refresh stationary target searches in four phases.
 		# A defender with a target still replans immediately when its weapon is ready.
-		if stagger_garrisons and unit.order == Order.HOLD and unit.position == unit.ordered_destination \
-				and (unit.id + _combat_step) % 4 != 0 \
+		var stationary := (unit.order == Order.HOLD and unit.position == unit.ordered_destination) \
+			or (unit.order == Order.AUTONOMOUS and unit.stance == Stance.IDLE)
+		if stagger_garrisons and stationary and (unit.id + _combat_step) % 4 != 0 \
 				and (unit.target == NO_TARGET or unit.cooldown > TIME_EPSILON):
 			continue
 		if unit.order == Order.MOVE and unit.target == NO_TARGET \
@@ -1731,12 +1732,10 @@ func _plan_strategic_approach(unit: Unit) -> void:
 	unit.strategic_target = BASE_TARGET
 	unit.strategic_base = nearest_hostile_base(unit.side, unit.position)
 	var nearest := INF
+	var priority := retaliation_target(unit.side, unit.position) if unit.side != PLAYER else MatchRegion.Owner.NEUTRAL
 	for outpost in _outposts.values():
 		var distance := unit.position.distance_squared_to(outpost.position)
-		var rival := retaliation_target(unit.side, unit.position) if unit.side != PLAYER else MatchRegion.Owner.NEUTRAL
-		if outpost.side == rival:
-			distance *= 0.2
-		elif rival != MatchRegion.Owner.NEUTRAL:
+		if priority != MatchRegion.Owner.NEUTRAL and outpost.side != priority:
 			continue
 		if outpost.side == unit.side or distance >= nearest or not can_see(unit.side, outpost.position):
 			continue
@@ -1751,7 +1750,6 @@ func _plan_strategic_approach(unit: Unit) -> void:
 	unit.strategic_destination = Vector2.INF
 	var hostiles := _base_obstacles.keys()
 	hostiles.erase(unit.side)
-	var priority := retaliation_target(unit.side, unit.position) if unit.side != PLAYER else MatchRegion.Owner.NEUTRAL
 	hostiles.sort_custom(func(a: MatchRegion.Owner, b: MatchRegion.Owner) -> bool:
 		if a == priority or b == priority:
 			return a == priority and b != priority

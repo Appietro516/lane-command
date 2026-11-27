@@ -58,3 +58,13 @@ Strength and comeback milestone commit `c5020a1`.
 - Missile preparation lasts 60 seconds. The public warning and flashing silo marker show the source, faction and deadline. Off-screen arrows point to the source. Enemy projectile trajectories stay hidden. Original starting regions are protected, and hit hubs in other regions permanently neutralize territory. CPU retaliation priority lasts 105 seconds from the announcement.
 - Control groups 1–9 support assignment, addition, recall and camera centering. A unit belongs to one group at a time. Death and restart clean up membership.
 - Focused missile and group tests passed. Next action is integrated regression testing, fog benchmarks and reproducible balance simulations.
+
+Missiles and groups milestone commit `78c6432`.
+
+## Integration and measurement
+
+- Fog now stores separate explored and visible row bitsets, with 12 cells per navigation-aligned chunk edge. Circle spans and sampled source buckets reduce overlapping work. Exact live radius checks use conservative inner and outer bounds with per-source checks at the boundary. Dirty work has a chunk and time budget, independent of the rendering and navigation lifecycle.
+- Radar draws one instanced field of precise stale contacts. Clicking a contact shows its last recorded composition and age. Structure and region sightings are observed by the match simulation independently of texture uploads.
+- CPU assaults now gather a force before advance, use siege options, and prioritize units under public retaliation. Neutral guards no longer count as invading rival armies. Camp sites give scouts room to approach regional claim points.
+- Baseline validation used a separate checkout of `73fdb26`. The pre-existing multi-CPU test missed its 16.67 ms p95 threshold in both measured combat cases. Several legacy assertions expect behavior superseded by the overhaul. The existing tests are still enabled.
+- Next action is to finish the benchmark matrix and balance simulations, check release artifacts on native and browser renderers, and resolve any remaining integration failures before publishing.

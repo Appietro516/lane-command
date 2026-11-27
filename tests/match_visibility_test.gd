@@ -31,6 +31,10 @@ func _run() -> void:
 	root.add_child(scene)
 	scene.set_process(false)
 	var battle: MatchBattle = scene._battle
+	var texture: Image = scene._fog_overlay._image
+	var output_cell := battle.visibility.cell_at(battle._bases[MatchBattle.PLAYER])
+	_check(roundi(texture.get_pixelv(output_cell).r * 255.0) == BattleVisibility.State.VISIBLE,
+		"render texture reflects the visible mask")
 	var hidden := battle.spawn_unit(MatchBattle.CPU, Vector2(12, 0))
 	_check(hidden != null and not battle.visible_units(MatchBattle.PLAYER).has(hidden), "hidden units absent from observations")
 	if hidden != null:
@@ -41,8 +45,9 @@ func _run() -> void:
 	_check(battle.visible_units(MatchBattle.PLAYER).has(hidden), "scout reveals enemy at eight units")
 	_check(not battle.visible_units(MatchBattle.CPU).has(scout) or battle.can_see(MatchBattle.CPU, scout.position),
 		"CPU receives only its own sightings")
+	var old_field := battle.visibility
 	scene.restart_match()
-	_check(scene._battle.visibility != field and scene._intelligence[MatchBattle.PLAYER].starts.size() == 2,
+	_check(scene._battle.visibility != old_field and scene._intelligence[MatchBattle.PLAYER].starts.size() == 2,
 		"restart recreates faction intelligence and public starts")
 	scene.queue_free()
 	print("Visibility test failures: %d" % _failures)
