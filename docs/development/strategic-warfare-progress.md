@@ -50,3 +50,11 @@ Neutral objectives milestone commit `8b1f23d`.
 - Faction scores refresh every three seconds and rank all factions. The 0–1000 score weights normalized military, economy, territory and defense values at 35/30/20/15 percent. The panel shows faction totals and the player's current boons.
 - Comeback rewards require a sustained 36-second deficit of at least 90 points and a score no greater than 72% of the leading active rival. An exponential average and decaying peak govern eligibility. Each faction can claim up to six grants with 90 seconds between grants and one grant per objective. Ordinary grants add 22/15/12 Energy/Materials/Food. A landmark claim adds 30/22/18.
 - Import and focused score, UI, restart and bounty tests passed. Next action is missile presentation and control groups.
+
+Strength and comeback milestone commit `c5020a1`.
+
+## Missiles and control groups
+
+- Missile preparation lasts 60 seconds. The public warning and flashing silo marker show the source, faction and deadline. Off-screen arrows point to the source. Enemy projectile trajectories stay hidden. Original starting regions are protected, and hit hubs in other regions permanently neutralize territory. CPU retaliation priority lasts 105 seconds from the announcement.
+- Control groups 1–9 support assignment, addition, recall and camera centering. A unit belongs to one group at a time. Death and restart clean up membership.
+- Focused missile and group tests passed. Next action is integrated regression testing, fog benchmarks and reproducible balance simulations.

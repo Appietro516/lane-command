@@ -136,6 +136,8 @@ signal claim_completed(faction: MatchRegion.Owner, region: StringName, scout_id:
 enum GroundTarget { NONE, RALLY, MISSILE, DECOY }
 
 const SELECTION_DRAG_THRESHOLD := 7.0
+const CONTROL_GROUP_COUNT := 9
+const GROUP_DOUBLE_TAP_MSEC := 330
 const ROUTE_HEIGHT := 0.12
 const ROUTE_HALF_WIDTH := 0.045
 const ROUTE_TIP_RADIUS := 0.18
@@ -265,6 +267,11 @@ var _unit_views: Dictionary[int, MeshInstance3D] = {}
 var _unit_materials: Dictionary[StringName, StandardMaterial3D] = {}
 var _selected_unit_id := MatchBattle.NO_TARGET
 var _selected_units: Dictionary[int, bool] = {}
+var _control_groups: Array[Dictionary] = []
+var _group_buttons: Array[Button] = []
+var _last_group_recall := -1
+var _last_group_recall_at := -1000
+@onready var _group_bar := HBoxContainer.new()
 var _group_rings: Array[MeshInstance3D] = []
 var _selection_origin := Vector2.INF
 var _selection_dragged := false
@@ -276,6 +283,7 @@ var _rally_ring: MeshInstance3D
 var _missile_ring: MeshInstance3D
 var _missile_notice := ""
 var _missile_notice_until := 0.0
+var _missile_arrows: Dictionary[int, Label] = {}
 var _missile_models: Dictionary[MatchBattle.MissileFlight, MeshInstance3D] = {}
 var _missile_mesh := CylinderMesh.new()
 var _ruin_material := StandardMaterial3D.new()
@@ -405,6 +413,7 @@ func _ready() -> void:
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
 	_create_score_panel()
+	_create_control_group_bar()
 	_stat_sources.toggled.connect(func(open: bool) -> void:
 		_stat_source_scroll.visible = open
 		_stat_source_scroll.scroll_vertical = 0)
@@ -721,6 +730,10 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 		_battle.missile_impact.disconnect(_ruin_strike_regions)
 	_unit_attack_effects.clear()
 	_missile_models.clear()
+	_reset_control_groups()
+	for arrow in _missile_arrows.values():
+		arrow.queue_free()
+	_missile_arrows.clear()
 	_missile_notice = ""
 	_missile_notice_until = 0.0
 	for rubble in _ruins.get_children():
@@ -790,6 +803,9 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	for landmark in _landmarks.values():
 		landmark.show()
 		_battle.add_landmark_footprint(landmark.footprint)
+	for region_id in _initial_owners:
+		if _initial_owners[region_id] != MatchRegion.Owner.NEUTRAL:
+			_battle.protected_starting_regions.append(_regions_by_id[region_id].polygon)
 	if fog_enabled:
 		_battle.enable_visibility(_layout.bounds, fog_update_interval)
 	_battle.target_priority = unit_target_priority
@@ -1262,11 +1278,12 @@ func _show_missile_launch(silo: MatchBattle.MissileSilo, flight: MatchBattle.Mis
 		_refresh_structure_accent(placed)
 		var hatch := placed.view.get_node(^"Hatch") as MeshInstance3D
 		hatch.position.x = 1.15
-	var model := MeshInstance3D.new()
-	model.mesh = _missile_mesh
-	model.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_shot_effects.add_child(model)
-	_missile_models[flight] = model
+	if flight.side == PLAYER:
+		var model := MeshInstance3D.new()
+		model.mesh = _missile_mesh
+		model.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_shot_effects.add_child(model)
+		_missile_models[flight] = model
 	_missile_flash(flight.source, 2.4, 0.35)
 	_missile_notice = "%s missile in flight" % _side_label(flight.side)
 	_missile_notice_until = flight.impact_at
@@ -1315,9 +1332,36 @@ func _missile_flash(point: Vector2, radius: float, duration: float) -> void:
 func _update_missile_warning() -> void:
 	var warning := %MissileWarning as Label
 	var lines := PackedStringArray()
-	for silo in _battle._charging_silos.values():
-		lines.append("%s missile preparing · %.1fs" % [
-			_side_label(silo.side), maxf(0.0, silo.launches_at - _battle.elapsed_time())])
+	var launches := _battle.public_missile_launches()
+	var screen := get_viewport().get_visible_rect().grow(-38.0)
+	for id in _missile_arrows.keys():
+		if not launches.has(id):
+			_missile_arrows[id].queue_free()
+			_missile_arrows.erase(id)
+	for id in launches:
+		var announcement: Dictionary = launches[id]
+		var left := maxf(0.0, announcement.launches_at - _battle.elapsed_time())
+		lines.append("%s missile preparing · %.0fs" % [_side_label(announcement.side), ceilf(left)])
+		var pointer := _camera.unproject_position(_world_position(announcement.point) + Vector3.UP)
+		var offscreen := not screen.has_point(pointer)
+		var arrow := _missile_arrows.get(id) as Label
+		if arrow == null and offscreen:
+			arrow = Label.new()
+			arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			arrow.add_theme_color_override("font_color", Color("#ff856d"))
+			arrow.add_theme_color_override("font_outline_color", Color("#10151d"))
+			arrow.add_theme_constant_override("outline_size", 7)
+			arrow.add_theme_font_size_override("font_size", 17)
+			$HUD.add_child(arrow)
+			_missile_arrows[id] = arrow
+		if arrow != null:
+			arrow.visible = offscreen
+			if offscreen:
+				var direction := screen.get_center().direction_to(pointer)
+				var octant := posmod(roundi(direction.angle() / (PI / 4.0)), 8)
+				arrow.text = "%s %.0fs" % [["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"][octant], ceilf(left)]
+				var inset := screen.grow(-24.0)
+				arrow.position = pointer.clamp(inset.position, inset.end) - arrow.size * 0.5
 	if lines.is_empty() and _missile_notice_until > _battle.elapsed_time():
 		lines.append(_missile_notice)
 	warning.visible = not lines.is_empty()
@@ -1328,6 +1372,8 @@ func _ruin_strike_regions(flight: MatchBattle.MissileFlight) -> void:
 	var target := flight.target
 	var area_squared := Fortifications.MISSILE_RADIUS ** 2
 	for cell in _layout.cells:
+		if _initial_owners[cell.id] != MatchRegion.Owner.NEUTRAL:
+			continue
 		var region := get_region(cell.id)
 		var hub := cell.site
 		if _layout.base_positions.has(cell.id):
@@ -1348,8 +1394,9 @@ func _ruin_strike_regions(flight: MatchBattle.MissileFlight) -> void:
 				landmark.get_parent().add_child(remains)
 				_leave_ruined_model(remains)
 				landmark.hide()
-	_missile_flash(target, Fortifications.MISSILE_RADIUS, 1.1)
-	_missile_flash(target, Fortifications.MISSILE_RADIUS * 0.65, 0.7)
+	if flight.side == PLAYER or _battle.can_see(PLAYER, target):
+		_missile_flash(target, Fortifications.MISSILE_RADIUS, 1.1)
+		_missile_flash(target, Fortifications.MISSILE_RADIUS * 0.65, 0.7)
 	_missile_notice = "Strategic missile impact"
 	_missile_notice_until = _battle.elapsed_time() + 2.5
 
@@ -1760,6 +1807,9 @@ func _clear_wall_drag() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _control_group_shortcut(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _camera.is_dragging():
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT \
@@ -2628,8 +2678,11 @@ func _remove_unit(unit_id: int) -> void:
 	_units.remove_child(view)
 	view.queue_free()
 	_unit_views.erase(unit_id)
+	for group in _control_groups:
+		group.erase(unit_id)
 	if _selected_units.erase(unit_id):
 		_refresh_unit_selection()
+	_refresh_control_group_bar()
 
 
 func _hide_base(side: MatchRegion.Owner) -> void:
@@ -2650,6 +2703,101 @@ func _hide_base(side: MatchRegion.Owner) -> void:
 
 func _award_camp_bounty(side: MatchRegion.Owner, camp_id: int, _cycle: int) -> void:
 	_strength.award(economy, side, StringName("camp/%d" % camp_id), _battle.elapsed_time())
+
+
+func _create_control_group_bar() -> void:
+	_group_bar.name = "ControlGroups"
+	_group_bar.add_theme_constant_override("separation", 3)
+	for index in CONTROL_GROUP_COUNT:
+		var button := Button.new()
+		button.focus_mode = Control.FOCUS_NONE
+		button.toggle_mode = true
+		button.custom_minimum_size.x = 36.0
+		button.add_theme_font_size_override("font_size", 12)
+		button.tooltip_text = "%d recall · Ctrl+%d assign · Shift+%d add · Double tap to center" % [
+			index + 1, index + 1, index + 1]
+		button.pressed.connect(_recall_control_group.bind(index))
+		_group_bar.add_child(button)
+		_group_buttons.append(button)
+	$HUD.add_child(_group_bar)
+
+
+func _reset_control_groups() -> void:
+	_control_groups.clear()
+	for index in CONTROL_GROUP_COUNT:
+		_control_groups.append({})
+	_last_group_recall = -1
+	_last_group_recall_at = -1000
+	_refresh_control_group_bar()
+
+
+func _control_group_shortcut(event: InputEvent) -> bool:
+	if not event is InputEventKey or not event.pressed or event.echo or event.alt_pressed \
+			or event.meta_pressed or _battle.is_finished() or _has_narrative_decision():
+		return false
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit:
+		return false
+	var key: int = event.physical_keycode if event.physical_keycode != 0 else event.keycode
+	if key < KEY_1 or key > KEY_9:
+		return false
+	var index := key - KEY_1
+	if event.ctrl_pressed or event.shift_pressed:
+		_assign_control_group(index, not event.ctrl_pressed)
+	else:
+		_recall_control_group(index)
+	return true
+
+
+func _assign_control_group(index: int, extend: bool) -> void:
+	var members := _control_groups[index]
+	if not extend:
+		members.clear()
+	for id in _selected_units:
+		var unit := _battle.get_unit(id)
+		if unit == null or unit.side != PLAYER or unit.hp <= 0.0:
+			continue
+		for group in _control_groups:
+			group.erase(id)
+		members[id] = true
+	_refresh_control_group_bar()
+
+
+func _recall_control_group(index: int) -> void:
+	if _battle.is_finished() or _has_narrative_decision():
+		return
+	var ids := _control_groups[index]
+	if ids.is_empty():
+		return
+	var now := Time.get_ticks_msec()
+	var center := _last_group_recall == index and now - _last_group_recall_at <= GROUP_DOUBLE_TAP_MSEC
+	_last_group_recall = index
+	_last_group_recall_at = now
+	_cancel_placement()
+	_select_fortification(MatchBattle.NO_TARGET)
+	_select_region(&"")
+	_selected_units.clear()
+	var minimum := Vector2.INF
+	var maximum := -Vector2.INF
+	for id in ids:
+		var unit := _battle.get_unit(id)
+		if unit != null and unit.hp > 0.0:
+			_selected_units[id] = true
+			minimum = minimum.min(unit.position)
+			maximum = maximum.max(unit.position)
+	if center and minimum.is_finite():
+		_camera.focus_on((minimum + maximum) * 0.5)
+	_refresh_unit_selection()
+	_refresh_control_group_bar()
+
+
+func _refresh_control_group_bar() -> void:
+	for index in _control_groups.size():
+		var members := _control_groups[index]
+		var button := _group_buttons[index]
+		button.disabled = members.is_empty()
+		button.text = "%d·%d" % [index + 1, members.size()] if not members.is_empty() else str(index + 1)
+		button.set_pressed_no_signal(not members.is_empty() and _selected_units == members)
 
 
 func _create_score_panel() -> void:
@@ -2761,6 +2909,10 @@ func _layout_hud() -> void:
 	var top := _top_bar.get_rect().end.y + HUD_GAP
 	_score_panel.position = Vector2(HUD_MARGIN, top)
 	var bottom := _economy_panel.position.y - HUD_GAP
+	var group_size := _group_bar.get_combined_minimum_size()
+	_group_bar.size = group_size
+	_group_bar.position = Vector2((viewport_size.x - group_size.x) * 0.5, bottom - group_size.y)
+	_group_bar.visible = not _placement_panel.visible and group_size.x <= hud_width
 	var dock_width := minf(HUD_DOCK_WIDTH, viewport_size.x - 2.0 * HUD_MARGIN)
 	var dock_origin := Vector2(viewport_size.x - HUD_MARGIN - dock_width, top)
 	var available := maxf(bottom - top, 0.0)
@@ -3189,7 +3341,8 @@ func _refresh_intelligence() -> void:
 		_bases[side].visible = _battle.is_side_active(side) and (side == PLAYER or _battle.can_see(PLAYER, _battle._bases[side]))
 	for placed in _fortifications.values():
 		var fort: MatchBattle.Fortification = placed.defense
-		placed.view.visible = fort.side == PLAYER or _battle.can_see(PLAYER, fort.position)
+		placed.view.visible = fort.side == PLAYER or _battle.can_see(PLAYER, fort.position) \
+			or _battle._charging_silos.has(fort.id)
 	for id in _outposts_by_region:
 		var outpost := _outposts_by_region[id]
 		_outpost_views[id].visible = outpost.side == PLAYER or _battle.can_see(PLAYER, outpost.position)
@@ -3208,6 +3361,12 @@ func _refresh_intelligence() -> void:
 		var contact := intel.structures[id]
 		if not _battle.can_see(PLAYER, contact.point):
 			desired[id] = {"point": contact.point, "label": contact.label + " · Last seen"}
+	for id in _battle.public_missile_launches():
+		var launch: MatchBattle.MissileSilo = _battle._charging_silos[id]
+		var remaining := launch.launches_at - _battle.elapsed_time()
+		desired[StringName("launch/%d" % id)] = {"point": launch.position,
+			"label": "MISSILE · %.0fs" % ceilf(remaining),
+			"color": Color("#ff715b") if fmod(_battle.elapsed_time(), 0.7) < 0.45 else Color("#ffd4a5")}
 	for camp in _battle.objectives.camps:
 		if not camp.observed.has(PLAYER):
 			continue

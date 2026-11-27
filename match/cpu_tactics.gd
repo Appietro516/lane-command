@@ -358,6 +358,8 @@ func _attack_objective(scene: Node3D, side: MatchRegion.Owner, base: Vector2,
 		enemies: Array[MatchBattle.Unit]) -> MatchBattle.Outpost:
 	var best: MatchBattle.Outpost
 	var best_score := INF
+	var battle: MatchBattle = scene._battle
+	var priority := battle.retaliation_target(side, base)
 	for target: MatchBattle.Outpost in scene._outposts_by_region.values():
 		if not _is_attack_objective(scene, side, target):
 			continue
@@ -366,6 +368,8 @@ func _attack_objective(scene: Node3D, side: MatchRegion.Owner, base: Vector2,
 			if unit.side == target.side and unit.position.distance_squared_to(target.position) <= 4.0 ** 2:
 				guards += 1
 		var score := base.distance_to(target.position) + 5.0 * target.hp / target.max_hp + 1.5 * guards
+		if target.side == priority:
+			score -= 30.0
 		if score < best_score or (score == best_score and target.region_id < best.region_id):
 			best = target
 			best_score = score

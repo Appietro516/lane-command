@@ -267,6 +267,8 @@ var _outposts: Dictionary[int, Outpost] = {}
 var _fortifications: Dictionary[int, Fortification] = {}
 var _landmark_footprints: Dictionary[Rect2, int] = {}
 var _charging_silos: Dictionary[int, MissileSilo] = {}
+var _missile_threats: Dictionary[MatchRegion.Owner, float] = {}
+var protected_starting_regions: Array[PackedVector2Array] = []
 var _missile_flights: Array[MissileFlight] = []
 var _next_structure_id := BASE_TARGET - 1
 var _next_unit_id := 1
@@ -429,7 +431,37 @@ func prepare_missile(side: MatchRegion.Owner, id: int, target: Vector2) -> bool:
 	silo.missile_target = target
 	silo.launches_at = _elapsed_time + Fortifications.MISSILE_CHARGE
 	_charging_silos[id] = silo
+	_missile_threats[side] = _elapsed_time + Fortifications.RETALIATION_DURATION
+	_strategic_sites_revision += 1
 	return true
+
+
+func public_missile_launches() -> Dictionary[int, Dictionary]:
+	var announcements: Dictionary[int, Dictionary] = {}
+	for id in _charging_silos:
+		var silo := _charging_silos[id]
+		announcements[id] = {"side": silo.side, "point": silo.position, "launches_at": silo.launches_at}
+	return announcements
+
+
+func missile_protected(point: Vector2) -> bool:
+	for polygon in protected_starting_regions:
+		if Geometry2D.is_point_in_polygon(point, polygon):
+			return true
+	return false
+
+
+func retaliation_target(side: MatchRegion.Owner, origin: Vector2) -> MatchRegion.Owner:
+	var best := MatchRegion.Owner.NEUTRAL
+	var distance := INF
+	for rival in _missile_threats:
+		if rival == side or not is_side_active(rival) or _elapsed_time >= _missile_threats[rival]:
+			continue
+		var candidate := origin.distance_squared_to(_bases[rival])
+		if candidate < distance or (candidate == distance and rival < best):
+			distance = candidate
+			best = rival
+	return best
 
 
 func _advance_missiles() -> void:
@@ -463,16 +495,14 @@ func _resolve_missile(flight: MissileFlight) -> void:
 		_unit_grid.append_ids(cell, reach, side, _candidate_ids)
 	for id in _candidate_ids:
 		var unit := get_unit(id)
-		if target.distance_squared_to(unit.position) <= Fortifications.MISSILE_RADIUS ** 2:
+		if target.distance_squared_to(unit.position) <= Fortifications.MISSILE_RADIUS ** 2 \
+				and not missile_protected(unit.position):
 			unit.hp = 0.0
-	for side in _base_obstacles:
-		if Fortifications.blast_hits(target, _bases[side], BASE_FOOTPRINT * 2.0):
-			_destroy_in_blast(_base_health[side])
 	for outpost in _outposts.values():
-		if Fortifications.blast_hits(target, outpost.position, OUTPOST_FOOTPRINT * 2.0):
+		if not missile_protected(outpost.position) and Fortifications.blast_hits(target, outpost.position, OUTPOST_FOOTPRINT * 2.0):
 			_destroy_in_blast(outpost)
 	for fort: Fortification in _fortifications.values():
-		if Fortifications.blast_hits(target, fort.position, fort.profile.size, fort.angle):
+		if not missile_protected(fort.position) and Fortifications.blast_hits(target, fort.position, fort.profile.size, fort.angle):
 			_destroy_in_blast(fort)
 	missile_impact.emit(flight)
 
@@ -1103,6 +1133,10 @@ func _step_combat(economy: MatchEconomy) -> void:
 		for unit in units:
 			if unit._grid == null:
 				_index_unit(unit)
+	for side in _missile_threats.keys():
+		if _elapsed_time >= _missile_threats[side]:
+			_missile_threats.erase(side)
+			_strategic_sites_revision += 1
 	for unit in units:
 		unit.cooldown = maxf(0.0, unit.cooldown - STEP)
 		if unit.hp <= 0.0:
@@ -1699,6 +1733,11 @@ func _plan_strategic_approach(unit: Unit) -> void:
 	var nearest := INF
 	for outpost in _outposts.values():
 		var distance := unit.position.distance_squared_to(outpost.position)
+		var rival := retaliation_target(unit.side, unit.position) if unit.side != PLAYER else MatchRegion.Owner.NEUTRAL
+		if outpost.side == rival:
+			distance *= 0.2
+		elif rival != MatchRegion.Owner.NEUTRAL:
+			continue
 		if outpost.side == unit.side or distance >= nearest or not can_see(unit.side, outpost.position):
 			continue
 		var destination := _find_structure_approach(unit, outpost.position,
@@ -1712,7 +1751,10 @@ func _plan_strategic_approach(unit: Unit) -> void:
 	unit.strategic_destination = Vector2.INF
 	var hostiles := _base_obstacles.keys()
 	hostiles.erase(unit.side)
+	var priority := retaliation_target(unit.side, unit.position) if unit.side != PLAYER else MatchRegion.Owner.NEUTRAL
 	hostiles.sort_custom(func(a: MatchRegion.Owner, b: MatchRegion.Owner) -> bool:
+		if a == priority or b == priority:
+			return a == priority and b != priority
 		var first := unit.position.distance_squared_to(_bases[a])
 		var second := unit.position.distance_squared_to(_bases[b])
 		return a < b if first == second else first < second)

@@ -42,6 +42,10 @@ func reset_view(immediate := false) -> void:
 		_update_position()
 
 
+func focus_on(point: Vector2) -> void:
+	_target_focus = point.clamp(_map_bounds.position, _map_bounds.end)
+
+
 func is_dragging() -> bool:
 	return _dragging
 

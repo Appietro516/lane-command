@@ -302,41 +302,43 @@ func _try_strategic_strike(scene: Node3D, sites: Array[MatchRegion], units: Arra
 
 func _missile_target(battle: MatchBattle, units: Array[MatchBattle.Unit]) -> Vector2:
 	var candidates := PackedVector2Array()
-	for owner in battle._base_obstacles:
-		if owner != side:
-			candidates.append(battle._bases[owner])
 	for outpost in battle._outposts.values():
-		if candidates.size() >= SILO_SITE_BUDGET:
-			break
-		if outpost.side != side and outpost.hp > 0.0:
+		if outpost.side != side and battle.can_see(side, outpost.position):
 			candidates.append(outpost.position)
 	for unit in units:
 		if candidates.size() >= SILO_SITE_BUDGET:
 			break
-		if unit.side != side and unit.hp > 0.0 and unit.type_id != UnitCatalog.SCOUT:
+		if unit.side != side and unit.side != NEUTRAL and unit.type_id != UnitCatalog.SCOUT \
+				and not battle.missile_protected(unit.position):
 			candidates.append(unit.position)
+	for contact in battle.radar.contacts_for(side):
+		if candidates.size() >= SILO_SITE_BUDGET:
+			break
+		if not battle.missile_protected(contact.point) and not battle.can_see(side, contact.point):
+			candidates.append(contact.point)
+
 	var best := Vector2.INF
 	var best_score := SILO_MIN_VALUE
 	for target in candidates:
 		var score := 0.0
-		var loses_base := false
-		for owner in battle._base_obstacles:
-			if not Rules.blast_hits(target, battle._bases[owner], MatchBattle.BASE_FOOTPRINT * 2.0):
-				continue
-			loses_base = loses_base or owner == side
-			score += 16.0 + battle.base_hp(owner) * 0.08
-		if loses_base:
-			continue
 		for outpost in battle._outposts.values():
-			if Rules.blast_hits(target, outpost.position, MatchBattle.OUTPOST_FOOTPRINT * 2.0):
-				score += -8.0 if outpost.side == side else 4.0
+			if (outpost.side == side or battle.can_see(side, outpost.position)) \
+					and not battle.missile_protected(outpost.position) \
+					and Rules.blast_hits(target, outpost.position, MatchBattle.OUTPOST_FOOTPRINT * 2.0):
+				score += -10.0 if outpost.side == side else 10.0
 		for fort in battle._fortifications.values():
-			if fort.hp > 0.0 and Rules.blast_hits(target, fort.position, fort.profile.size, fort.angle):
-				score += -6.0 if fort.side == side else 2.5
+			if (fort.side == side or battle.can_see(side, fort.position)) and not battle.missile_protected(fort.position) \
+					and Rules.blast_hits(target, fort.position, fort.profile.size, fort.angle):
+				score += -6.0 if fort.side == side else 3.0
 		for unit in battle.nearby_units(units, target, Rules.MISSILE_RADIUS):
-			if unit.hp <= 0.0 or unit.position.distance_squared_to(target) > Rules.MISSILE_RADIUS ** 2:
+			if unit.hp <= 0.0 or unit.side == NEUTRAL or unit.position.distance_squared_to(target) > Rules.MISSILE_RADIUS ** 2 \
+					or not battle.can_observe_unit(side, unit) or battle.missile_protected(unit.position):
 				continue
 			score += -2.0 if unit.side == side else 1.0
+		for contact in battle.radar.contacts_for(side):
+			if contact.point.distance_squared_to(target) <= Rules.MISSILE_RADIUS ** 2 \
+					and not battle.can_see(side, contact.point) and not battle.missile_protected(contact.point):
+				score += contact.composition.values().reduce(func(total: int, count: int) -> int: return total + count, 0) * 0.45
 		if score > best_score:
 			best = target
 			best_score = score
