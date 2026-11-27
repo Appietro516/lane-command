@@ -17,3 +17,12 @@ Visibility milestone commit `074caa9`. Godot import, production scene smoke, and
 - Watchtower, radar and counterintelligence use normal placement and slots. One shared scan feeds all faction pulses due in a step. Contacts carry copied positions and composition, age after each pulse, and expire. Decoys have no simulation entity and direct observation debunks them.
 - CPU planners use live sightings for tactical decisions and radar compositions for production planning.
 - Both the visibility and recon tests passed. Next action is specialized regions, landmarks, and claim pricing.
+
+Reconnaissance milestone commit `c8c3531`.
+
+## Regional strategy
+
+- Seven regions is the default. Larger configurable maps remain supported. Deterministic specialties occupy 80% of neutral regions, and the default landmark limit rose from two to four. Starting regions have ordinary terrain and no default landmark.
+- Fertile, mineral-rich and energy-rich regions multiply their matching producer by 1.35. Defensible regions multiply outpost and defensive structure base HP by 1.20 before faction bonuses. Active producers have full yield for the first two per type, then efficiency is `max(0.55, 1 / (1 + 0.10 × (index - 2)))`.
+- Claim prices use `round(base × min(3, 1.20^extra))` with each faction's current non-ruined holdings and original territory count. Payment remains at dispatch. CPUs scout frontier sites before evaluating their current state.
+- Import, focused regional and visibility tests passed. Next action is combat pacing and neutral objectives.

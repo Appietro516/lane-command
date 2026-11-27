@@ -111,6 +111,11 @@ func set_income_source(side: MatchRegion.Owner, resource_id: StringName,
 		stats.set_modifier(scoped_id, side, resource_id, rate, source_type, label)
 
 
+## The first two of each producer type per faction retain full output.
+static func producer_efficiency(index: int) -> float:
+	return maxf(0.55, 1.0 / (1.0 + maxi(0, index - 2) * 0.10))
+
+
 func _income_prefix(side: MatchRegion.Owner) -> String:
 	return "income/%d/" % side
 

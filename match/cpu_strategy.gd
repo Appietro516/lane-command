@@ -111,7 +111,8 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 			claims += 1
 		for id in region.neighbor_ids:
 			var neighbor: MatchRegion = scene.get_region(id)
-			if neighbor.region_owner == NEUTRAL and not neighbor.ruined:
+			var point := Vector2(neighbor.position.x, neighbor.position.z)
+			if battle.can_see(side, point) and neighbor.region_owner == NEUTRAL and not neighbor.ruined:
 				frontiers[id] = neighbor
 
 	var sites := owned.duplicate()
@@ -203,7 +204,7 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 	var projected := {}
 	for resource: StringName in [ENERGY, MATERIALS]:
 		var defenses: int = Rules.PROFILES[Rules.NEST].cost[resource] + Rules.PROFILES[Rules.MORTAR].cost[resource]
-		var expansion: int = expeditions.claim_cost.get(resource, 0) if allow_claim else 0
+		var expansion: int = expeditions.claim_price(side).get(resource, 0) if allow_claim else 0
 		projected[resource] = next_cost.get(resource, 0) + maxi(defenses, expansion)
 
 	# Invest when income is below the construction budget and savings cannot carry it.
@@ -234,6 +235,35 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 				return
 	if can_expand_production:
 		_build_military(scene, options, food_producer, sites, now)
+	if allow_claim and frontiers.is_empty() and not under_pressure:
+		_reconnoiter(scene, owned, now)
+
+
+func _reconnoiter(scene: Node3D, owned: Array[MatchRegion], now: float) -> void:
+	if now < _next_claim:
+		return
+	var battle: MatchBattle = scene._battle
+	if battle.visibility == null:
+		return
+	var intel: FactionIntelligence = scene._intelligence[side]
+	for scout: ScoutExpeditions.Scout in scene._expeditions.available(side):
+		var unit := battle.get_unit(scout.unit_id)
+		if unit == null or not unit.waypoints.is_empty():
+			continue
+		var best := Vector2.INF
+		var distance := INF
+		for region in owned:
+			for id in region.neighbor_ids:
+				if intel.regions.has(id):
+					continue
+				var candidate := _site(scene.get_region(id))
+				var length := unit.position.distance_squared_to(candidate)
+				if length < distance:
+					best = candidate
+					distance = length
+		if best.is_finite() and battle.order_move(side, unit.id, best, true):
+			_next_claim = now + 3.0
+			return
 
 
 func _try_strategic_strike(scene: Node3D, sites: Array[MatchRegion], units: Array[MatchBattle.Unit],
@@ -671,7 +701,7 @@ func _try_expand(scene: Node3D, frontiers: Dictionary[StringName, MatchRegion],
 
 	var scouts := expeditions.available(side)
 	if now + MatchBattle.TIME_EPSILON >= _next_claim and not scouts.is_empty() \
-			and _can_fund_expedition(scene, expeditions.claim_cost):
+			and _can_fund_expedition(scene, expeditions.claim_price(side)):
 		var ready := targets.filter(func(region: MatchRegion) -> bool:
 			return now + MatchBattle.TIME_EPSILON >= _claim_retry_at.get(region.region_id, 0.0))
 		if not ready.is_empty() and _dispatch_best_claim(scene, ready, scouts, units, dormant, now):
@@ -774,7 +804,7 @@ func _claim_region_value(scene: Node3D, region: MatchRegion) -> float:
 		var neighbor: MatchRegion = scene.get_region(id)
 		if neighbor.region_owner == side:
 			friendly += 1
-		elif neighbor.region_owner == NEUTRAL:
+		elif not scene.region_live(side, neighbor) or neighbor.region_owner == NEUTRAL:
 			openings += 1
 	var borders := maxi(1, region.neighbor_ids.size())
 	var connections := float(friendly + openings * 0.5) / borders
@@ -784,12 +814,12 @@ func _claim_region_value(scene: Node3D, region: MatchRegion) -> float:
 	# One free slot enables production. Extra slots leave room for its economy and defense.
 	var development := (capacity + float(free > 0)) * 0.5
 	var landmark: LegendaryLandmark = scene._landmarks.get(region.region_id)
-	var bonus := 0.0
+	var bonus := 0.18 if region.specialty != RegionSpecialty.Kind.STANDARD else 0.0
 	if landmark != null and scene.landmark_known(side, landmark):
 		# Shorter production intervals are beneficial. Other bonuses add to their stat.
 		var magnitude := -landmark.magnitude if landmark.stat == FactionStats.BARRACKS_INTERVAL \
 			else landmark.magnitude
-		bonus = 0.5 + 0.5 * magnitude / (1.0 + absf(magnitude))
+		bonus += 0.5 + 0.5 * magnitude / (1.0 + absf(magnitude))
 	return _utility([connections, development, bonus],
 		[scene.cpu_scout_connection_weight * difficulty.scout_connection,
 			scene.cpu_scout_capacity_weight * difficulty.scout_capacity,

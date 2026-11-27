@@ -170,15 +170,15 @@ var region_count := TerritoryLayout.DEFAULT_REGION_COUNT
 @export_range(1, TerritoryLayout.MAX_REGIONS) var cpu_start_count := 1
 @export_group("Legendary Landmarks", "legendary_")
 ## Maximum number of landmarks. Each eligible region also rolls against spawn probability.
-@export_range(0, TerritoryLayout.MAX_REGIONS) var legendary_count := 2
+@export_range(0, TerritoryLayout.MAX_REGIONS) var legendary_count := 4
 @export_range(0.0, 1.0, 0.01) var legendary_spawn_probability := 1.0
 @export var legendary_neutral_only := true
 @export var legendary_catalog: Array[LegendaryBuff] = [
-	LegendaryBuff.new("War Spire", FactionStats.UNIT_DPS),
-	LegendaryBuff.new("Sun Vault", FactionStats.ENERGY),
-	LegendaryBuff.new("Founder’s Forge", FactionStats.MATERIALS),
-	LegendaryBuff.new("Harvest Shrine", FactionStats.FOOD),
-	LegendaryBuff.new("Ancient Bastion", FactionStats.BUILDING_MAX_HP, 10.0),
+	LegendaryBuff.new("War Spire", FactionStats.UNIT_DPS, 1.25),
+	LegendaryBuff.new("Sun Vault", FactionStats.ENERGY, 3.0),
+	LegendaryBuff.new("Founder’s Forge", FactionStats.MATERIALS, 2.5),
+	LegendaryBuff.new("Harvest Shrine", FactionStats.FOOD, 2.75),
+	LegendaryBuff.new("Ancient Bastion", FactionStats.BUILDING_MAX_HP, 16.0),
 ]
 @export_group("Match Setup")
 @export_range(1, TerritoryLayout.MAX_CPU_OPPONENTS) var cpu_opponent_count := 1
@@ -532,6 +532,7 @@ func _generate_map(layout: TerritoryLayout) -> void:
 			_add_starting_base(region)
 	_register_starting_bases()
 	_generate_landmarks()
+	_generate_specialties()
 
 
 func _replace_map(layout: TerritoryLayout) -> void:
@@ -564,6 +565,23 @@ func _faction_accent(side: MatchRegion.Owner) -> StandardMaterial3D:
 				material.albedo_color = MatchRegion.accent_color(side)
 				_extra_accents[side] = material
 			return _extra_accents[side]
+
+
+func _generate_specialties() -> void:
+	var eligible: Array[MatchRegion] = []
+	for region in _regions_by_id.values():
+		if region.region_owner == MatchRegion.Owner.NEUTRAL:
+			eligible.append(region)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = active_map_seed ^ 0x5350454349414C
+	var count := ceili(eligible.size() * 0.8)
+	var traits := RegionSpecialty.TRAITS.keys()
+	var offset := rng.randi_range(0, traits.size() - 1)
+	for index in count:
+		var choice := rng.randi_range(index, eligible.size() - 1)
+		var region := eligible[choice]
+		eligible[choice] = eligible[index]
+		region.configure_specialty(traits[(index + offset) % traits.size()])
 
 
 func _generate_landmarks() -> void:
@@ -791,7 +809,7 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	_expeditions.expedition_completed.connect(_complete_claim)
 	_expeditions.expedition_failed.connect(_show_expedition_notice)
 	_expeditions.assignment_interrupted.connect(_on_assignment_interrupted)
-	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_cost)
+	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_price(PLAYER))
 	_scout_notice.hide()
 	_reset_intelligence()
 	_refresh_hud()
@@ -869,13 +887,28 @@ func try_place_building(side: MatchRegion.Owner, building_id: StringName,
 	else:
 		structure = _battle.add_structure(building_id, definition, side, position)
 	_add_structure_view(structure, [region_id], covered)
-	var income: Dictionary = definition.get("income", {})
-	for resource_id in income:
-		faction_stats.set_modifier(structure.source_id, side, resource_id,
-			income[resource_id], &"building",
-			"%s #%d" % [definition.label, absi(structure.id)], "", true, structure.id, region_id)
+	if definition.has("income"):
+		_refresh_producer_income(side, building_id)
 	_refresh_hud()
 	return true
+
+
+func _refresh_producer_income(side: MatchRegion.Owner, kind: StringName) -> void:
+	var index := 0
+	for placed in _fortifications.values():
+		var fort: MatchBattle.Fortification = placed.defense
+		if fort.side != side or fort.kind != kind:
+			continue
+		index += int(fort.active)
+		var efficiency := MatchEconomy.producer_efficiency(index)
+		var region := get_region(placed.regions[0])
+		var factor := RegionSpecialty.income_factor(region.specialty, kind)
+		for resource_id in fort.profile.income:
+			faction_stats.set_modifier(fort.source_id, side, resource_id,
+				fort.profile.income[resource_id] * efficiency * factor, &"building",
+				"%s #%d" % [fort.profile.label, absi(fort.id)],
+				"%d%% producer efficiency · %d%% regional output" % [roundi(efficiency * 100), roundi(factor * 100)],
+				fort.active, fort.id, region.region_id)
 
 
 func _placement_block_reason(side: MatchRegion.Owner, building_id: StringName,
@@ -1070,6 +1103,10 @@ func _add_fortification(side: MatchRegion.Owner, kind: StringName, center: Vecto
 
 func _add_structure_view(defense: MatchBattle.Fortification, regions: Array[StringName],
 		covered: Array[StringName]) -> void:
+	var region := get_region(_layout.region_at(defense.position))
+	if region != null and (defense.profile.has("range") or defense.kind == BattleRadar.WATCHTOWER):
+		defense.local_health_factor = RegionSpecialty.defense_factor(region.specialty)
+		defense.hp = defense.max_hp
 	_register_region_structure(defense.source_id, defense.kind, covered, defense)
 	var view := BUILDINGS[defense.kind].scene.instantiate() as Node3D
 	_buildings[defense.side].add_child(view)
@@ -1097,6 +1134,8 @@ func _remove_fortification(defense: MatchBattle.Fortification) -> void:
 	_unregister_region_structure(defense.source_id)
 	_fortifications.erase(defense.id)
 	_fortification_ids.erase(placed.view)
+	if defense.profile.has("income"):
+		_refresh_producer_income(defense.side, defense.kind)
 	if defense.destroyed_by_missile:
 		_leave_ruined_model(placed.view)
 	else:
@@ -1538,6 +1577,7 @@ func _complete_claim(side: MatchRegion.Owner, region_id: StringName, scout_id: i
 	if get_region(region_id).ruined:
 		return
 	var outpost := _battle.add_outpost(region_id, side, point, maxi(1, outpost_hp))
+	outpost.local_health_factor = RegionSpecialty.defense_factor(get_region(region_id).specialty)
 	var footprint := Fortifications.footprint(point, MatchBattle.OUTPOST_FOOTPRINT * 2.0)
 	_register_region_structure(outpost.source_id, OUTPOST_KIND, _footprint_regions(footprint))
 	_outposts_by_region[region_id] = outpost
@@ -1593,6 +1633,8 @@ func _set_region_owner(region_id: StringName, side: MatchRegion.Owner, refresh :
 				break
 		_battle.set_fortification_active(placed.defense, active)
 		_refresh_structure_accent(placed)
+		if placed.defense.profile.has("income"):
+			_refresh_producer_income(placed.defense.side, placed.defense.kind)
 	if refresh:
 		_refresh_hud()
 		if _preview != null:
@@ -2128,6 +2170,8 @@ func _update_fortification_inspection() -> void:
 	_unit_name.modulate = _faction_accent(fort.side).albedo_color.lightened(0.25)
 	_unit_stats.text = _health_text(fort)
 	var details := _breakdown_text("Maximum HP", fort.health_stat())
+	if fort.local_health_factor > 1.0:
+		details += "\nDefensible region  +20% base HP"
 	_unit_intent.text = "Active" if fort.active else "Inactive · territory lost"
 	if silo != null:
 		match silo.missile_state:
@@ -2787,7 +2831,7 @@ func _refresh_claim_control() -> void:
 		_update_context_visibility()
 		return
 
-	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_cost)
+	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_price(PLAYER))
 	if not region_live(PLAYER, region):
 		_claim_button.hide()
 		_region_claim_progress.hide()
@@ -2796,7 +2840,7 @@ func _refresh_claim_control() -> void:
 		_region_label.tooltip_text = ""
 		_region_slots.text = ""
 		_region_slots.tooltip_text = ""
-		_region_status.text = "Scout this region to inspect it"
+		_region_status.text = "Scout this region to inspect it" if memory.is_empty() else region.specialty_text()
 		_region_status.show()
 		var remembered := _landmarks.get(region.region_id) as LegendaryLandmark
 		_landmark_details.visible = remembered != null and landmark_known(PLAYER, remembered)
@@ -2830,6 +2874,8 @@ func _refresh_claim_control() -> void:
 	if outpost != null:
 		_region_status.text = "Outpost · %s/%s HP" % [_stat_number(outpost.hp), _stat_number(outpost.max_hp)]
 		_region_label.tooltip_text = _breakdown_text("Maximum HP", outpost.health_stat())
+	if not region.specialty_text().is_empty():
+		_region_status.text = "\n".join(PackedStringArray([_region_status.text, region.specialty_text()])).strip_edges()
 	if region.ruined:
 		_region_status.text = "Permanently ruined · Passable terrain"
 	_region_status.visible = not _region_status.text.is_empty()
@@ -2986,7 +3032,7 @@ func region_live(side: MatchRegion.Owner, region: MatchRegion) -> bool:
 
 func landmark_known(side: MatchRegion.Owner, landmark: LegendaryLandmark) -> bool:
 	return _battle.visibility == null or _battle.can_see(side, landmark.footprint.get_center()) \
-		or (_intelligence.has(side) and _intelligence[side].landmarks.has(landmark.region_id))
+		or (_intelligence.has(side) and _intelligence[side].landmarks.get(landmark.region_id, false))
 
 
 func _reset_intelligence() -> void:
@@ -3026,12 +3072,15 @@ func _refresh_intelligence() -> void:
 		_outpost_views[id].visible = outpost.side == PLAYER or _battle.can_see(PLAYER, outpost.position)
 	for id in _landmarks:
 		var landmark := _landmarks[id]
-		landmark.visible = _battle._landmark_footprints.has(landmark.footprint) and landmark_known(PLAYER, landmark)
+		var location := landmark.footprint.get_center()
+		landmark.visible = _battle.can_see(PLAYER, location) and _battle._landmark_footprints.has(landmark.footprint)
+		if not _battle.can_see(PLAYER, location) and intel.landmarks.get(id, false):
+			desired[landmark.source_id] = {"point": location, "label": landmark.display_name + " · Last seen"}
 	for ruin: Node3D in _ruins.get_children():
 		ruin.visible = _battle.can_see(PLAYER, _map_position(ruin.global_position))
 	for region in _regions_by_id.values():
 		var memory: Dictionary = intel.regions.get(region.region_id, {})
-		region.display_ownership(memory.get("side", MatchRegion.Owner.NEUTRAL), memory.get("ruined", false))
+		region.display_ownership(memory.get("side", MatchRegion.Owner.NEUTRAL), memory.get("ruined", false), not memory.is_empty())
 	for id in intel.structures:
 		var contact := intel.structures[id]
 		if not _battle.can_see(PLAYER, contact.point):
@@ -3071,7 +3120,7 @@ func _record_sightings() -> void:
 				intel.regions[region.region_id] = {"side": region.region_owner, "ruined": region.ruined}
 		for landmark in _landmarks.values():
 			if _battle.can_see(side, landmark.footprint.get_center()):
-				intel.landmarks[landmark.region_id] = true
+				intel.landmarks[landmark.region_id] = _battle._landmark_footprints.has(landmark.footprint)
 
 
 func _refresh_intel_markers(desired: Dictionary[StringName, Dictionary]) -> void:

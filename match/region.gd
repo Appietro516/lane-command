@@ -26,6 +26,8 @@ const EDGE_GAP := 0.10
 const BORDER_WIDTH := 0.075
 const INTERIOR_SAMPLE_SPACING := 0.5
 
+var specialty := RegionSpecialty.Kind.STANDARD
+var specialty_marker: Node3D
 var region_id: StringName
 var region_owner: Owner = Owner.NEUTRAL:
 	set(value):
@@ -94,8 +96,39 @@ func _ready() -> void:
 
 
 
-func display_ownership(owner: Owner, is_ruined: bool) -> void:
-	_fill_material.albedo_color = RUIN_COLOR if is_ruined else OWNER_COLORS[owner]
+func configure_specialty(kind: RegionSpecialty.Kind) -> void:
+	specialty = kind
+	var info: Dictionary = RegionSpecialty.TRAITS[kind]
+	specialty_marker = Node3D.new()
+	add_child(specialty_marker)
+	var material := StandardMaterial3D.new()
+	material.albedo_color = info.color
+	for index in 3:
+		var marker := MeshInstance3D.new()
+		var pillar := PrismMesh.new()
+		pillar.size = Vector3(0.26 + index * 0.09, float(info.height) * (1.0 - index * 0.17), 0.32)
+		marker.mesh = pillar
+		marker.material_override = material
+		marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		marker.rotation.y = 0.6 + index
+		marker.position = Vector3((index - 1) * 0.32, pillar.size.y * 0.5, 0.8 + index * 0.22)
+		specialty_marker.add_child(marker)
+
+
+func specialty_text() -> String:
+	if specialty == RegionSpecialty.Kind.STANDARD:
+		return ""
+	var info: Dictionary = RegionSpecialty.TRAITS[specialty]
+	return "%s · %s" % [info.label, info.detail]
+
+
+func display_ownership(owner: Owner, is_ruined: bool, known := false) -> void:
+	var color: Color = RUIN_COLOR if is_ruined else OWNER_COLORS[owner]
+	if specialty_marker != null:
+		specialty_marker.visible = known and not is_ruined
+		if specialty_marker.visible:
+			color = color.lerp(RegionSpecialty.TRAITS[specialty].color, 0.15)
+	_fill_material.albedo_color = color
 
 
 func set_selected(selected: bool) -> void:

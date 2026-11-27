@@ -40,6 +40,7 @@ class ClaimRoute:
 var slots: Dictionary[MatchRegion.Owner, Array] = {}
 var assignments: Dictionary[StringName, Scout] = {}
 var claim_cost: Dictionary
+var _initial_counts: Dictionary = {}
 var replacement_cost: Dictionary
 var duration: float
 var replacement_delay: float
@@ -60,6 +61,7 @@ func _init(battle: MatchBattle, economy: MatchEconomy,
 	duration = settings.duration
 	replacement_delay = settings.replacement_delay
 	for side in battle._bases:
+		_initial_counts[side] = _owned_count(side)
 		var roster: Array[Scout] = []
 		slots[side] = roster
 		for index in CAPACITY:
@@ -108,6 +110,20 @@ func eligibility(side: MatchRegion.Owner, region_id: StringName) -> String:
 	return "Not adjacent"
 
 
+func _owned_count(side: MatchRegion.Owner) -> int:
+	var held := 0
+	for region in _regions.values():
+		if region.region_owner == side and not region.ruined:
+			held += 1
+	return held
+
+
+func claim_price(side: MatchRegion.Owner) -> Dictionary:
+	var extra := maxi(0, _owned_count(side) - int(_initial_counts.get(side, 0)))
+	var multiplier := minf(3.0, pow(1.2, extra))
+	return {MatchEconomy.ENERGY: roundi(claim_cost[MatchEconomy.ENERGY] * multiplier)}
+
+
 func block_reason(side: MatchRegion.Owner, region_id: StringName) -> String:
 	var reason := eligibility(side, region_id)
 	if not reason.is_empty():
@@ -116,7 +132,7 @@ func block_reason(side: MatchRegion.Owner, region_id: StringName) -> String:
 		return "Expedition assigned"
 	if available(side).is_empty():
 		return "No scouts available"
-	return _economy.cost_block_reason(side, claim_cost)
+	return _economy.cost_block_reason(side, claim_price(side))
 
 
 func dispatch(side: MatchRegion.Owner, region_id: StringName, rank_route := Callable()) -> String:
@@ -126,8 +142,9 @@ func dispatch(side: MatchRegion.Owner, region_id: StringName, rank_route := Call
 	var plan := _best_route(side, region_id, rank_route)
 	if plan == null:
 		return "No reachable outpost site"
-	if not _economy.try_spend(side, claim_cost):
-		return _economy.cost_block_reason(side, claim_cost)
+	var price := claim_price(side)
+	if not _economy.try_spend(side, price):
+		return _economy.cost_block_reason(side, price)
 
 	var scout := scout_for(plan.unit_id)
 	var unit := _battle.get_unit(plan.unit_id)

@@ -7,7 +7,7 @@ const SHAPE_NAMES := {
 	Shape.RECTANGLE: "Rectangle", Shape.SQUARE: "Square", Shape.TRIANGLE: "Triangle", Shape.CIRCLE: "Circle",
 }
 const DEFAULT_SIZE := Vector2(60.0, 36.0)
-const DEFAULT_REGION_COUNT := 24
+const DEFAULT_REGION_COUNT := 7
 const AREA_PER_REGION := 115.0
 const CIRCLE_EDGES := 48
 const MIN_REGIONS := 2

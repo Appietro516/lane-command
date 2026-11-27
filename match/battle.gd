@@ -155,10 +155,11 @@ class BuildingHealth:
 	var source_id: StringName
 	var hp: float
 	var base_max_hp: float
+	var local_health_factor := 1.0
 	var destroyed_by_missile := false
 	var max_hp: float:
 		get:
-			return _stats.value(side, FactionStats.BUILDING_MAX_HP, base_max_hp)
+			return _stats.value(side, FactionStats.BUILDING_MAX_HP, base_max_hp * local_health_factor)
 	var _stats: FactionStats
 
 	func _init(stats: FactionStats, owner: MatchRegion.Owner, base_health: float) -> void:
@@ -168,7 +169,7 @@ class BuildingHealth:
 		hp = max_hp
 
 	func health_stat() -> Dictionary:
-		return _stats.inspect(side, FactionStats.BUILDING_MAX_HP, base_max_hp)
+		return _stats.inspect(side, FactionStats.BUILDING_MAX_HP, base_max_hp * local_health_factor)
 
 
 class Outpost extends BuildingHealth:
