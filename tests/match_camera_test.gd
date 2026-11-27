@@ -139,7 +139,7 @@ func _test_unit_orders(scene: Node, camera: StrategyCamera, center: Vector2, bar
 	_click(camera.unproject_position(roof.global_position))
 	_check(scene._selected_region_id == TerritoryLayout.PLAYER_START,
 		"Clicking a barracks after camera movement selects its region.")
-	scene._process(3.75)
+	scene._process(MatchEconomy.PRODUCTION_INTERVAL + 0.25)
 	var units := ScoutFixture.combat_units(scene._battle)
 	_check(units.size() == 1, "A player unit is available for picking.")
 	if units.size() != 1:

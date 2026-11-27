@@ -13,10 +13,22 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var args := OS.get_cmdline_user_args()
-	var count := int(args[0]) if args.size() > 0 else 250
-	var opponents := int(args[1]) if args.size() > 1 else 4
-	var shape := MapSettings.Shape.CIRCLE if args.size() > 2 and args[2] == "Circle" else MapSettings.Shape.RECTANGLE
-	var enabled := args.size() < 4 or args[3] == "on"
+	if args.size() > 0 and args[0] == "matrix":
+		var matrix_shape := MapSettings.Shape.CIRCLE if args.size() > 1 and args[1] == "Circle" else MapSettings.Shape.RECTANGLE
+		for opponents in [1, 2, 4]:
+			for count in [100, 250, 500]:
+				for enabled in [false, true]:
+					await _run_case(count, opponents, matrix_shape, enabled)
+	else:
+		var count := int(args[0]) if args.size() > 0 else 250
+		var opponents := int(args[1]) if args.size() > 1 else 4
+		var shape := MapSettings.Shape.CIRCLE if args.size() > 2 and args[2] == "Circle" else MapSettings.Shape.RECTANGLE
+		var enabled := args.size() < 4 or args[3] == "on"
+		await _run_case(count, opponents, shape, enabled)
+	quit()
+
+
+func _run_case(count: int, opponents: int, shape: MapSettings.Shape, enabled: bool) -> void:
 	var render_frames := DisplayServer.get_name() != "headless"
 	var size := Vector2(100, 100) if shape == MapSettings.Shape.CIRCLE else RECT_SIZE
 	var layout := TerritoryLayout.new(1729, 36, size, 1, 1, opponents, shape)
@@ -126,7 +138,6 @@ func _run() -> void:
 	}))
 	scene.queue_free()
 	await process_frame
-	quit()
 
 
 func _percentiles(values: PackedFloat64Array) -> Array[float]:

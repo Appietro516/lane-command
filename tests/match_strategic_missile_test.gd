@@ -55,6 +55,16 @@ func _run() -> void:
 	battle._resolve_missile(shot)
 	_check(neutral.ruined and neutral.region_owner == MatchRegion.Owner.NEUTRAL, "unprotected region is permanently ruined")
 	_check(battle.navigation.is_passable(point) and battle._base_obstacles.has(C), "ruins remain fully traversable")
+	scene._add_fortification(C, Rules.SILO, launch, 0.0, data)
+	var second := battle._fortifications.values()[-1] as MatchBattle.MissileSilo
+	_check(battle.prepare_missile(C, second.id, point), "second silo can start its own single-use launch")
+	battle._elapsed_time = second.launches_at - 0.02
+	battle._advance_missiles()
+	_check(battle._missile_flights.is_empty(), "missile does not launch early")
+	battle._elapsed_time = second.launches_at
+	battle._advance_missiles()
+	_check(battle._missile_flights.size() == 1 and second.missile_state == MatchBattle.MissileState.EXHAUSTED,
+		"elapsed countdown launches one shot")
 	_check(scene._missile_models.is_empty(), "enemy projectile cannot expose trajectory")
 	scene.queue_free()
 	print("Strategic missile test failures: %d" % _failures)

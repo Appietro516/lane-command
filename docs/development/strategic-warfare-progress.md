@@ -68,3 +68,11 @@ Missiles and groups milestone commit `78c6432`.
 - CPU assaults now gather a force before advance, use siege options, and prioritize units under public retaliation. Neutral guards no longer count as invading rival armies. Camp sites give scouts room to approach regional claim points.
 - Baseline validation used a separate checkout of `73fdb26`. The pre-existing multi-CPU test missed its 16.67 ms p95 threshold in both measured combat cases. Several legacy assertions expect behavior superseded by the overhaul. The existing tests are still enabled.
 - Next action is to finish the benchmark matrix and balance simulations, check release artifacts on native and browser renderers, and resolve any remaining integration failures before publishing.
+
+Bounded visibility and CPU integration milestone commit `c4ec7ea`.
+
+## Pacing adjustment
+
+Two completed automated pilot games reached defeat at 166.02 seconds on seed 17 and 344.85 seconds on seed 31. The 15-minute target remains a balance goal. In response, passive Energy and Materials were reduced to 2.25/s and 1.45/s. Food remains 1/s. Starting-base HP rose to 420, its defensive attack to 6 damage per 0.9 seconds, and ordinary damage against the base receives a 0.40 armor multiplier. Outpost/other defended structures retain their 0.55 multiplier. Heavy siege and individual upgrades are unchanged. Follow-up simulations and release checks use the tuned values.
+
+The setup, camera and attack-event tests now exercise the requested default map, production cadence and targeting rules. A new five-faction integration test checks distinct intelligence, normal producer upgrades, rallies, victory and restart. Next action is to record the verification result and reconcile any remaining blockers before GitHub delivery.

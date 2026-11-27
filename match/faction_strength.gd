@@ -27,7 +27,7 @@ static func score(military: float, economy: float, territory: float, defense: fl
 func advance(scene: Node3D) -> void:
 	var battle: MatchBattle = scene._battle
 	var now := battle.elapsed_time()
-	if now + MatchBattle.TIME_EPSILON < _next_update:
+	if not battle.is_finished() and now + MatchBattle.TIME_EPSILON < _next_update:
 		return
 	_next_update = now + PERIOD
 	var economy: MatchEconomy = scene.economy
@@ -75,7 +75,7 @@ func advance(scene: Node3D) -> void:
 		var income_value := (clampf(energy / 10.0, 0.0, 1.0) + clampf(materials / 8.0, 0.0, 1.0)
 			+ clampf(food / 10.0, 0.0, 1.0)) / 3.0
 		scores[side] = score(military.get(side, 0.0) / 205.0, 0.60 * income_value + 0.40 * minf(1.0, sustainable / 1.15),
-			strategic.get(side, 0.0) / 7.0, (battle.base_hp(side) + defense.get(side, 0.0)) / 490.0)
+			strategic.get(side, 0.0) / 7.0, (battle.base_hp(side) + defense.get(side, 0.0)) / 680.0)
 	_update_trends(now)
 	revision += 1
 

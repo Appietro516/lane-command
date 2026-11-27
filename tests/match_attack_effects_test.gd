@@ -80,6 +80,9 @@ func _test_structure(type_id: StringName, kind: StringName) -> void:
 			target_id = farm.id
 	var attacker := battle.spawn_unit(PLAYER, position - Vector2(offset, 0.0), type_id)
 	var economy := MatchEconomy.new()
+	if building != null:
+		building.hp = 0.5
+	_check(battle.order_attack(PLAYER, attacker.id, target_id, CPU), "Visible structure accepts a focus order.")
 	battle.advance(STEP, economy)
 	_check(events.size() == 1, "%s reports hitting %s." % [type_id, kind])
 	if events.size() == 1:
@@ -88,7 +91,8 @@ func _test_structure(type_id: StringName, kind: StringName) -> void:
 		_check(building.hp == 0.0 and battle.get_fortification(target_id) == null
 			and battle.get_outpost(target_id) == null, "Destroyed structures retain a contact position in the event.")
 	else:
-		var damage: float = attacker.definition.damage * attacker.definition.structure_damage_multiplier
+		var damage: float = attacker.definition.damage * attacker.definition.structure_damage_multiplier \
+			* (1.0 if type_id == Catalog.HEAVY else MatchBattle.BASE_ARMOR)
 		_check(is_equal_approx(battle.base_hp(CPU), MatchBattle.BASE_HP - damage),
 			"The base hit applies catalog structure damage.")
 
@@ -97,7 +101,7 @@ func _test_blocked_and_out_of_range() -> void:
 	var battle := MatchBattle.new(PLAYER_BASE, CPU_BASE)
 	var events: Array[MatchBattle.AttackResolved] = []
 	battle.attack_resolved.connect(events.append)
-	var attacker := battle.spawn_unit(PLAYER, Vector2(-1.0, 0.0), Catalog.RANGED)
+	var attacker := battle.spawn_unit(PLAYER, Vector2(-1.0, 0.0), Catalog.RANGED, null, MatchBattle.Stance.SEEK_NEAREST)
 	var target := battle._spawn_unit(CPU, Vector2(1.9, 0.0), Catalog.SCOUT)
 	var economy := MatchEconomy.new()
 	battle.advance(STEP, economy)
@@ -218,10 +222,11 @@ func _test_scene() -> void:
 	for unit in battle.active_units():
 		unit.hp = 0.0
 	scene._time_until_cpu_decision = 120.0
-	battle.stats.set_modifier(&"deciding_hit", PLAYER, FactionStats.UNIT_DPS, 100.0)
+	battle.stats.set_modifier(&"deciding_hit", PLAYER, FactionStats.UNIT_DPS, 200.0)
 	var base := scene.get_node("Regions/CPUStart/CPUBase") as Node3D
 	var base_position: Vector2 = scene._map_position(base.global_position)
-	battle.spawn_unit(PLAYER, base_position - Vector2(1.92, 0.0), Catalog.HEAVY)
+	var finisher := battle.spawn_unit(PLAYER, base_position - Vector2(1.92, 0.0), Catalog.HEAVY)
+	_check(battle.order_attack(PLAYER, finisher.id, MatchBattle.BASE_TARGET, CPU), "Deciding strike has direct sight.")
 	scene._process(STEP)
 	_check(battle.is_finished() and batch.get_surface_count() == 1 and effects._cues.size() == 1,
 		"The match-ending hit is rendered on the final simulation step.")

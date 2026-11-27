@@ -2095,6 +2095,7 @@ func _refresh_unit_selection() -> void:
 	_selected_unit_id = _selected_units.keys()[0] if _selected_units.size() == 1 else MatchBattle.NO_TARGET
 	_update_unit_selection()
 	_update_context_visibility()
+	_refresh_control_group_bar()
 
 
 func _update_unit_selection() -> void:
@@ -3455,10 +3456,13 @@ func _refresh_intel_markers(desired: Dictionary[StringName, Dictionary]) -> void
 			marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 			marker.no_depth_test = true
 			marker.font_size = 22
-			marker.pixel_size = 0.016
+			marker.render_priority = 30
+			marker.outline_render_priority = 29
 			marker.modulate = Color("#b3c6d3")
 			_intel_root.add_child(marker)
 			_intel_markers[id] = marker
+		var viewport_height := maxf(1.0, get_viewport().get_visible_rect().size.y)
+		marker.pixel_size = _camera.size / viewport_height * 0.58
 		marker.modulate = desired[id].get("color", Color("#b3c6d3"))
 		marker.text = desired[id].label
 		marker.global_position = _world_position(desired[id].point) + Vector3.UP * 0.6

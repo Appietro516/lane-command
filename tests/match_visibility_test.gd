@@ -45,6 +45,21 @@ func _run() -> void:
 	_check(battle.visible_units(MatchBattle.PLAYER).has(hidden), "scout reveals enemy at eight units")
 	_check(not battle.visible_units(MatchBattle.CPU).has(scout) or battle.can_see(MatchBattle.CPU, scout.position),
 		"CPU receives only its own sightings")
+	var observed := Vector2(14, -9)
+	var region := scene.get_region(scene._layout.region_at(observed)) as MatchRegion
+	var tower := battle.add_structure(BattleRadar.WATCHTOWER, scene.BUILDINGS[BattleRadar.WATCHTOWER], MatchBattle.CPU, observed)
+	var regions: Array[StringName] = [region.region_id]
+	scene._add_structure_view(tower, regions, regions)
+	scout.position = observed - Vector2(3, 0)
+	battle.advance(0.22, scene.economy)
+	scene._refresh_intelligence()
+	_check(scene._intelligence[MatchBattle.PLAYER].structures.has(tower.source_id), "live sight records a structure")
+	scout.position = battle._bases[MatchBattle.PLAYER]
+	tower.hp = 0.0
+	battle.advance(MatchBattle.STEP, scene.economy)
+	scene._refresh_intelligence()
+	_check(scene._intel_markers.has(tower.source_id), "hidden destruction leaves last-known information")
+
 	var old_field := battle.visibility
 	scene.restart_match()
 	_check(scene._battle.visibility != old_field and scene._intelligence[MatchBattle.PLAYER].starts.size() == 2,

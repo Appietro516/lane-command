@@ -27,7 +27,7 @@ const PLAYER := MatchRegion.Owner.PLAYER
 const CPU := MatchRegion.Owner.CPU
 const INFANTRY := UnitCatalog.DEFINITIONS[UnitCatalog.INFANTRY]
 const UNIT_HP := INFANTRY.hp
-const BASE_HP := 240
+const BASE_HP := 420
 const ATTACK_DAMAGE := INFANTRY.damage
 const ATTACK_COOLDOWN := INFANTRY.cooldown
 const MOVEMENT_SPEED := INFANTRY.speed
@@ -52,9 +52,10 @@ const OUTPOST_FOOTPRINT := Vector2(0.52, 0.52)
 const OUTPOST_CLEARANCE := OUTPOST_FOOTPRINT + Vector2(0.08, 0.08)
 const OUTPOST_ATTACK_RANGE := 1.25
 const DEFAULT_OUTPOST_HP := 40
-const BASE_GUN := {"range": 4.25, "damage": 4.0, "interval": 0.9, "splash": 0.0}
+const BASE_GUN := {"range": 4.25, "damage": 6.0, "interval": 0.9, "splash": 0.0}
 const OUTPOST_GUN := {"range": 3.4, "damage": 2.5, "interval": 1.15, "splash": 0.0}
 const HUB_ARMOR := 0.55
+const BASE_ARMOR := 0.40
 const STRATEGIC_SAMPLE_COUNT := 16
 const STEP := 1.0 / 60.0
 const TIME_EPSILON := 1e-9
@@ -1321,7 +1322,7 @@ func structure_damage_multiplier(unit: Unit, target_id: int) -> float:
 	if not armored:
 		return factor
 	if unit.type_id != UnitCatalog.HEAVY:
-		factor *= HUB_ARMOR
+		factor *= BASE_ARMOR if target_id == BASE_TARGET else HUB_ARMOR
 	if objectives.has_boon(unit.side, NeutralObjectives.Reward.SIEGE, _elapsed_time):
 		factor *= 1.65
 	return factor
@@ -1517,7 +1518,7 @@ func _plan_turn(unit: Unit, units: Array[Unit]) -> bool:
 					_clear_route(unit)
 				if unit.definition.damage <= 0.0:
 					return false
-				var local_range: float = unit.definition.range
+				var local_range: float = unit.definition.range + RANGE_EPSILON
 				return _plan_local_engagement(unit, _nearby_enemies(units, unit.position, unit.side, local_range),
 					local_range, true)
 	if unit.definition.damage <= 0.0:
@@ -1610,6 +1611,8 @@ func _nearby_structure_target(unit: Unit, weapon_range: float) -> BuildingHealth
 		var fort := get_fortification(id)
 		var urgent := not _charging_silos.is_empty() and _charging_silos.has(id)
 		if fort.side != unit.side and (urgent or best_fort == null or id > best_fort.id) \
+				and (unit.position.distance_squared_to(fort.position) <= BattleVisibility.UNIT_RADIUS ** 2
+					or can_see(unit.side, fort.position)) \
 				and _can_attack_structure(unit.position, fort.position, fort.obstacle,
 					fort.unit_attack_range(weapon_range)):
 			if urgent:

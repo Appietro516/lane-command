@@ -17,6 +17,8 @@ func _initialize() -> void:
 func _run() -> void:
 	root.size = Vector2i(1280, 800)
 	var scene := FIXTURE.instantiate()
+	# Exercise formation and rally timing on routes with no neutral encounters.
+	scene.neutral_objectives_enabled = false
 	root.add_child(scene)
 	scene.set_process(false)
 	var battle: MatchBattle = scene._battle
@@ -44,6 +46,8 @@ func _run() -> void:
 	_check(first.stance == Stance.SEEK_STRONGEST and third.stance == Stance.SEEK_STRONGEST,
 		"The inspector applies a group stance.")
 	stance.item_selected.emit(stance.get_item_index(Stance.IDLE))
+	# The enemy already served the mixed-selection check. Keep the movement fixture outside weapon range.
+	enemy.position = Vector2(8, 5)
 	var resume: CheckBox = scene.get_node("%ResumeStance")
 	_check(resume.button_pressed, "Move resumes stance by default.")
 	var goal := camera.unproject_position(scene._world_position(Vector2(-1, 3.6)))
@@ -55,7 +59,7 @@ func _run() -> void:
 	var formation := [first.ordered_destination, third.ordered_destination]
 	_check(first.order == Order.MOVE and third.order == Order.MOVE and formation[0] != formation[1],
 		"Units start moving to distinct formation positions before resuming stance.")
-	battle.advance(5.0, scene.economy)
+	battle.advance(6.5, scene.economy)
 	_check(first.order == Order.AUTONOMOUS and third.order == Order.AUTONOMOUS
 		and first.position == formation[0] and third.position == formation[1],
 		"Both units resume their idle stance only after reaching their formation slots.")
@@ -87,7 +91,7 @@ func _test_rally(scene: Node, battle: MatchBattle) -> void:
 	_check(battle.set_producer_rally(PLAYER, producer.id, Vector2.INF)
 		and recruit.ordered_destination == target, "Clearing the rally leaves the published order intact.")
 	battle.set_fortification_active(producer, false)
-	battle.advance(14.0, scene.economy)
+	battle.advance(18.0, scene.economy)
 	_check(recruit.position == target and recruit.order == Order.AUTONOMOUS and recruit.stance == Stance.IDLE,
 		"The rally recruit enters the producer's configured stance on arrival.")
 

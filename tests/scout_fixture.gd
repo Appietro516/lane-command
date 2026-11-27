@@ -29,7 +29,7 @@ static func claim(scene: Node, side: MatchRegion.Owner, region_id: StringName) -
 
 static func combat_units(battle: MatchBattle) -> Array[MatchBattle.Unit]:
 	return battle.active_units().filter(func(unit: MatchBattle.Unit) -> bool:
-		return unit.type_id != Catalog.SCOUT)
+		return unit.type_id in Catalog.COMBAT_TYPES)
 
 
 static func barracks(battle: MatchBattle, side: MatchRegion.Owner) -> MatchBattle.ProductionTimer:

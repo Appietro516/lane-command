@@ -12,6 +12,7 @@ func _ready() -> void:
 	_marker_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_marker_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_marker_material.no_depth_test = true
+	_marker_material.render_priority = 25
 	var diamond := PlaneMesh.new()
 	diamond.size = Vector2.ONE * 0.48
 	diamond.material = _marker_material

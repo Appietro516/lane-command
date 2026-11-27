@@ -30,7 +30,7 @@ func _run() -> void:
 	_check(setup_screen._difficulty_pickers[0].has_focus(),
 		"Tab focuses the first difficulty selector.")
 	_check(shape.get_selected_id() == MapSettings.Shape.RECTANGLE
-		and setup_screen.get_node_or_null("%MapSize") == null and regions.text == "24" and seed_field.text == "17"
+		and setup_screen.get_node_or_null("%MapSize") == null and regions.text == "7" and seed_field.text == "17"
 		and setup_screen._difficulty_pickers[0].get_selected_id() == 3,
 		"Setup displays the requested defaults.")
 
@@ -41,9 +41,9 @@ func _run() -> void:
 		game.free()
 		quit(1)
 		return
-	_check(match_scene._layout.settings.size == MapSettings.scaled_dimensions(MapSettings.Shape.RECTANGLE, 24)
+	_check(match_scene._layout.settings.size == MapSettings.scaled_dimensions(MapSettings.Shape.RECTANGLE, 7)
 		and match_scene._layout.settings.shape == MapSettings.Shape.RECTANGLE
-		and match_scene._layout.cells.size() == 24 and match_scene.active_map_seed == 17
+		and match_scene._layout.cells.size() == 7 and match_scene.active_map_seed == 17
 		and match_scene._cpu_strategies.size() == 1
 		and match_scene._cpu_strategy.difficulty == Profiles.get_profile(3), "Default Start plays the intended 1v1.")
 	var default_layout: TerritoryLayout = match_scene._layout
@@ -156,7 +156,7 @@ func _run() -> void:
 	setup_screen = game.get_node("MatchSetup")
 	_select(setup_screen.get_node("%OpponentCount"), 1)
 	_select(setup_screen.get_node("%MapShape"), MapSettings.Shape.RECTANGLE)
-	_edit(setup_screen.get_node("%MapRegions"), "24")
+	_edit(setup_screen.get_node("%MapRegions"), "7")
 	_edit(setup_screen.get_node("%MapSeed"), "17")
 	await _click(setup_screen.get_node("%Start"))
 	_check_same_map(default_layout, game.get_node("Match")._layout)

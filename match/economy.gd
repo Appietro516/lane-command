@@ -7,8 +7,8 @@ const FOOD := FactionStats.FOOD
 const BASE_INCOME := FactionStats.BASELINE
 const STARTING_ENERGY := 50.0
 const RESOURCES := {
-	ENERGY: {"label": "Energy", "starting_stock": STARTING_ENERGY, "baseline": 3.0},
-	MATERIALS: {"label": "Materials", "starting_stock": 30.0, "baseline": 2.0},
+	ENERGY: {"label": "Energy", "starting_stock": STARTING_ENERGY, "baseline": 2.25},
+	MATERIALS: {"label": "Materials", "starting_stock": 30.0, "baseline": 1.45},
 	FOOD: {"label": "Food", "starting_stock": 20.0, "baseline": 1.0},
 }
 const BARRACKS_COST := {ENERGY: 40, MATERIALS: 20}

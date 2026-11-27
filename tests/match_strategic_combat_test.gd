@@ -38,11 +38,11 @@ func _run() -> void:
 		and battle.structure_damage_multiplier(heavy, MatchBattle.BASE_TARGET) > 1.5, "fortified hubs favor siege")
 	var envoy := battle.spawn_unit(C, Vector2(-16, 0), Catalog.HEAVY)
 	battle.advance(MatchBattle.STEP, economy)
-	_check(envoy.hp < envoy.definition.hp and battle.base_hp(P) >= 240, "starting base fires")
+	_check(envoy.hp < envoy.definition.hp and battle.base_hp(P) == 420, "starting base fires")
 	var outpost := battle.add_outpost(&"probe", P, Vector2(-4, -6), MatchBattle.DEFAULT_OUTPOST_HP)
 	envoy.position = Vector2(-1, -6)
 	battle.advance(MatchBattle.STEP, economy)
-	_check(envoy.hp <= envoy.definition.hp - 6.5 and outpost.max_hp == 40, "outpost fires")
+	_check(envoy.hp <= envoy.definition.hp - 8.5 and outpost.max_hp == 40, "outpost fires")
 	print("Strategic combat test failures: %d" % _failures)
 	quit(int(_failures > 0))
 
