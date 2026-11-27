@@ -41,11 +41,13 @@ func refresh() -> void:
 	var start := Time.get_ticks_usec()
 	var modified := false
 	var width := BattleVisibility.CELLS_PER_CHUNK
-	for key in _field.changed:
-		if key.z != _side or _field.changed[key] <= _presented:
+	var updates: Dictionary = _field.changed.get(_side, {})
+	for id in updates:
+		if updates[id] <= _presented:
 			continue
-		var patch := Image.create_from_data(width, width, false, Image.FORMAT_R8, _field.chunks[key].texture_pixels())
-		_image.blit_rect(patch, Rect2i(0, 0, width, width), Vector2i(key.x, key.y) * width)
+		var chunk := _field.chunk_data(id)
+		var patch := Image.create_from_data(width, width, false, Image.FORMAT_R8, chunk.texture_pixels())
+		_image.blit_rect(patch, Rect2i(0, 0, width, width), chunk.origin)
 		modified = true
 	if modified:
 		_texture.update(_image)

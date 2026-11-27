@@ -20,14 +20,14 @@ class Source:
 	var position: Vector2
 	var radius: float
 	var radius_squared: float
-	var spans: PackedInt32Array
-	var sample: Vector2i
+	var sample_cell: Vector2i
 	var sample_bounds: Rect2
-	var coverage: Rect2i
 
 class Sample:
 	var cell: Vector2i
+	var bounds: Rect2
 	var center: Vector2
+	var chunk_ids := PackedInt32Array()
 	var inner_radius_squared: float
 	var outer_radius_squared: float
 	var spans: PackedInt32Array
@@ -35,7 +35,9 @@ class Sample:
 
 
 class Chunk:
-	var samples: Dictionary[Vector3, Sample] = {}
+	var samples: Array[Sample] = []
+	var origin: Vector2i
+	var queued := false
 	var visible := PackedInt32Array()
 	var explored := PackedInt32Array()
 
@@ -57,17 +59,25 @@ var dimensions: Vector2i
 var _spans_by_radius: Dictionary[float, PackedInt32Array] = {}
 var cell_size: Vector2
 var _cell_half_diagonal: float
+var _chunk_size: Vector2
+var _chunks_per_side: int
+var _samples: Dictionary[float, Dictionary] = {}
 var interval := UPDATE_INTERVAL
-var chunks: Dictionary[Vector3i, Chunk] = {}
+var _chunks: Array[Chunk] = []
 var sources: Dictionary[int, Source] = {}
-var dirty: Dictionary[Vector3i, bool] = {}
-var changed: Dictionary[Vector3i, int] = {}
+var _dirty := PackedInt32Array()
+var _dirty_head := 0
+var changed: Dictionary[int, Dictionary] = {}
+var _rows := PackedInt32Array()
 var revision := 0
 var ticks := 0
 var processed_chunks := 0
 var evaluated_sources := 0
 var update_usec := 0
 var query_count := 0
+var profiling_enabled := false
+var invalidations := 0
+var unique_invalidations := 0
 var _next_update := 0.0
 var _urgent := false
 var _draining := false
@@ -78,6 +88,10 @@ func _init(map_bounds: Rect2) -> void:
 	bounds = map_bounds
 	dimensions = BattleNavigation.chunk_dimensions(bounds)
 	cell_size = bounds.size / Vector2(dimensions * CELLS_PER_CHUNK)
+	_chunk_size = bounds.size / Vector2(dimensions)
+	_chunks_per_side = dimensions.x * dimensions.y
+	_chunks.resize(_chunks_per_side * MatchRegion.Owner.size())
+	_rows.resize(CELLS_PER_CHUNK)
 	_cell_half_diagonal = cell_size.length() * 0.5 + 0.00001
 
 
@@ -85,48 +99,107 @@ func cell_at(point: Vector2) -> Vector2i:
 	return Vector2i(((point - bounds.position) / cell_size).floor())
 
 
-func set_source(id: int, side: int, point: Vector2, radius: float, urgent := true) -> void:
-	remove_source(id)
-	var source := Source.new()
+func set_source(id: int, side: int, point: Vector2, radius: float, urgent := true) -> Source:
+	var source := sources.get(id) as Source
+	if source == null:
+		source = Source.new()
+		sources[id] = source
+	else:
+		_detach(id, source)
+		_urgent = true
 	source.side = side
 	source.position = point
 	source.radius = radius
 	source.radius_squared = radius * radius
-	if not _spans_by_radius.has(radius):
-		var spans := PackedInt32Array()
-		for y in range(floori(radius / cell_size.y) + 1):
-			var width := sqrt(maxf(0.0, source.radius_squared - (y * cell_size.y) ** 2))
-			spans.append(floori(width / cell_size.x))
-		_spans_by_radius[radius] = spans
-	source.spans = _spans_by_radius[radius]
-	source.sample = cell_at(point)
-	source.sample_bounds = _cell_bounds(source.sample)
-	source.coverage = _coverage(source.sample, radius)
-	sources[id] = source
-	_index(id, source, true)
+	_attach(id, source, cell_at(point))
 	_urgent = _urgent or urgent
+	return source
 
 
 func remove_source(id: int) -> void:
 	var source := sources.get(id) as Source
 	if source == null:
 		return
-	_index(id, source, false)
+	_detach(id, source)
 	sources.erase(id)
 	_urgent = true
 
 
 func move_source(id: int, point: Vector2) -> void:
-	var source := sources[id]
+	move_registered_source(id, sources[id], point)
+
+
+func move_registered_source(id: int, source: Source, point: Vector2) -> void:
 	source.position = point
 	if source.sample_bounds.has_point(point):
 		return
-	var sample := cell_at(point)
-	_index(id, source, false)
-	source.sample = sample
-	source.sample_bounds = _cell_bounds(sample)
-	source.coverage = _coverage(sample, source.radius)
-	_index(id, source, true)
+	var cell := cell_at(point)
+	if cell == source.sample_cell:
+		return
+	_detach(id, source)
+	_attach(id, source, cell)
+
+
+func _attach(id: int, source: Source, cell: Vector2i) -> void:
+	var by_radius: Dictionary = _samples.get_or_add(source.radius, {})
+	var key := Vector3i(cell.x, cell.y, source.side)
+	var sample := by_radius.get(key) as Sample
+	if sample == null:
+		sample = Sample.new()
+		sample.cell = cell
+		sample.bounds = _cell_bounds(cell)
+		sample.center = sample.bounds.get_center()
+		sample.inner_radius_squared = maxf(0.0, source.radius - _cell_half_diagonal) ** 2
+		sample.outer_radius_squared = (source.radius + _cell_half_diagonal) ** 2
+		if not _spans_by_radius.has(source.radius):
+			var spans := PackedInt32Array()
+			for y in range(floori(source.radius / cell_size.y) + 1):
+				var width := sqrt(maxf(0.0, source.radius_squared - (y * cell_size.y) ** 2))
+				spans.append(floori(width / cell_size.x))
+			_spans_by_radius[source.radius] = spans
+		sample.spans = _spans_by_radius[source.radius]
+		by_radius[key] = sample
+		var coverage := _coverage(cell, source.radius)
+		var offset := source.side * _chunks_per_side
+		for y in range(coverage.position.y, coverage.end.y):
+			for x in range(coverage.position.x, coverage.end.x):
+				var chunk_id := offset + y * dimensions.x + x
+				var chunk := _chunks[chunk_id]
+				if chunk == null:
+					chunk = Chunk.new()
+					chunk.origin = Vector2i(x, y) * CELLS_PER_CHUNK
+					_chunks[chunk_id] = chunk
+				chunk.samples.append(sample)
+				sample.chunk_ids.append(chunk_id)
+				_mark_dirty(chunk_id, chunk)
+	sample.members[id] = source
+	source.sample_cell = cell
+	source.sample_bounds = sample.bounds
+
+
+func _detach(id: int, source: Source) -> void:
+	var by_radius := _samples[source.radius]
+	var key := Vector3i(source.sample_cell.x, source.sample_cell.y, source.side)
+	var sample := by_radius[key] as Sample
+	sample.members.erase(id)
+	if not sample.members.is_empty():
+		return
+	by_radius.erase(key)
+	for chunk_id in sample.chunk_ids:
+		var chunk := _chunks[chunk_id]
+		chunk.samples.erase(sample)
+		_mark_dirty(chunk_id, chunk)
+
+
+func _mark_dirty(id: int, chunk: Chunk) -> void:
+	if profiling_enabled:
+		invalidations += 1
+	if chunk.queued:
+		return
+	if profiling_enabled:
+		unique_invalidations += 1
+	chunk.queued = true
+	_dirty.append(id)
 
 
 func _cell_bounds(cell: Vector2i) -> Rect2:
@@ -141,43 +214,16 @@ func _coverage(sample: Vector2i, radius: float) -> Rect2i:
 	return Rect2i(first, last - first + Vector2i.ONE)
 
 
-func _index(id: int, source: Source, insert: bool) -> void:
-	var sample_key := Vector3(source.sample.x, source.sample.y, source.radius)
-	for y in range(source.coverage.position.y, source.coverage.end.y):
-		for x in range(source.coverage.position.x, source.coverage.end.x):
-			var key := Vector3i(x, y, source.side)
-			var chunk := chunks.get(key) as Chunk
-			if chunk == null:
-				chunk = Chunk.new()
-				chunks[key] = chunk
-			var sample := chunk.samples.get(sample_key) as Sample
-			if insert:
-				if sample == null:
-					sample = Sample.new()
-					sample.cell = source.sample
-					sample.center = source.sample_bounds.get_center()
-					sample.inner_radius_squared = maxf(0.0, source.radius - _cell_half_diagonal) ** 2
-					sample.outer_radius_squared = (source.radius + _cell_half_diagonal) ** 2
-					sample.spans = source.spans
-					chunk.samples[sample_key] = sample
-				sample.members[id] = source
-			else:
-				sample.members.erase(id)
-				if sample.members.is_empty():
-					chunk.samples.erase(sample_key)
-			dirty[key] = true
-
-
 func can_see(side: int, point: Vector2) -> bool:
-	query_count += 1
+	if profiling_enabled:
+		query_count += 1
 	if not bounds.has_point(point):
 		return false
-	var cell := cell_at(point) / CELLS_PER_CHUNK
-	var chunk := chunks.get(Vector3i(cell.x, cell.y, side)) as Chunk
+	var grid := Vector2i((point - bounds.position) / _chunk_size).min(dimensions - Vector2i.ONE)
+	var chunk := _chunks[side * _chunks_per_side + grid.y * dimensions.x + grid.x]
 	if chunk == null:
 		return false
-	for key in chunk.samples:
-		var sample := chunk.samples[key]
+	for sample in chunk.samples:
 		var distance := point.distance_squared_to(sample.center)
 		if distance > sample.outer_radius_squared:
 			continue
@@ -197,7 +243,7 @@ func state_at(side: int, point: Vector2) -> State:
 		return State.UNEXPLORED
 	var cell := cell_at(point)
 	var grid := cell / CELLS_PER_CHUNK
-	var chunk := chunks.get(Vector3i(grid.x, grid.y, side)) as Chunk
+	var chunk := _chunks[side * _chunks_per_side + grid.y * dimensions.x + grid.x]
 	if chunk != null and (chunk.explored[cell.y % CELLS_PER_CHUNK] & (1 << (cell.x % CELLS_PER_CHUNK))):
 		return State.EXPLORED
 	return State.UNEXPLORED
@@ -209,35 +255,47 @@ func advance(now: float) -> void:
 	if now + 0.00001 >= _next_update:
 		_next_update = now + interval
 	_urgent = false
-	if dirty.is_empty():
+	if _dirty_head == _dirty.size():
 		return
 	var start := Time.get_ticks_usec()
 	ticks += 1
 	revision += 1
-	var remaining := CHUNKS_PER_STEP
-	for key: Vector3i in dirty.keys():
-		var chunk := chunks[key]
-		var rows := PackedInt32Array()
-		rows.resize(CELLS_PER_CHUNK)
-		var origin := Vector2i(key.x, key.y) * CELLS_PER_CHUNK
-		for sample_key in chunk.samples:
+	# Keep queued chunks in insertion order while a burst drains across steps.
+	var stop := mini(_dirty.size(), _dirty_head + CHUNKS_PER_STEP)
+	while _dirty_head < stop:
+		var id := _dirty[_dirty_head]
+		var chunk := _chunks[id]
+		_rows.fill(0)
+		for sample in chunk.samples:
 			evaluated_sources += 1
-			if _rasterize(rows, chunk.samples[sample_key], origin):
+			if _rasterize(_rows, sample, chunk.origin):
 				break
 		processed_chunks += 1
-		if rows != chunk.visible:
-			chunk.visible = rows
+		if _rows != chunk.visible:
+			chunk.visible = _rows.duplicate()
 			for y in CELLS_PER_CHUNK:
-				chunk.explored[y] |= rows[y]
-			changed[key] = revision
-		dirty.erase(key)
-		remaining -= 1
-		if remaining == 0 or Time.get_ticks_usec() - start >= CHUNK_BUDGET_USEC:
+				chunk.explored[y] |= _rows[y]
+			var side := id / _chunks_per_side
+			var patches: Dictionary = changed.get_or_add(side, {})
+			patches[id] = revision
+		chunk.queued = false
+		_dirty_head += 1
+		if Time.get_ticks_usec() - start >= CHUNK_BUDGET_USEC:
 			break
-	_draining = not dirty.is_empty()
+	_draining = _dirty_head < _dirty.size()
+	if not _draining:
+		_dirty.clear()
+		_dirty_head = 0
+	elif _dirty_head >= _chunks.size():
+		_dirty = _dirty.slice(_dirty_head)
+		_dirty_head = 0
 	var elapsed := Time.get_ticks_usec() - start
 	update_usec += elapsed
 	max_update_usec = maxi(max_update_usec, elapsed)
+
+
+func chunk_data(id: int) -> Chunk:
+	return _chunks[id]
 
 
 func _rasterize(rows: PackedInt32Array, source: Sample, origin: Vector2i) -> bool:

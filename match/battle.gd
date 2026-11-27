@@ -77,8 +77,9 @@ class Unit:
 				_grid.insert(id, _cell, side)
 			position = value
 			if _visibility != null:
-				_visibility.move_source(id, value)
+				_visibility.move_registered_source(id, _vision_source, value)
 	var _visibility: BattleVisibility
+	var _vision_source: BattleVisibility.Source
 	var _grid: BattleSpatialGrid
 	var _cell: Vector2i
 	var _cell_bounds: Rect2
@@ -342,7 +343,7 @@ func _register_unit_vision(unit: Unit) -> void:
 		return
 	unit._visibility = visibility
 	var radius := BattleVisibility.SCOUT_RADIUS if unit.type_id == UnitCatalog.SCOUT else BattleVisibility.UNIT_RADIUS
-	visibility.set_source(unit.id, unit.side, unit.position, radius, false)
+	unit._vision_source = visibility.set_source(unit.id, unit.side, unit.position, radius, false)
 
 
 func _register_structure_vision(fort: Fortification) -> void:
@@ -1220,6 +1221,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 			if unit._visibility != null:
 				visibility.remove_source(unit.id)
 				unit._visibility = null
+				unit._vision_source = null
 			_units.erase(unit.id)
 			_support_units.erase(unit.id)
 			_queued_orders.erase(unit.id)

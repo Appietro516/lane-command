@@ -24,11 +24,15 @@ func _run() -> void:
 		var opponents := int(args[1]) if args.size() > 1 else 4
 		var shape := MapSettings.Shape.CIRCLE if args.size() > 2 and args[2] == "Circle" else MapSettings.Shape.RECTANGLE
 		var enabled := args.size() < 4 or args[3] == "on"
-		await _run_case(count, opponents, shape, enabled)
+		var frame_count := int(args[4]) if args.size() > 4 else FRAMES
+		var stationary := "--stationary" in args
+		var draw_fog := "--no-fog-draw" not in args
+		await _run_case(count, opponents, shape, enabled, frame_count, stationary, draw_fog)
 	quit()
 
 
-func _run_case(count: int, opponents: int, shape: MapSettings.Shape, enabled: bool) -> void:
+func _run_case(count: int, opponents: int, shape: MapSettings.Shape, enabled: bool,
+		frame_count := FRAMES, stationary := false, draw_fog := true) -> void:
 	var render_frames := DisplayServer.get_name() != "headless"
 	var size := Vector2(100, 100) if shape == MapSettings.Shape.CIRCLE else RECT_SIZE
 	var layout := TerritoryLayout.new(1729, 36, size, 1, 1, opponents, shape)
@@ -42,6 +46,8 @@ func _run_case(count: int, opponents: int, shape: MapSettings.Shape, enabled: bo
 	scene.configure_match(MatchSettings.new(layout.settings, levels), layout)
 	root.add_child(scene)
 	scene.set_process(false)
+	if not draw_fog:
+		scene._fog_overlay.hide()
 	var battle: MatchBattle = scene._battle
 	battle.radar.pulse_interval = 0.4
 	var rng := RandomNumberGenerator.new()
@@ -78,17 +84,23 @@ func _run_case(count: int, opponents: int, shape: MapSettings.Shape, enabled: bo
 
 	var command_start := Time.get_ticks_usec()
 	var move_orders := 0
-	for unit in actors:
-		var toward := unit.position.direction_to(Vector2.ZERO)
-		if battle.order_move(unit.side, unit.id, unit.position + toward * 9.0, true):
-			move_orders += 1
+	if not stationary:
+		for unit in actors:
+			var toward := unit.position.direction_to(Vector2.ZERO)
+			if battle.order_move(unit.side, unit.id, unit.position + toward * 9.0, true):
+				move_orders += 1
 	var command_usec := Time.get_ticks_usec() - command_start
 	var frames := PackedFloat64Array()
 	var presentations := PackedFloat64Array()
 	var query_usec := 0
 	var queries := 0
 	var field := battle.visibility
-	for frame in FRAMES:
+	var decision := PackedFloat64Array()
+	var memory := PackedFloat64Array()
+	var peak_memory := before
+	# Record actual planners separately so command differences cannot affect the
+	# frame comparison. All faction decisions run on the finished fixture.
+	for frame in frame_count:
 		var start := Time.get_ticks_usec()
 		if frame == 20:
 			for side: MatchRegion.Owner in factions:
@@ -119,9 +131,21 @@ func _run_case(count: int, opponents: int, shape: MapSettings.Shape, enabled: bo
 		if render_frames:
 			await process_frame
 		frames.append((Time.get_ticks_usec() - start) / 1000.0)
+		if frame % 120 == 119 or frame == frame_count - 1:
+			var usage := OS.get_static_memory_usage()
+			memory.append((usage - before) / 1048576.0)
+			peak_memory = maxi(peak_memory, usage)
+	var nav_revision := battle.navigation.revision
+	for strategy in scene._cpu_strategies.values():
+		var start := Time.get_ticks_usec()
+		strategy.decide(scene)
+		decision.append((Time.get_ticks_usec() - start) / 1000.0)
 	print("BENCH ", JSON.stringify({
 		"shape": MapSettings.SHAPE_NAMES[shape], "cpu": opponents, "units": count, "fog": enabled,
-		"render_frames": render_frames, "frames": FRAMES, "milliseconds": _percentiles(frames),
+		"render_frames": render_frames, "draw_fog": draw_fog, "stationary": stationary,
+		"frames": frame_count, "milliseconds": _percentiles(frames),
+		"mean_frame_ms": Array(frames).reduce(func(total: float, sample: float) -> float: return total + sample, 0.0) / frame_count,
+		"planner_ms": decision,
 		"presentation_cpu_milliseconds": _percentiles(presentations),
 		"vision_mean_milliseconds": float(field.update_usec) / maxi(1, field.ticks) / 1000.0 if field != null else 0.0,
 		"vision_max_milliseconds": field.max_update_usec / 1000.0 if field != null else 0.0,
@@ -129,11 +153,11 @@ func _run_case(count: int, opponents: int, shape: MapSettings.Shape, enabled: bo
 		"source_rasters": field.evaluated_sources if field != null else 0,
 		"visibility_queries": field.query_count if field != null else 0,
 		"upload_cpu_milliseconds": scene._fog_overlay.upload_usec / 1000.0,
-		"memory_delta_mib": (OS.get_static_memory_usage() - before) / 1048576.0,
+		"memory_samples_mib": memory, "peak_sampled_memory_mib": (peak_memory - before) / 1048576.0,
 		"ai_query_mean_milliseconds": float(query_usec) / queries / 1000.0,
 		"radar_pulses": battle.radar.pulse_count, "move_orders": move_orders,
 		"command_milliseconds": command_usec / 1000.0,
-		"nav_revision": battle.navigation.revision, "path_cache_entries": battle.navigation._requests.size(),
+		"nav_revision": nav_revision, "path_cache_entries": battle.navigation._requests.size(),
 		"final_units": battle.active_units().size(),
 	}))
 	scene.queue_free()

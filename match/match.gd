@@ -2683,12 +2683,16 @@ func _unit_material(unit: MatchBattle.Unit) -> StandardMaterial3D:
 
 
 func _update_unit_view(unit: MatchBattle.Unit, view: MeshInstance3D) -> void:
+	var seen := _battle.can_observe_unit(PLAYER, unit)
+	if not seen:
+		view.hide()
+		return
 	view.global_position = _regions.to_global(Vector3(unit.position.x, 0.14, unit.position.y))
 	# Unit meshes face +Z before yaw.
 	view.rotation.y = atan2(unit.heading.x, unit.heading.y)
 	if unit.side == MatchRegion.Owner.NEUTRAL:
 		view.scale = Vector3.ONE * (1.65 if unit.type_id == UnitCatalog.STRONGHOLD_GUARD else 1.25)
-	view.visible = _battle.can_observe_unit(PLAYER, unit)
+	view.show()
 
 
 func _remove_unit(unit_id: int) -> void:
@@ -3361,9 +3365,11 @@ func _refresh_intelligence() -> void:
 	var intel := _intelligence[PLAYER]
 	var desired: Dictionary[StringName, Dictionary] = {}
 	for side in _bases:
-		if _battle.is_side_active(side) and side != PLAYER and not _battle.can_see(PLAYER, _battle._bases[side]):
+		var active := _battle.is_side_active(side)
+		var seen := active and (side == PLAYER or _battle.can_see(PLAYER, _battle._bases[side]))
+		_bases[side].visible = seen
+		if active and not seen:
 			desired[_base_structure_id(side)] = {"point": intel.starts[side], "label": _side_label(side) + " start"}
-		_bases[side].visible = _battle.is_side_active(side) and (side == PLAYER or _battle.can_see(PLAYER, _battle._bases[side]))
 	for placed in _fortifications.values():
 		var fort: MatchBattle.Fortification = placed.defense
 		placed.view.visible = fort.side == PLAYER or _battle.can_see(PLAYER, fort.position) \
@@ -3374,8 +3380,9 @@ func _refresh_intelligence() -> void:
 	for id in _landmarks:
 		var landmark := _landmarks[id]
 		var location := landmark.footprint.get_center()
-		landmark.visible = _battle.can_see(PLAYER, location) and _battle._landmark_footprints.has(landmark.footprint)
-		if not _battle.can_see(PLAYER, location) and intel.landmarks.get(id, false):
+		var seen := _battle.can_see(PLAYER, location)
+		landmark.visible = seen and _battle._landmark_footprints.has(landmark.footprint)
+		if not seen and intel.landmarks.get(id, false):
 			desired[landmark.source_id] = {"point": location, "label": landmark.display_name + " · Last seen"}
 	for ruin: Node3D in _ruins.get_children():
 		ruin.visible = _battle.can_see(PLAYER, _map_position(ruin.global_position))
