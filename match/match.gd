@@ -230,6 +230,11 @@ var active_map_seed: int:
 var _battle: MatchBattle
 var _intelligence: Dictionary[MatchRegion.Owner, FactionIntelligence] = {}
 var _intel_revision := -1
+var _strength: FactionStrength
+var _displayed_score_revision := -1
+@onready var _score_panel := PanelContainer.new()
+@onready var _score_list := VBoxContainer.new()
+@onready var _boon_status := Label.new()
 @onready var _decoy_button := Button.new()
 var _intel_markers: Dictionary[StringName, Label3D] = {}
 @onready var _fog_overlay := FogOverlay.new()
@@ -399,6 +404,7 @@ func _ready() -> void:
 	%ClearRally.pressed.connect(_clear_rally)
 	_unit_route.global_transform = _regions.global_transform
 	_create_resource_readouts()
+	_create_score_panel()
 	_stat_sources.toggled.connect(func(open: bool) -> void:
 		_stat_source_scroll.visible = open
 		_stat_source_scroll.scroll_vertical = 0)
@@ -800,6 +806,9 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	_battle.missile_cancelled.connect(_show_missile_cancelled)
 	_battle.missile_impact.connect(_ruin_strike_regions)
 	_battle.step_finished.connect(_advance_narrative_time)
+	_strength = FactionStrength.new()
+	_displayed_score_revision = -1
+	_battle.objectives.boon_collected.connect(_award_camp_bounty)
 	_expeditions = ScoutExpeditions.new(_battle, economy, _regions_by_id, {
 		"claim_energy": claim_energy,
 		"outpost_slot_block_reason": _outpost_slot_block_reason,
@@ -815,6 +824,7 @@ func restart_match(layout: TerritoryLayout = null) -> void:
 	_claim_button.text = "Claim · %s" % MatchEconomy.cost_text(_expeditions.claim_price(PLAYER))
 	_scout_notice.hide()
 	_reset_intelligence()
+	_strength.advance(self)
 	_refresh_hud()
 	set_process(true)
 
@@ -877,6 +887,7 @@ func _process(delta: float) -> void:
 		_select_fortification(MatchBattle.NO_TARGET)
 		set_process(false)
 
+	_strength.advance(self)
 	_refresh_intelligence()
 	_unit_attack_effects.render_at(_battle.elapsed_time())
 	_update_missile_models()
@@ -1622,6 +1633,7 @@ func _complete_claim(side: MatchRegion.Owner, region_id: StringName, scout_id: i
 	_set_region_owner(region_id, side)
 	outpost.hp = outpost.max_hp
 	_refresh_claim_control()
+	_strength.award(economy, side, StringName("region/" + region_id), _battle.elapsed_time(), _landmarks.has(region_id))
 	claim_completed.emit(side, region_id, scout_id)
 
 
@@ -2636,6 +2648,52 @@ func _hide_base(side: MatchRegion.Owner) -> void:
 		narrative_events.close()
 
 
+func _award_camp_bounty(side: MatchRegion.Owner, camp_id: int, _cycle: int) -> void:
+	_strength.award(economy, side, StringName("camp/%d" % camp_id), _battle.elapsed_time())
+
+
+func _create_score_panel() -> void:
+	_score_panel.name = "FactionScores"
+	_score_panel.add_theme_stylebox_override("panel", _unit_panel.get_theme_stylebox("panel"))
+	var contents := VBoxContainer.new()
+	var toggle := Button.new()
+	toggle.text = "Faction scores"
+	toggle.toggle_mode = true
+	toggle.toggled.connect(func(open: bool) -> void:
+		_score_list.visible = open
+		_score_panel.reset_size()
+		_queue_hud_layout())
+	contents.add_child(toggle)
+	contents.add_child(_score_list)
+	contents.add_child(_boon_status)
+	_score_list.hide()
+	_boon_status.hide()
+	_score_panel.add_child(contents)
+	$HUD.add_child(_score_panel)
+
+
+func _refresh_score_panel() -> void:
+	if _displayed_score_revision != _strength.revision:
+		_displayed_score_revision = _strength.revision
+		for child in _score_list.get_children():
+			_score_list.remove_child(child)
+			child.queue_free()
+		var rank := 0
+		for side in _strength.ranked():
+			rank += 1
+			var row := Label.new()
+			row.modulate = MatchRegion.accent_color(side).lightened(0.25)
+			row.text = "%d. %s   %d" % [rank, _side_label(side), roundi(_strength.scores[side])]
+			row.add_theme_font_size_override("font_size", 14)
+			_score_list.add_child(row)
+		_score_panel.reset_size()
+	var text := " · ".join(_battle.objectives.active_boons(PLAYER, _battle.elapsed_time()))
+	if _boon_status.text != text:
+		_boon_status.text = text
+		_boon_status.visible = not text.is_empty()
+		_score_panel.reset_size()
+
+
 func _create_resource_readouts() -> void:
 	for resource_id in MatchEconomy.RESOURCES:
 		var readout := Button.new()
@@ -2701,6 +2759,7 @@ func _layout_hud() -> void:
 		viewport_size.y - HUD_MARGIN - _economy_panel.size.y)
 
 	var top := _top_bar.get_rect().end.y + HUD_GAP
+	_score_panel.position = Vector2(HUD_MARGIN, top)
 	var bottom := _economy_panel.position.y - HUD_GAP
 	var dock_width := minf(HUD_DOCK_WIDTH, viewport_size.x - 2.0 * HUD_MARGIN)
 	var dock_origin := Vector2(viewport_size.x - HUD_MARGIN - dock_width, top)
@@ -2875,6 +2934,7 @@ func _refresh_hud() -> void:
 	_outcome_label.text = OUTCOME_LABELS[_battle.outcome()]
 	_outcome_label.visible = _battle.is_finished()
 	_update_missile_warning()
+	_refresh_score_panel()
 	_refresh_resource_readouts()
 	_refresh_build_options()
 	_build_button.disabled = _battle.is_finished()

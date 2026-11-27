@@ -42,3 +42,11 @@ Combat milestone commit `a369d10`.
 - Seeded neutral sites host up to four minor camps and a central stronghold. Guardians are real combat units with local engagement range and no pathing footprint. Defeat leaves a contested pickup for 30 seconds. Minor and major guardians respawn after 82 and 175 seconds.
 - Pickups use nearest living unit and stable ID ties. Rewards are three-resource grants, 48-second ranged or defense boons, or a 75-second stronghold boon that increases fortified-target damage by 65%. Same-kind rewards refresh duration.
 - CPUs use their sighting records and current force to consider a fight or collect a drop. The jungle test and production smoke passed. Next action is scores, bounties, missile warnings and control groups.
+
+Neutral objectives milestone commit `8b1f23d`.
+
+## Strength and comeback
+
+- Faction scores refresh every three seconds and rank all factions. The 0–1000 score weights normalized military, economy, territory and defense values at 35/30/20/15 percent. The panel shows faction totals and the player's current boons.
+- Comeback rewards require a sustained 36-second deficit of at least 90 points and a score no greater than 72% of the leading active rival. An exponential average and decaying peak govern eligibility. Each faction can claim up to six grants with 90 seconds between grants and one grant per objective. Ordinary grants add 22/15/12 Energy/Materials/Food. A landmark claim adds 30/22/18.
+- Import and focused score, UI, restart and bounty tests passed. Next action is missile presentation and control groups.
