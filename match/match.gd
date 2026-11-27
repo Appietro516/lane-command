@@ -52,6 +52,24 @@ const BUILDINGS := {
 		"hp": 24, "size": Vector2(1.4, 1.4),
 		"income": {MatchEconomy.FOOD: 3.0},
 	},
+	BattleRadar.WATCHTOWER: {
+		"label": "Watchtower", "description": "Persistent local sight",
+		"cost": {MatchEconomy.ENERGY: 22, MatchEconomy.MATERIALS: 18},
+		"scene": preload("res://match/recon/watchtower.tscn"),
+		"hp": 22, "size": Vector2(1.15, 1.15), "vision": 11.0,
+	},
+	BattleRadar.RADAR: {
+		"label": "Radar Station", "description": "Map-wide contact snapshot every 8 seconds",
+		"cost": {MatchEconomy.ENERGY: 110, MatchEconomy.MATERIALS: 75},
+		"scene": preload("res://match/recon/radar.tscn"),
+		"hp": 28, "size": Vector2(1.65, 1.65),
+	},
+	BattleRadar.COUNTERINTELLIGENCE: {
+		"label": "Counterintelligence Station", "description": "Deploy a false army to enemy radar",
+		"cost": {MatchEconomy.ENERGY: 75, MatchEconomy.MATERIALS: 52},
+		"scene": preload("res://match/recon/counterintelligence.tscn"),
+		"hp": 26, "size": Vector2(1.55, 1.55),
+	},
 	Fortifications.NEST: {
 		"scene": preload("res://match/fortifications/machine_gun_nest.tscn"),
 		"icon": preload("res://match/fortifications/machine_gun_nest.svg"),
@@ -80,7 +98,7 @@ const BUILD_SECTIONS := [
 	{ "id": &"fortifications", "label": "Fortifications", "entries": [
 		Fortifications.NEST, Fortifications.MORTAR, Fortifications.ANTI_TANK, Fortifications.WALL,
 	] },
-	{ "id": &"strategic", "label": "Strategic", "entries": [Fortifications.SILO] },
+	{ "id": &"strategic", "label": "Strategic", "entries": [BattleRadar.WATCHTOWER, BattleRadar.RADAR, BattleRadar.COUNTERINTELLIGENCE, Fortifications.SILO] },
 ]
 const HUD_MARGIN := 16.0
 const HUD_GAP := 8.0
@@ -115,7 +133,7 @@ const CLAIM_DISCOVERY := &"claim_completed"
 
 signal return_to_setup_requested
 signal claim_completed(faction: MatchRegion.Owner, region: StringName, scout_id: int)
-enum GroundTarget { NONE, RALLY, MISSILE }
+enum GroundTarget { NONE, RALLY, MISSILE, DECOY }
 
 const SELECTION_DRAG_THRESHOLD := 7.0
 const ROUTE_HEIGHT := 0.12
@@ -211,6 +229,7 @@ var active_map_seed: int:
 var _battle: MatchBattle
 var _intelligence: Dictionary[MatchRegion.Owner, FactionIntelligence] = {}
 var _intel_revision := -1
+@onready var _decoy_button := Button.new()
 var _intel_markers: Dictionary[StringName, Label3D] = {}
 @onready var _fog_overlay := FogOverlay.new()
 @onready var _intel_root := Node3D.new()
@@ -359,6 +378,10 @@ func configure_match(settings: MatchSettings, layout: TerritoryLayout) -> void:
 func _ready() -> void:
 	add_child(_fog_overlay)
 	add_child(_intel_root)
+	_decoy_button.text = "Deploy radar decoy"
+	_decoy_button.pressed.connect(_begin_ground_target.bind(GroundTarget.DECOY))
+	%TargetMissile.get_parent().add_child(_decoy_button)
+	_decoy_button.hide()
 	_unit_route.mesh = _route_mesh
 	var selection_style := StyleBoxFlat.new()
 	selection_style.bg_color = Color(0.29, 0.76, 1.0, 0.15)
@@ -1764,8 +1787,13 @@ func _select_in_rectangle(rectangle: Rect2, extend: bool, subtract: bool) -> voi
 func _begin_ground_target(mode: GroundTarget) -> void:
 	_clear_pending_unit_order()
 	_ground_target = mode
-	_ground_target_hint = "Click ground to set rally point · Esc to cancel" if mode == GroundTarget.RALLY \
-		else "Click to commit the strike · Esc to cancel"
+	match mode:
+		GroundTarget.RALLY:
+			_ground_target_hint = "Click ground to set rally point · Esc to cancel"
+		GroundTarget.MISSILE:
+			_ground_target_hint = "Click to commit the strike · Esc to cancel"
+		GroundTarget.DECOY:
+			_ground_target_hint = "Click ground to place a radar decoy · Esc to cancel"
 	_update_fortification_inspection()
 
 
@@ -1784,6 +1812,11 @@ func _commit_ground_target(pointer: Vector2) -> void:
 			_ground_target_hint = "Choose reachable ground · Esc to cancel"
 	elif _ground_target == GroundTarget.MISSILE:
 		if ground != null and _battle.prepare_missile(PLAYER, _selected_fortification, _map_position(ground)):
+			_clear_ground_target()
+		else:
+			_ground_target_hint = "Choose a point inside the battlefield · Esc to cancel"
+	elif _ground_target == GroundTarget.DECOY:
+		if ground != null and _battle.deploy_decoy(PLAYER, _selected_fortification, _map_position(ground)):
 			_clear_ground_target()
 		else:
 			_ground_target_hint = "Choose a point inside the battlefield · Esc to cancel"
@@ -2063,6 +2096,7 @@ func _update_fortification_inspection() -> void:
 		_upgrade_button.hide()
 		_upgrade_button.disabled = true
 		%TargetMissile.hide()
+		_decoy_button.hide()
 		%RallyControls.hide()
 		_rally_ring.hide()
 		if _placement_id.is_empty():
@@ -2074,6 +2108,8 @@ func _update_fortification_inspection() -> void:
 	if fort.side != PLAYER and not _battle.can_see(PLAYER, fort.position):
 		_select_fortification(MatchBattle.NO_TARGET)
 		return
+	_decoy_button.visible = fort.kind == BattleRadar.COUNTERINTELLIGENCE and fort.side == PLAYER
+	_decoy_button.disabled = not fort.active or _battle.is_finished() or (		_decoy_button.visible and not _battle.radar.can_deploy(PLAYER, fort.id, _battle.elapsed_time()))
 	var military := fort is MatchBattle.ProductionTimer
 	var silo := fort as MatchBattle.MissileSilo
 	%TargetMissile.visible = silo != null and silo.side == PLAYER and silo.hp > 0.0 \
@@ -2143,6 +2179,11 @@ func _update_fortification_inspection() -> void:
 	_unit_order_hint.visible = not _ground_target_hint.is_empty()
 	_unit_order_hint.text = _ground_target_hint
 	_show_ranges(fort.profile, fort.position, true)
+	if fort.kind == BattleRadar.WATCHTOWER:
+		_unit_intent.text += "\nVision radius %s" % _stat_number(fort.profile.vision)
+		_show_radius_ring(_range_ring, fort.profile.vision, _world_position(fort.position) + Vector3.UP * 0.15, true)
+	elif fort.kind == BattleRadar.RADAR and fort.side == PLAYER:
+		_unit_intent.text += "\nRadar contact lifetime %.0fs" % BattleRadar.CONTACT_LIFETIME
 
 
 func _refresh_stat_sources(details: String) -> void:
@@ -2995,6 +3036,16 @@ func _refresh_intelligence() -> void:
 		var contact := intel.structures[id]
 		if not _battle.can_see(PLAYER, contact.point):
 			desired[id] = {"point": contact.point, "label": contact.label + " · Last seen"}
+	for contact in _battle.radar.contacts_for(PLAYER):
+		if _battle.can_see(PLAYER, contact.point):
+			continue
+		var age: float = _battle.elapsed_time() - contact.recorded_at
+		var names := PackedStringArray()
+		for type in contact.composition:
+			names.append("%d %s" % [contact.composition[type], UnitCatalog.DEFINITIONS[type].label])
+		var id := StringName("radar/%s" % contact.key)
+		desired[id] = {"point": contact.point, "label": "%s · %.0fs old" % [" / ".join(names), age],
+			"color": Color(0.52, 0.87, 1.0, lerpf(0.95, 0.35, age / BattleRadar.CONTACT_LIFETIME))}
 	var inspected := selected_unit()
 	if inspected != null and not _battle.can_observe_unit(PLAYER, inspected):
 		_select_unit(MatchBattle.NO_TARGET)
@@ -3039,6 +3090,7 @@ func _refresh_intel_markers(desired: Dictionary[StringName, Dictionary]) -> void
 			marker.modulate = Color("#b3c6d3")
 			_intel_root.add_child(marker)
 			_intel_markers[id] = marker
+		marker.modulate = desired[id].get("color", Color("#b3c6d3"))
 		marker.text = desired[id].label
 		marker.global_position = _world_position(desired[id].point) + Vector3.UP * 0.6
 

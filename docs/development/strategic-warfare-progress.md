@@ -9,3 +9,11 @@ Baseline `73fdb26` on the isolated strategic-warfare feature branch. The product
 - The implementation commit is recorded as "Add faction visibility and fog presentation" in Git history.
 
 Next action is reconnaissance buildings and periodic contacts, followed by regional and neutral objectives.
+
+Visibility milestone commit `074caa9`. Godot import, production scene smoke, and the visibility test passed.
+
+## Reconnaissance
+
+- Watchtower, radar and counterintelligence use normal placement and slots. One shared scan feeds all faction pulses due in a step. Contacts carry copied positions and composition, age after each pulse, and expire. Decoys have no simulation entity and direct observation debunks them.
+- CPU planners use live sightings for tactical decisions and radar compositions for production planning.
+- Both the visibility and recon tests passed. Next action is specialized regions, landmarks, and claim pricing.

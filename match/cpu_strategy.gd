@@ -91,6 +91,12 @@ func decide(scene: Node3D) -> void:
 	var threats := _threats(scene, owned, units)
 	_plan_economy(scene, owned, units, threats, now)
 	_tactics.decide(scene, side, difficulty, owned, units, threats, now)
+	for structure in battle._fortifications.values():
+		if structure.side == side and structure.kind == BattleRadar.COUNTERINTELLIGENCE:
+			var rival := battle.nearest_hostile_base(side, structure.position)
+			var toward: Vector2 = battle._bases[rival]
+			var point: Vector2 = structure.position.lerp(toward, 0.42).lerp(battle._bases[side], 0.1)
+			battle.deploy_decoy(side, structure.id, point)
 
 
 func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchBattle.Unit],
@@ -126,6 +132,11 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 		counts[unit.type_id] = counts.get(unit.type_id, 0) + 1
 		if unit.side == side:
 			army += 1
+	for contact in battle.radar.contacts_for(side):
+		if battle.can_see(side, contact.point):
+			continue
+		for unit_type in contact.composition:
+			enemies[unit_type] = enemies.get(unit_type, 0) + contact.composition[unit_type]
 	var front: CpuTactics.Threat = threats.front() if not threats.is_empty() else null
 	var under_pressure := front != null and front.score > float(difficulty.threat_threshold)
 
@@ -210,6 +221,17 @@ func _plan_economy(scene: Node3D, owned: Array[MatchRegion], units: Array[MatchB
 			and _try_expand(scene, frontiers, units, allow_claim, now):
 		return
 
+	if not under_pressure and now >= 80.0 and production.active >= 2:
+		var recon := [BattleRadar.WATCHTOWER] if now < 130.0 else \
+			[BattleRadar.RADAR, BattleRadar.WATCHTOWER, BattleRadar.COUNTERINTELLIGENCE]
+		for kind: StringName in recon:
+			var exists := false
+			for structure in battle._fortifications.values():
+				if structure.side == side and structure.kind == kind:
+					exists = true
+					break
+			if not exists and _want_build(scene, kind, sites, now, 1):
+				return
 	if can_expand_production:
 		_build_military(scene, options, food_producer, sites, now)
 

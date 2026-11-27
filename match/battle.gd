@@ -237,6 +237,7 @@ var target_priority := TargetPriority.NEAREST
 var threat_weights := DEFAULT_THREAT_WEIGHTS
 var navigation: BattleNavigation
 var visibility: BattleVisibility
+var radar := BattleRadar.new()
 var _bases: Dictionary[MatchRegion.Owner, Vector2] = {}
 var _base_obstacles: Dictionary[MatchRegion.Owner, int] = {}
 var _base_health: Dictionary[MatchRegion.Owner, BuildingHealth] = {}
@@ -530,9 +531,13 @@ func set_fortification_active(fort: Fortification, active: bool) -> void:
 		return
 	fort.active = active
 	if active:
+		if fort.kind == BattleRadar.RADAR:
+			radar.register_radar(fort.id, fort.side)
 		_register_structure_vision(fort)
 		fort.obstacle = navigation.add_obstacle(_footprint(fort.position, fort.profile.size * 0.5), fort.angle)
 	else:
+		if fort.kind == BattleRadar.RADAR:
+			radar.disable_radar(fort.id)
 		if visibility != null:
 			visibility.remove_source(fort.id)
 		navigation.remove_obstacle(fort.obstacle)
@@ -991,6 +996,13 @@ func _spawn_position(timer: ProductionTimer, direction: Vector2) -> Vector2:
 	return closest
 
 
+func deploy_decoy(side: MatchRegion.Owner, station_id: int, point: Vector2) -> bool:
+	var station := get_fortification(station_id)
+	return not is_finished() and station != null and station.side == side \
+		and station.kind == BattleRadar.COUNTERINTELLIGENCE and station.active and station.hp > 0.0 \
+		and navigation.contains(point) and radar.deploy(side, station_id, point, _elapsed_time)
+
+
 func _step_combat(economy: MatchEconomy) -> void:
 	# Plan against the same positions before either side moves or takes damage.
 	_process_queued_orders()
@@ -1107,6 +1119,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 			set_fortification_active(fort, false)
 			_structure_grid.erase(fort.id, BattleSpatialGrid.cell_at(fort.position), 0)
 			_fortifications.erase(fort.id)
+			radar.remove_station(fort.id)
 			if fort is ProductionTimer:
 				_timers.erase(fort)
 			stats.remove_source(fort.source_id)
@@ -1126,6 +1139,7 @@ func _step_combat(economy: MatchEconomy) -> void:
 
 	if visibility != null:
 		visibility.advance(_elapsed_time)
+	radar.advance(self, units, _elapsed_time)
 	navigation.update()
 	for side in eliminated:
 		base_destroyed.emit(side)
